@@ -1,0 +1,24 @@
+[package]
+name = "dtfu"
+version = "0.1.0"
+edition = "2024"
+description = "dtfu - a data multi-tool"
+license = "MIT"
+repository = "https://github.com/aisrael/dtfu"
+readme = "README.md"
+exclude = [
+    ".github/*"
+]
+
+[dependencies]
+clap = { version = "4.5.54", features = ["derive"] }
+chrono = "0.4"
+parquet = "57.2.0"
+
+[dev-dependencies]
+cucumber = "0.22.1"
+futures = "0.3"
+
+[[test]]
+name = "cli"
+harness = false

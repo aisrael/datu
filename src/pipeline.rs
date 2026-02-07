@@ -2,6 +2,7 @@
 
 pub mod csv;
 pub mod parquet;
+pub mod record_batch_filter;
 
 use arrow::array::RecordBatchReader;
 
@@ -20,7 +21,7 @@ pub trait Step {
     type Output;
 
     /// Execute the step
-    fn execute(&self, input: &mut Self::Input) -> Result<Self::Output>;
+    fn execute(&self, input: Self::Input) -> Result<Self::Output>;
 }
 
 /// A source of record batches

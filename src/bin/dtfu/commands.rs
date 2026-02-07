@@ -16,10 +16,10 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
-    let mut read_step = get_reader_step(input_file_type, &args)?;
+    let read_step = get_reader_step(input_file_type, &args)?;
     let write_step = get_writer_step(output_file_type, &args)?;
 
-    write_step.step(&mut read_step)?;
+    write_step.step(read_step)?;
 
     Ok(())
 }
@@ -27,7 +27,7 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
 pub trait RecordBatchReaderSink {
     fn step(
         &self,
-        input: &mut Box<dyn RecordBatchReaderSource>,
+        input: Box<dyn RecordBatchReaderSource>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>>;
 }
 
@@ -38,7 +38,7 @@ where
 {
     fn step(
         &self,
-        input: &mut Box<dyn RecordBatchReaderSource>,
+        input: Box<dyn RecordBatchReaderSource>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>> {
         let output = self.execute(input)?;
         Ok(Box::new(output))

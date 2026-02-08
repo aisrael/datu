@@ -4,6 +4,7 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 
 pub struct SelectColumnsStep {
+    pub prev: Box<dyn RecordBatchReaderSource>,
     pub columns: Vec<String>,
 }
 
@@ -11,9 +12,9 @@ impl Step for SelectColumnsStep {
     type Input = Box<dyn RecordBatchReaderSource>;
     type Output = Box<dyn RecordBatchReaderSource>;
 
-    fn execute(&self, input: Self::Input) -> crate::Result<Self::Output> {
+    fn execute(self) -> crate::Result<Self::Output> {
         let select_column_reader_source = SelectColumnRecordBatchReaderSource {
-            input,
+            input: self.prev,
             columns: self.columns.clone(),
         };
         Ok(Box::new(select_column_reader_source))

@@ -9,6 +9,7 @@ pub struct WriteCsvArgs {
 }
 
 pub struct WriteCsvStep {
+    pub prev: Box<dyn RecordBatchReaderSource>,
     pub args: WriteCsvArgs,
 }
 
@@ -18,11 +19,11 @@ impl Step for WriteCsvStep {
     type Input = Box<dyn RecordBatchReaderSource>;
     type Output = WriteCsvResult;
 
-    fn execute(&self, mut input: Self::Input) -> Result<Self::Output> {
+    fn execute(mut self) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let mut writer = arrow::csv::Writer::new(file);
-        let reader = input.get_record_batch_reader()?;
+        let reader = self.prev.get_record_batch_reader()?;
         for batch in reader {
             let batch = batch.map_err(Error::ArrowError)?;
             writer.write(&batch).map_err(Error::ArrowError)?;
@@ -67,13 +68,13 @@ mod tests {
             .expect("Failed to convert path to string")
             .to_string();
 
-        let source: Box<dyn RecordBatchReaderSource> = Box::new(TestRecordBatchReader {
+        let prev: Box<dyn RecordBatchReaderSource> = Box::new(TestRecordBatchReader {
             reader: Some(Box::new(reader)),
         });
 
         let args = WriteCsvArgs { path };
-        let writer = WriteCsvStep { args };
-        let result = writer.execute(source);
+        let writer = WriteCsvStep { prev, args };
+        let result = writer.execute();
         assert!(result.is_ok());
         assert!(output_path.exists());
     }

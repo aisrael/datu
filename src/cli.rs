@@ -15,4 +15,9 @@ pub enum Command {
 pub struct ConvertArgs {
     pub input: String,
     pub output: String,
+    #[arg(
+        long,
+        help = "Columns to select. If not specified, all columns will be selected."
+    )]
+    pub select: Option<Vec<String>>,
 }

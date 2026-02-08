@@ -9,6 +9,7 @@ use dtfu::pipeline::csv::WriteCsvResult;
 use dtfu::pipeline::csv::WriteCsvStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
+use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
 
 /// convert command implementation
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
@@ -17,7 +18,15 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
-    let reader_step = get_reader_step(input_file_type, &args)?;
+    let mut reader_step: Box<dyn RecordBatchReaderSource> =
+        get_reader_step(input_file_type, &args)?;
+    if let Some(select) = &args.select {
+        let select_step: Box<dyn RecordBatchReaderSource> = Box::new(SelectColumnsStep {
+            prev: reader_step,
+            columns: select.clone(),
+        });
+        reader_step = select_step;
+    }
     let writer_step = get_writer_step(reader_step, output_file_type, &args)?;
 
     writer_step.execute()?;
@@ -28,7 +37,7 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
 fn get_reader_step(
     input_file_type: FileType,
     args: &ConvertArgs,
-) -> Result<Box<dyn RecordBatchReaderSource + 'static>> {
+) -> Result<Box<dyn RecordBatchReaderSource>> {
     match input_file_type {
         FileType::Parquet => {
             let reader = ReadParquetStep {

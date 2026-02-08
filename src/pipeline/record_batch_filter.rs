@@ -13,45 +13,24 @@ impl Step for SelectColumnsStep {
     type Output = Box<dyn RecordBatchReaderSource>;
 
     fn execute(self) -> crate::Result<Self::Output> {
-        let select_column_reader_source = SelectColumnRecordBatchReaderSource {
-            input: self.prev,
-            columns: self.columns.clone(),
-        };
-        Ok(Box::new(select_column_reader_source))
+        Ok(Box::new(self))
     }
 }
 
-pub struct SelectColumnRecordBatchReaderSource {
-    input: Box<dyn RecordBatchReaderSource>,
-    columns: Vec<String>,
-}
-
-impl RecordBatchReaderSource for SelectColumnRecordBatchReaderSource {
+impl RecordBatchReaderSource for SelectColumnsStep {
     fn get_record_batch_reader(&mut self) -> crate::Result<Box<dyn RecordBatchReader>> {
-        let reader = self.input.get_record_batch_reader()?;
-        let schema = reader.schema();
-
-        let mut indices = Vec::new();
-        for col_name in &self.columns {
-            match schema.index_of(col_name) {
-                Ok(idx) => indices.push(idx),
-                Err(_) => {
-                    return Err(crate::Error::GenericError(format!(
-                        "Column '{}' not found in schema",
-                        col_name
-                    )));
-                }
-            }
-        }
-
-        let projected_schema = std::sync::Arc::new(schema.project(&indices)?);
-
-        let select_column_reader = SelectColumnRecordBatchReader {
+        let reader = self.prev.get_record_batch_reader()?;
+        let indices = self
+            .columns
+            .iter()
+            .map(|col| reader.schema().index_of(col).unwrap())
+            .collect::<Vec<usize>>();
+        let projected_schema = reader.schema().project(&indices)?;
+        Ok(Box::new(SelectColumnRecordBatchReader {
             reader,
-            schema: projected_schema,
+            schema: std::sync::Arc::new(projected_schema),
             indices,
-        };
-        Ok(Box::new(select_column_reader))
+        }))
     }
 }
 
@@ -93,12 +72,13 @@ mod tests {
         let parquet_step = ReadParquetStep { args };
 
         let source = Box::new(parquet_step);
-        let mut select_source = SelectColumnRecordBatchReaderSource {
-            input: source,
+        let mut select_source = SelectColumnsStep {
+            prev: source,
             columns: vec!["two".to_string(), "four".to_string()],
         };
-
-        let mut projected_reader = select_source.get_record_batch_reader().unwrap();
+        let mut projected_reader = select_source
+            .get_record_batch_reader()
+            .expect("Failed to get record batch reader");
 
         // 1. Check Schema
         let projected_schema = projected_reader.schema();

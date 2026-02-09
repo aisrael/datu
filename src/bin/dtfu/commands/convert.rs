@@ -12,6 +12,8 @@ use dtfu::pipeline::csv::WriteCsvArgs;
 use dtfu::pipeline::csv::WriteCsvStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
+use dtfu::pipeline::parquet::WriteParquetArgs;
+use dtfu::pipeline::parquet::WriteParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
 
 /// convert command implementation
@@ -83,7 +85,17 @@ fn execute_writer(
             writer.execute()?;
             Ok(())
         }
-        _ => bail!("Only CSV and Avro are supported as output file types"),
+        FileType::Parquet => {
+            let writer = WriteParquetStep {
+                prev,
+                args: WriteParquetArgs {
+                    path: args.output.clone(),
+                },
+            };
+            writer.execute()?;
+            Ok(())
+        }
+        _ => bail!("Only CSV, Avro and Parquet are supported as output file types"),
     }
 }
 

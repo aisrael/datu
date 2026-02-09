@@ -14,6 +14,7 @@ pub enum Operation {
     ReadAvro(avro::ReadAvroStep),
     ReadParquet(parquet::ReadParquetStep),
     WriteAvro(avro::WriteAvroArgs),
+    WriteParquet(parquet::WriteParquetArgs),
     WriteCsv(csv::WriteCsvArgs),
 }
 

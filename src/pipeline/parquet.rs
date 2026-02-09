@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -34,6 +35,42 @@ pub fn read_parquet(args: &ReadParquetArgs) -> Result<ParquetRecordBatchReader> 
         builder = builder.with_limit(limit);
     }
     builder.build().map_err(Error::ParquetError)
+}
+
+/// Arguments for writing a parquet file
+pub struct WriteParquetArgs {
+    pub path: String,
+}
+
+pub struct WriteParquetStep {
+    pub prev: Box<dyn RecordBatchReaderSource>,
+    pub args: WriteParquetArgs,
+}
+
+pub struct WriteParquetResult {}
+
+impl crate::pipeline::Step for WriteParquetStep {
+    type Input = Box<dyn RecordBatchReaderSource>;
+    type Output = WriteParquetResult;
+
+    fn execute(mut self) -> Result<Self::Output> {
+        let path = self.args.path.as_str();
+        let file = std::fs::File::create(path).map_err(Error::IoError)?;
+
+        let reader = self.prev.get_record_batch_reader()?;
+        let schema = reader.schema();
+
+        let mut writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;
+
+        for batch in reader {
+            let batch = batch.map_err(Error::ArrowError)?;
+            writer.write(&batch).map_err(Error::ParquetError)?;
+        }
+
+        writer.close().map_err(Error::ParquetError)?;
+
+        Ok(WriteParquetResult {})
+    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ exclude = [
 anyhow = "1.0.100"
 apache-avro = "0.17"
 arrow = "57.2.0"
+arrow-avro = "57.2.0"
 clap = { version = "4.5.54", features = ["cargo", "derive"] }
 chrono = "0.4"
 datafusion = "52.1.0"

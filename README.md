@@ -1,4 +1,4 @@
-dtfu - a data multi-tool
+dtfu - a data file utility
 =======================
 
 `dtfu` is intended to be a lightweight, fast, and versatile CLI tool for reading, querying, and converting data in various file formats, such as Parquet, .XLSX, CSV, and even f3.

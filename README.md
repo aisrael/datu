@@ -22,6 +22,46 @@ constructs a pipeline that reads the input, selects only the specified columns, 
 
 ## Examples
 
+### `schema`
+
+Display the schema of a Parquet or Avro file (column names, types, and nullability). Useful for inspecting file structure without reading data.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+
+**Usage:**
+
+```sh
+dtfu schema <FILE> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--output <FORMAT>` | Output format: `csv`, `json`, or `yaml`. Case insensitive. Default: `csv`. |
+
+**Output formats:**
+
+- **csv** (default): One line per column, e.g. `name: String (UTF8), nullable`.
+- **json**: Pretty-printed JSON array of objects with `name`, `data_type`, `nullable`, and optionally `converted_type` (Parquet).
+- **yaml**: YAML list of mappings with the same fields.
+
+**Examples:**
+
+```sh
+# Default CSV-style output
+dtfu schema data.parquet
+
+# JSON output
+dtfu schema data.parquet --output json
+
+# YAML output (e.g. for config or tooling)
+dtfu schema events.avro --output yaml
+dtfu schema events.avro -o YAML
+```
+
+---
+
 ### `convert`
 
 Convert data between supported formats. Input and output formats are inferred from file extensions.

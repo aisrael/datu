@@ -189,7 +189,7 @@ fn file_should_have_n_lines(world: &mut CliWorld, path: String, n: usize) {
     let file = std::fs::File::open(&path_resolved).expect("Failed to open file");
     let line_count = std::io::BufReader::new(file)
         .lines()
-        .filter(|r| r.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .filter(|r| r.as_ref().is_ok_and(|s| !s.trim().is_empty()))
         .count();
     assert!(
         line_count == n,
@@ -230,7 +230,7 @@ fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
     let file = std::fs::File::open(path_resolved).expect("Failed to open file");
     let line_count = std::io::BufReader::new(file)
         .lines()
-        .filter(|r| r.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .filter(|r| r.as_ref().is_ok_and(|s| !s.trim().is_empty()))
         .count();
     assert!(
         line_count == n,

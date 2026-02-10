@@ -16,13 +16,4 @@ pub enum Error {
     ArrowError(#[from] arrow::error::ArrowError),
     #[error(transparent)]
     CsvError(#[from] csv::Error),
-    #[error(transparent)]
-    AvroError(#[from] Box<apache_avro::Error>),
-}
-
-// This lets us use the ? operator on AvroError
-impl From<apache_avro::Error> for Error {
-    fn from(err: apache_avro::Error) -> Self {
-        Error::AvroError(Box::new(err))
-    }
 }

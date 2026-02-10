@@ -57,6 +57,7 @@ mod tests {
         let args = ReadParquetArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
+            offset: None,
         };
         let reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");

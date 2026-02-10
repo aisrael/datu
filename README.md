@@ -1,62 +1,183 @@
-dtfu - a data multi-tool
+dtfu - a data file utility
 =======================
 
 `dtfu` is intended to be a lightweight, fast, and versatile CLI tool for reading, querying, and converting data in various file formats, such as Parquet, .XLSX, CSV, and even f3.
 
-It can be used interactively, with a REPL-like interface, or, non-interactively with all arguments given on the CLI or via an input script, for automated pipelines.
+It is used non-interactively: you invoke a subcommand with arguments on the CLI or from scripts for automated pipelines.
 
 Internally, it also uses a pipeline architecture that aids in extensibility and testing, as well as allowing for parallel processing even of large datasets, if the input/output formats support it.
 
 ## How it Works Internally
 
-`dtfu` has an internal, streaming, pipeline model (a DAG).
+Internally, `dtfu` constructs a pipeline based on the command and arguments.
 
-### Parsing and Constructing the Model
 
-It can construct the model from the CLI arguments or from the REPL (using their respective `PipelineModeler` trait implementations).
-
-The CLI is parsed using the popular [clap](https://docs.rs/clap) crate, while the REPL uses a "lite functional" DSL inspired by Elixir.
-
-For example, the following CLI arguments
+For example, the following invocation
 
 ```sh
-dtfu -i input.parq --select id,name,email -o output.csv
+dtfu convert input.parquet output.csv --select id,name,email
 ```
 
-Are functionally equivalent to the REPL
+constructs a pipeline that reads the input, selects only the specified columns, and writes the output.
 
+## Examples
+
+### `schema`
+
+Display the schema of a Parquet or Avro file (column names, types, and nullability). Useful for inspecting file structure without reading data.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+
+**Usage:**
+
+```sh
+dtfu schema <FILE> [OPTIONS]
 ```
-> READ("input.parq") |> SELECT(:id, :name, :email) |> WRITE("output.csv")
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--output <FORMAT>` | Output format: `csv`, `json`, or `yaml`. Case insensitive. Default: `csv`. |
+
+**Output formats:**
+
+- **csv** (default): One line per column, e.g. `name: String (UTF8), nullable`.
+- **json**: Pretty-printed JSON array of objects with `name`, `data_type`, `nullable`, and optionally `converted_type` (Parquet).
+- **yaml**: YAML list of mappings with the same fields.
+
+**Examples:**
+
+```sh
+# Default CSV-style output
+dtfu schema data.parquet
+
+# JSON output
+dtfu schema data.parquet --output json
+
+# YAML output (e.g. for config or tooling)
+dtfu schema events.avro --output yaml
+dtfu schema events.avro -o YAML
 ```
 
-In both cases, the modeler constructs the following simplified pipeline model:
+---
 
-```mermaid
-flowchart LR
-    R["READ(#quot;input.parq#quot;)"] --> S
-    S["SELECT(:id, :name, :email)"] --> W["WRITE(#quot;output.csv#quot;)"]
+### `convert`
+
+Convert data between supported formats. Input and output formats are inferred from file extensions.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+
+**Supported output formats:** CSV (`.csv`), Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+
+**Usage:**
+
+```sh
+dtfu convert <INPUT> <OUTPUT> [OPTIONS]
 ```
 
-### Model Execution
+**Options:**
 
-Once the model is executed, the pipeline is executed in one of two ways.
+| Option | Description |
+|--------|-------------|
+| `--select <COLUMNS>...` | Columns to include. If not specified, all columns are written. Column names can be given as multiple arguments or as comma-separated values (e.g. `--select id,name,email` or `--select id --select name --select email`). |
+| `--limit <N>` | Maximum number of records to read from the input. |
 
-In "serial" mode (default), the various stages of the pipeline read, process, and write data sequentially, using a push-based approach (internally implemented using Rust channels). This usually provides the highest 'raw' performance with optimal resource consumption.
+**Examples:**
 
-In "parallel" mode, for pipeline stages that support it, large datasets can be partitioned and processed in parallel. This can provide greater throughput, especially for larger datasets and when running on multiple cores, at the expense of slightly more resource consumption.
+```sh
+# Parquet to CSV (all columns)
+dtfu convert data.parquet data.csv
 
-Which execution method to use depends on the data, the pipeline, and the desired outcomes. Indeed, it's common to chain multiple, sequential pipelines together (using external scripts or orchestration tools), first to partition the input data, then to process it in parallel across multiple machines, then aggregate and write the consolidated output.
+# Parquet to Avro (first 1000 rows)
+dtfu convert data.parquet data.avro --limit 1000
 
-### Retry
+# Avro to CSV, only specific columns
+dtfu convert events.avro events.csv --select id,timestamp,user_id
 
-Data and models aren't perfect, and machines can sometimes hiccup. Most commonly, a `dtfu` process might run out of memory or disk space while processing a large dataset or writing its output due to some temporary resource exhaustion.
+# Parquet to Parquet with column subset
+dtfu convert input.parq output.parquet --select one,two,three
+```
 
-To mitigate this, `dtfu` supports a "retryable" mode.
+---
 
-In "retryable" mode, `dtfu` periodically writes its progress, including intermediate computation results, to disk.
+### `head`
 
-In case of an error or disruption, `dtfu` can then be instructed to attempt to resume from where it left off. If not possible, `dtfu` will print an error message and abort.
+Print the first N rows of a Parquet or Avro file as CSV to stdout.
 
-Note that, on a system with high disk utilisation pressure, "retry" mode _will_ require _even more_ disk space to store intermediate state.
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
 
-However, for extremely large datasets running on, say, ephemeral machines (VMs or containers) that can be interrupted at any time, "retry" mode can save having to rerun a long-running pipeline from the start, saving hours of lost work.
+**Usage:**
+
+```sh
+dtfu head <INPUT> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-n`, `--number <N>` | Number of rows to print. Default: 10. |
+| `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
+
+**Examples:**
+
+```sh
+# First 10 rows (default)
+dtfu head data.parquet
+
+# First 100 rows
+dtfu head data.parquet -n 100
+dtfu head data.avro --number 100
+
+# First 20 rows, specific columns
+dtfu head data.parquet -n 20 --select id,name,email
+```
+
+---
+
+### `tail`
+
+Print the last N rows of a Parquet or Avro file as CSV to stdout.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+
+**Usage:**
+
+```sh
+dtfu tail <INPUT> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-n`, `--number <N>` | Number of rows to print. Default: 10. |
+| `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
+
+**Examples:**
+
+```sh
+# Last 10 rows (default)
+dtfu tail data.parquet
+
+# Last 50 rows
+dtfu tail data.parquet -n 50
+dtfu tail data.avro --number 50
+
+# Last 20 rows, specific columns
+dtfu tail data.parquet -n 20 --select id,name,email
+
+# Redirect tail output to a file
+dtfu tail data.parquet -n 1000 > last1000.csv
+```
+
+---
+
+### Version
+
+Print the installed `dtfu` version:
+
+```sh
+dtfu version
+```

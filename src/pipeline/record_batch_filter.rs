@@ -68,6 +68,7 @@ mod tests {
         let args = ReadParquetArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
+            offset: None,
         };
         let parquet_step = ReadParquetStep { args };
 

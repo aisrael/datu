@@ -1,6 +1,6 @@
 [package]
 name = "dtfu"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "dtfu - a data multi-tool"
 license = "MIT"
@@ -13,6 +13,7 @@ exclude = [
 [dependencies]
 anyhow = "1.0.100"
 arrow = "57.2.0"
+arrow-avro = "57.2.0"
 clap = { version = "4.5.54", features = ["cargo", "derive"] }
 chrono = "0.4"
 datafusion = "52.1.0"
@@ -20,6 +21,10 @@ parquet = "57.2.0"
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 thiserror = "2.0.18"
 csv = "1.4.0"
+hashlink = "0.10"
+saphyr = "0.0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 cucumber = "0.22.1"

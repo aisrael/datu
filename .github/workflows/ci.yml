@@ -17,7 +17,7 @@ jobs:
           components: rustfmt,clippy
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@2
+        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt -- --check

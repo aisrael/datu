@@ -7,25 +7,22 @@ use clap::Subcommand;
 #[derive(Subcommand)]
 pub enum Command {
     Convert(ConvertArgs),
-    Head(HeadArgs),
-    Tail(TailArgs),
+    Head(HeadsOrTails),
+    Tail(HeadsOrTails),
     Version,
 }
 
-/// head command arguments
+/// head and tail command arguments (shared)
 #[derive(Args)]
-pub struct HeadArgs {
+pub struct HeadsOrTails {
     pub input: String,
     #[arg(short = 'n', long, default_value_t = 10, help = "Number of lines to print.")]
     pub number: usize,
-}
-
-/// tail command arguments
-#[derive(Args)]
-pub struct TailArgs {
-    pub input: String,
-    #[arg(short = 'n', long, default_value_t = 10, help = "Number of lines to print.")]
-    pub number: usize,
+    #[arg(
+        long,
+        help = "Columns to select. If not specified, all columns will be printed."
+    )]
+    pub select: Option<Vec<String>>,
 }
 
 /// convert command arguments

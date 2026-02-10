@@ -15,6 +15,7 @@ use dtfu::pipeline::parquet::ReadParquetStep;
 use dtfu::pipeline::parquet::WriteParquetArgs;
 use dtfu::pipeline::parquet::WriteParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
+use dtfu::utils::parse_select_columns;
 
 /// convert command implementation
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
@@ -26,17 +27,7 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let mut reader_step: Box<dyn RecordBatchReaderSource> =
         get_reader_step(input_file_type, &args)?;
     if let Some(select) = &args.select {
-        let mut columns = Vec::with_capacity(select.len());
-        for s in select {
-            columns.extend(s.split(',').filter_map(|c| {
-                let c = c.trim();
-                if !c.is_empty() {
-                    Some(c.to_string())
-                } else {
-                    None
-                }
-            }));
-        }
+        let columns = parse_select_columns(select);
         let select_step: Box<dyn RecordBatchReaderSource> = Box::new(SelectColumnsStep {
             prev: reader_step,
             columns,
@@ -160,14 +151,14 @@ mod tests {
     #[test]
     fn test_convert_avro_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let output_path = temp_dir.path().join("table.csv");
+        let output_path = temp_dir.path().join("userdata5.csv");
         let output = output_path
             .to_str()
             .expect("Failed to convert path to string")
             .to_string();
 
         let args = ConvertArgs {
-            input: "fixtures/table.avro".to_string(),
+            input: "fixtures/userdata5.avro".to_string(),
             output,
             select: None,
             limit: None,

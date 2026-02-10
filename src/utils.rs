@@ -1,5 +1,22 @@
 use std::path::Path;
 
+/// Parse column names from `select` by splitting each string at commas, trimming and
+/// discarding empty parts. E.g. `["a, b", "c"]` becomes `["a", "b", "c"]`.
+pub fn parse_select_columns(select: &[String]) -> Vec<String> {
+    let mut columns = Vec::with_capacity(select.len());
+    for s in select {
+        columns.extend(s.split(',').filter_map(|c| {
+            let c = c.trim();
+            if !c.is_empty() {
+                Some(c.to_string())
+            } else {
+                None
+            }
+        }));
+    }
+    columns
+}
+
 /// A supported input or output file type
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FileType {
@@ -36,6 +53,23 @@ impl TryFrom<&str> for FileType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_select_columns() {
+        assert_eq!(parse_select_columns(&[]), Vec::<String>::new());
+        assert_eq!(
+            parse_select_columns(&["a".to_string(), "b".to_string()]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            parse_select_columns(&["a, b".to_string(), "c".to_string()]),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        assert_eq!(
+            parse_select_columns(&[" one ,  two  ".to_string()]),
+            vec!["one".to_string(), "two".to_string()]
+        );
+    }
 
     #[test]
     fn test_valid_extensions() {

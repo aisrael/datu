@@ -1,19 +1,28 @@
 use anyhow::Result;
 use anyhow::bail;
 use dtfu::FileType;
-use dtfu::cli::HeadArgs;
+use dtfu::cli::HeadsOrTails;
 use dtfu::pipeline::RecordBatchReaderSource;
 use dtfu::pipeline::avro::ReadAvroArgs;
 use dtfu::pipeline::avro::ReadAvroStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
+use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
+use dtfu::utils::parse_select_columns;
 use dtfu::Error;
 
 /// head command implementation: print the first N lines of an Avro or Parquet file as CSV.
-pub fn head(args: HeadArgs) -> Result<()> {
+pub fn head(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let mut reader_step: Box<dyn RecordBatchReaderSource> =
         get_reader_step(input_file_type, &args)?;
+    if let Some(select) = &args.select {
+        let columns = parse_select_columns(select);
+        reader_step = Box::new(SelectColumnsStep {
+            prev: reader_step,
+            columns,
+        });
+    }
     let reader = reader_step.get_record_batch_reader()?;
     let mut writer = arrow::csv::Writer::new(std::io::stdout());
     for batch in reader {
@@ -25,7 +34,7 @@ pub fn head(args: HeadArgs) -> Result<()> {
 
 fn get_reader_step(
     input_file_type: FileType,
-    args: &HeadArgs,
+    args: &HeadsOrTails,
 ) -> Result<Box<dyn RecordBatchReaderSource>> {
     let reader: Box<dyn RecordBatchReaderSource> = match input_file_type {
         FileType::Parquet => Box::new(ReadParquetStep {

@@ -3,17 +3,19 @@ use std::fs::File;
 use anyhow::Result;
 use anyhow::bail;
 use dtfu::FileType;
-use dtfu::cli::TailArgs;
+use dtfu::cli::HeadsOrTails;
 use dtfu::pipeline::RecordBatchReaderSource;
 use dtfu::pipeline::avro::ReadAvroArgs;
 use dtfu::pipeline::avro::ReadAvroStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
+use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
+use dtfu::utils::parse_select_columns;
 use dtfu::Error;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// tail command implementation: print the last N lines of an Avro or Parquet file as CSV.
-pub fn tail(args: TailArgs) -> Result<()> {
+pub fn tail(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     match input_file_type {
         FileType::Parquet => tail_parquet(&args),
@@ -22,7 +24,7 @@ pub fn tail(args: TailArgs) -> Result<()> {
     }
 }
 
-fn tail_parquet(args: &TailArgs) -> Result<()> {
+fn tail_parquet(args: &HeadsOrTails) -> Result<()> {
     let meta_file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
@@ -38,6 +40,13 @@ fn tail_parquet(args: &TailArgs) -> Result<()> {
             offset: Some(offset),
         },
     });
+    if let Some(select) = &args.select {
+        let columns = parse_select_columns(select);
+        reader_step = Box::new(SelectColumnsStep {
+            prev: reader_step,
+            columns,
+        });
+    }
     let reader = reader_step.get_record_batch_reader()?;
     let mut writer = arrow::csv::Writer::new(std::io::stdout());
     for batch in reader {
@@ -47,13 +56,20 @@ fn tail_parquet(args: &TailArgs) -> Result<()> {
     Ok(())
 }
 
-fn tail_avro(args: &TailArgs) -> Result<()> {
+fn tail_avro(args: &HeadsOrTails) -> Result<()> {
     let mut reader_step: Box<dyn RecordBatchReaderSource> = Box::new(ReadAvroStep {
         args: ReadAvroArgs {
             path: args.input.clone(),
             limit: None,
         },
     });
+    if let Some(select) = &args.select {
+        let columns = parse_select_columns(select);
+        reader_step = Box::new(SelectColumnsStep {
+            prev: reader_step,
+            columns,
+        });
+    }
     let reader = reader_step.get_record_batch_reader()?;
     let batches: Vec<arrow::record_batch::RecordBatch> = reader
         .map(|b| b.map_err(Error::ArrowError).map_err(Into::into))

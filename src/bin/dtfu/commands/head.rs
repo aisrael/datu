@@ -1,5 +1,6 @@
 use anyhow::Result;
 use anyhow::bail;
+use dtfu::Error;
 use dtfu::FileType;
 use dtfu::cli::HeadsOrTails;
 use dtfu::pipeline::RecordBatchReaderSource;
@@ -9,7 +10,6 @@ use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
 use dtfu::utils::parse_select_columns;
-use dtfu::Error;
 
 /// head command implementation: print the first N lines of an Avro or Parquet file as CSV.
 pub fn head(args: HeadsOrTails) -> Result<()> {

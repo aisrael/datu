@@ -15,6 +15,8 @@ use dtfu::pipeline::parquet::ReadParquetStep;
 use dtfu::pipeline::parquet::WriteParquetArgs;
 use dtfu::pipeline::parquet::WriteParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
+use dtfu::pipeline::xlsx::WriteXlsxArgs;
+use dtfu::pipeline::xlsx::WriteXlsxStep;
 use dtfu::utils::parse_select_columns;
 
 /// convert command implementation
@@ -98,7 +100,17 @@ fn execute_writer(
             writer.execute()?;
             Ok(())
         }
-        _ => bail!("Only CSV, Avro and Parquet are supported as output file types"),
+        FileType::Xlsx => {
+            let writer = WriteXlsxStep {
+                prev,
+                args: WriteXlsxArgs {
+                    path: args.output.clone(),
+                },
+            };
+            writer.execute()?;
+            Ok(())
+        }
+        _ => bail!("Only CSV, Avro, Parquet and XLSX are supported as output file types"),
     }
 }
 
@@ -159,6 +171,27 @@ mod tests {
 
         let args = ConvertArgs {
             input: "fixtures/userdata5.avro".to_string(),
+            output,
+            select: None,
+            limit: None,
+        };
+
+        let result = convert(args);
+        assert!(result.is_ok(), "Convert failed: {:?}", result.err());
+        assert!(output_path.exists(), "Output file was not created");
+    }
+
+    #[test]
+    fn test_convert_parquet_to_xlsx() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("table.xlsx");
+        let output = output_path
+            .to_str()
+            .expect("Failed to convert path to string")
+            .to_string();
+
+        let args = ConvertArgs {
+            input: "fixtures/table.parquet".to_string(),
             output,
             select: None,
             limit: None,

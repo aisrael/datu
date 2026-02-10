@@ -3,15 +3,15 @@ use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::array::Float32Array;
 use arrow::array::Float64Array;
+use arrow::array::Int8Array;
 use arrow::array::Int16Array;
 use arrow::array::Int32Array;
 use arrow::array::Int64Array;
-use arrow::array::Int8Array;
 use arrow::array::StringArray;
+use arrow::array::UInt8Array;
 use arrow::array::UInt16Array;
 use arrow::array::UInt32Array;
 use arrow::array::UInt64Array;
-use arrow::array::UInt8Array;
 use arrow::datatypes::DataType;
 use rust_xlsxwriter::Workbook;
 use rust_xlsxwriter::Worksheet;
@@ -40,15 +40,11 @@ impl Step for WriteXlsxStep {
     fn execute(mut self) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let mut workbook = Workbook::new();
-        let mut worksheet = workbook.add_worksheet();
+        let worksheet = workbook.add_worksheet();
 
         let reader = self.prev.get_record_batch_reader()?;
         let schema = reader.schema();
-        let column_names: Vec<&str> = schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
+        let column_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
 
         let mut excel_row: u32 = 0;
         for (col, name) in column_names.iter().enumerate() {
@@ -61,7 +57,7 @@ impl Step for WriteXlsxStep {
             let batch_row_count = batch.num_rows();
             for batch_row in 0..batch_row_count {
                 for (col, array) in batch.columns().iter().enumerate() {
-                    write_arrow_cell(&mut worksheet, excel_row, col as u16, array, batch_row)?;
+                    write_arrow_cell(worksheet, excel_row, col as u16, array, batch_row)?;
                 }
                 excel_row += 1;
             }
@@ -167,8 +163,7 @@ fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::Na
         DataType::Timestamp(_, _) => {
             if let Some(arr) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
                 let ts = arr.value(index);
-                return chrono::DateTime::from_timestamp_millis(ts)
-                    .map(|dt| dt.naive_utc());
+                return chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.naive_utc());
             }
             if let Some(arr) = array.as_any().downcast_ref::<TimestampSecondArray>() {
                 let ts = arr.value(index);
@@ -179,16 +174,14 @@ fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::Na
                 .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
             {
                 let ts = arr.value(index) / 1000;
-                return chrono::DateTime::from_timestamp_millis(ts)
-                    .map(|dt| dt.naive_utc());
+                return chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.naive_utc());
             }
             if let Some(arr) = array
                 .as_any()
                 .downcast_ref::<arrow::array::TimestampNanosecondArray>()
             {
                 let ts = arr.value(index) / 1_000_000;
-                return chrono::DateTime::from_timestamp_millis(ts)
-                    .map(|dt| dt.naive_utc());
+                return chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.naive_utc());
             }
         }
         DataType::Date64 => {

@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::path::Path;
 use std::process::Command;
 
@@ -11,6 +12,8 @@ const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
 pub struct CliWorld {
     output: Option<std::process::Output>,
     temp_dir: Option<tempfile::TempDir>,
+    /// Last file path used in a "the file \"...\" should exist" step (resolved).
+    last_file: Option<String>,
 }
 
 fn replace_tempdir(s: &str, temp_path: &str) -> String {
@@ -139,13 +142,102 @@ fn file_should_exist(world: &mut CliWorld, path: String) {
             .expect("Temp path is not valid UTF-8");
         replace_tempdir(&path, temp_path)
     } else {
-        path
+        path.clone()
     };
 
     assert!(
         Path::new(&path_resolved).exists(),
         "Expected file to exist: {}",
         path_resolved
+    );
+    world.last_file = Some(path_resolved);
+}
+
+fn resolve_path(world: &CliWorld, path: &str) -> String {
+    if let Some(ref temp_dir) = world.temp_dir {
+        let temp_path = temp_dir
+            .path()
+            .to_str()
+            .expect("Temp path is not valid UTF-8");
+        replace_tempdir(path, temp_path)
+    } else {
+        path.to_string()
+    }
+}
+
+#[then(regex = r#"^the file "(.+)" should have a first line containing "(.+)"$"#)]
+fn file_should_have_first_line_containing(world: &mut CliWorld, path: String, expected: String) {
+    let path_resolved = resolve_path(world, &path);
+    let file = std::fs::File::open(&path_resolved).expect("Failed to open file");
+    let first_line = std::io::BufReader::new(file)
+        .lines()
+        .next()
+        .expect("File is empty")
+        .expect("Failed to read line");
+    assert!(
+        first_line.contains(&expected),
+        "Expected first line of {} to contain '{}', but got: {}",
+        path_resolved,
+        expected,
+        first_line
+    );
+}
+
+#[then(regex = r#"^the file "(.+)" should have (\d+) lines$"#)]
+fn file_should_have_n_lines(world: &mut CliWorld, path: String, n: usize) {
+    let path_resolved = resolve_path(world, &path);
+    let file = std::fs::File::open(&path_resolved).expect("Failed to open file");
+    let line_count = std::io::BufReader::new(file)
+        .lines()
+        .filter(|r| r.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .count();
+    assert!(
+        line_count == n,
+        "Expected file {} to have {} lines, but got {}",
+        path_resolved,
+        n,
+        line_count
+    );
+}
+
+#[then(regex = r#"^the first line of that file should contain "(.+)"$"#)]
+fn first_line_of_that_file_should_contain(world: &mut CliWorld, expected: String) {
+    let path_resolved = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path_resolved).expect("Failed to open file");
+    let first_line = std::io::BufReader::new(file)
+        .lines()
+        .next()
+        .expect("File is empty")
+        .expect("Failed to read line");
+    assert!(
+        first_line.contains(&expected),
+        "Expected first line of {} to contain '{}', but got: {}",
+        path_resolved,
+        expected,
+        first_line
+    );
+}
+
+#[then(regex = r#"^that file should have (\d+) lines$"#)]
+fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
+    let path_resolved = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path_resolved).expect("Failed to open file");
+    let line_count = std::io::BufReader::new(file)
+        .lines()
+        .filter(|r| r.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .count();
+    assert!(
+        line_count == n,
+        "Expected file {} to have {} lines, but got {}",
+        path_resolved,
+        n,
+        line_count
     );
 }
 

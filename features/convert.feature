@@ -1,5 +1,5 @@
 Feature: Convert
-  Convert between Parquet, Avro, and CSV file formats.
+  Convert between Parquet, Avro, CSV, and XLSX file formats.
 
   Scenario: Parquet to Avro
     When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table.avro`
@@ -58,3 +58,27 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5_limit_select.csv" should exist
     And the first line of that file should contain "id,email"
     And that file should have 4 lines
+
+  Scenario: Parquet to XLSX
+    When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table.xlsx`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.xlsx"
+    And the file "$TEMPDIR/table.xlsx" should exist
+
+  Scenario: Avro to XLSX
+    When I run `dtfu convert fixtures/userdata5.avro $TEMPDIR/userdata5.xlsx`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.xlsx"
+    And the file "$TEMPDIR/userdata5.xlsx" should exist
+
+  Scenario: Parquet to XLSX with --select
+    When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table_select.xlsx --select two,four`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_select.xlsx"
+    And the file "$TEMPDIR/table_select.xlsx" should exist
+
+  Scenario: Parquet to XLSX with --limit
+    When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table_limit.xlsx --limit 2`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_limit.xlsx"
+    And the file "$TEMPDIR/table_limit.xlsx" should exist

@@ -4,6 +4,7 @@ pub mod avro;
 pub mod csv;
 pub mod parquet;
 pub mod record_batch_filter;
+pub mod xlsx;
 
 use arrow::array::RecordBatchReader;
 
@@ -16,6 +17,7 @@ pub enum Operation {
     WriteAvro(avro::WriteAvroArgs),
     WriteParquet(parquet::WriteParquetArgs),
     WriteCsv(csv::WriteCsvArgs),
+    WriteXlsx(xlsx::WriteXlsxArgs),
 }
 
 /// A `Step` defines a step in the pipeline that can be executed

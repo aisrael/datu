@@ -16,4 +16,6 @@ pub enum Error {
     ArrowError(#[from] arrow::error::ArrowError),
     #[error(transparent)]
     CsvError(#[from] csv::Error),
+    #[error(transparent)]
+    XlsxError(#[from] rust_xlsxwriter::XlsxError),
 }

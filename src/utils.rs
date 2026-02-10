@@ -24,6 +24,7 @@ pub enum FileType {
     Csv,
     Json,
     Parquet,
+    Xlsx,
 }
 
 /// Try to determine the FileType from a filename
@@ -41,6 +42,7 @@ impl TryFrom<&str> for FileType {
                 "csv" => FileType::Csv,
                 "parq" | "parquet" => FileType::Parquet,
                 "avro" => FileType::Avro,
+                "xlsx" => FileType::Xlsx,
                 _ => return Err(crate::Error::UnknownFileType(s.to_owned())),
             };
             return Ok(file_type);
@@ -77,6 +79,7 @@ mod tests {
         assert_eq!(FileType::try_from("data.json").unwrap(), FileType::Json);
         assert_eq!(FileType::try_from("file.parq").unwrap(), FileType::Parquet);
         assert_eq!(FileType::try_from("schema.avro").unwrap(), FileType::Avro);
+        assert_eq!(FileType::try_from("data.xlsx").unwrap(), FileType::Xlsx);
     }
 
     #[test]
@@ -85,6 +88,7 @@ mod tests {
         assert_eq!(FileType::try_from("data.Json").unwrap(), FileType::Json);
         assert_eq!(FileType::try_from("file.PARQ").unwrap(), FileType::Parquet);
         assert_eq!(FileType::try_from("schema.Avro").unwrap(), FileType::Avro);
+        assert_eq!(FileType::try_from("report.XLSX").unwrap(), FileType::Xlsx);
     }
 
     #[test]

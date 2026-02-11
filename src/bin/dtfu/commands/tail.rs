@@ -4,31 +4,30 @@ use anyhow::Result;
 use anyhow::bail;
 use dtfu::Error;
 use dtfu::FileType;
-use dtfu::cli::DisplayOutputType;
 use dtfu::cli::HeadsOrTails;
 use dtfu::pipeline::RecordBatchReaderSource;
+use dtfu::pipeline::Step;
+use dtfu::pipeline::VecRecordBatchReaderSource;
 use dtfu::pipeline::avro::ReadAvroArgs;
 use dtfu::pipeline::avro::ReadAvroStep;
+use dtfu::pipeline::display::DisplayWriterStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
 use dtfu::utils::parse_select_columns;
 use parquet::file::metadata::ParquetMetaDataReader;
 
-/// tail command implementation: print the last N lines of an Avro or Parquet file as CSV.
+/// tail command implementation: print the last N lines of an Avro or Parquet file.
 pub fn tail(args: HeadsOrTails) -> Result<()> {
-    if args.output != DisplayOutputType::Csv {
-        bail!("{} output is not yet implemented for tail", args.output);
-    }
     let input_file_type: FileType = args.input.as_str().try_into()?;
     match input_file_type {
-        FileType::Parquet => tail_parquet(&args),
-        FileType::Avro => tail_avro(&args),
+        FileType::Parquet => tail_parquet(args),
+        FileType::Avro => tail_avro(args),
         _ => bail!("Only Parquet and Avro are supported for tail"),
     }
 }
 
-fn tail_parquet(args: &HeadsOrTails) -> Result<()> {
+fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let meta_file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
@@ -51,16 +50,14 @@ fn tail_parquet(args: &HeadsOrTails) -> Result<()> {
             columns,
         });
     }
-    let reader = reader_step.get_record_batch_reader()?;
-    let mut writer = arrow::csv::Writer::new(std::io::stdout());
-    for batch in reader {
-        let batch = batch.map_err(Error::ArrowError)?;
-        writer.write(&batch).map_err(Error::ArrowError)?;
-    }
-    Ok(())
+    let display_step = DisplayWriterStep {
+        prev: reader_step,
+        output_format: args.output,
+    };
+    display_step.execute().map_err(Into::into)
 }
 
-fn tail_avro(args: &HeadsOrTails) -> Result<()> {
+fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: Box<dyn RecordBatchReaderSource> = Box::new(ReadAvroStep {
         args: ReadAvroArgs {
             path: args.input.clone(),
@@ -82,7 +79,7 @@ fn tail_avro(args: &HeadsOrTails) -> Result<()> {
     let number = args.number.min(total_rows);
     let skip = total_rows.saturating_sub(number);
 
-    let mut writer = arrow::csv::Writer::new(std::io::stdout());
+    let mut tail_batches = Vec::new();
     let mut rows_emitted = 0usize;
     let mut rows_skipped = 0usize;
     for batch in batches {
@@ -98,8 +95,15 @@ fn tail_avro(args: &HeadsOrTails) -> Result<()> {
             break;
         }
         let slice = batch.slice(start_in_batch, take);
-        writer.write(&slice).map_err(Error::ArrowError)?;
+        tail_batches.push(slice);
         rows_emitted += take;
     }
-    Ok(())
+
+    let reader_step: Box<dyn RecordBatchReaderSource> =
+        Box::new(VecRecordBatchReaderSource::new(tail_batches));
+    let display_step = DisplayWriterStep {
+        prev: reader_step,
+        output_format: args.output,
+    };
+    display_step.execute().map_err(Into::into)
 }

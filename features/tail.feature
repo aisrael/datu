@@ -34,3 +34,39 @@ Feature: Tail
     Then the command should succeed
     And the first line should contain "id"
     And the first line should contain "email"
+
+  Scenario: Tail Parquet with --output csv
+    When I run `dtfu tail fixtures/table.parquet -n 2 --output csv`
+    Then the command should succeed
+    And the first line should contain "one"
+    And the first line should contain "two"
+
+  Scenario: Tail Parquet with --output json
+    When I run `dtfu tail fixtures/table.parquet -n 2 --output json`
+    Then the command should succeed
+    And the output should contain "["
+    And the output should contain "one"
+
+  Scenario: Tail Avro with --output csv
+    When I run `dtfu tail fixtures/userdata5.avro -n 2 --output csv`
+    Then the command should succeed
+    And the first line should contain "id"
+    And the first line should contain "first_name"
+
+  Scenario: Tail Avro with --output json
+    When I run `dtfu tail fixtures/userdata5.avro -n 2 --output json`
+    Then the command should succeed
+    And the output should contain "["
+    And the output should contain "email"
+
+  Scenario: Tail Parquet with --output yaml
+    When I run `dtfu tail fixtures/table.parquet -n 2 --output yaml`
+    Then the command should succeed
+    And the output should contain "one"
+    And the output should contain "two"
+
+  Scenario: Tail Avro with --output yaml
+    When I run `dtfu tail fixtures/userdata5.avro -n 2 --output yaml`
+    Then the command should succeed
+    And the output should contain "id"
+    And the output should contain "email"

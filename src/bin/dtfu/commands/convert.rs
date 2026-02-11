@@ -4,18 +4,16 @@ use dtfu::FileType;
 use dtfu::cli::ConvertArgs;
 use dtfu::pipeline::RecordBatchReaderSource;
 use dtfu::pipeline::Step;
+use dtfu::pipeline::WriteArgs;
 use dtfu::pipeline::avro::ReadAvroArgs;
 use dtfu::pipeline::avro::ReadAvroStep;
-use dtfu::pipeline::avro::WriteAvroArgs;
 use dtfu::pipeline::avro::WriteAvroStep;
-use dtfu::pipeline::csv::WriteCsvArgs;
 use dtfu::pipeline::csv::WriteCsvStep;
+use dtfu::pipeline::json::WriteJsonStep;
 use dtfu::pipeline::parquet::ReadParquetArgs;
 use dtfu::pipeline::parquet::ReadParquetStep;
-use dtfu::pipeline::parquet::WriteParquetArgs;
 use dtfu::pipeline::parquet::WriteParquetStep;
 use dtfu::pipeline::record_batch_filter::SelectColumnsStep;
-use dtfu::pipeline::xlsx::WriteXlsxArgs;
 use dtfu::pipeline::xlsx::WriteXlsxStep;
 use dtfu::utils::parse_select_columns;
 
@@ -73,7 +71,7 @@ fn execute_writer(
         FileType::Csv => {
             let writer = WriteCsvStep {
                 prev,
-                args: WriteCsvArgs {
+                args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
@@ -83,7 +81,7 @@ fn execute_writer(
         FileType::Avro => {
             let writer = WriteAvroStep {
                 prev,
-                args: WriteAvroArgs {
+                args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
@@ -93,7 +91,17 @@ fn execute_writer(
         FileType::Parquet => {
             let writer = WriteParquetStep {
                 prev,
-                args: WriteParquetArgs {
+                args: WriteArgs {
+                    path: args.output.clone(),
+                },
+            };
+            writer.execute()?;
+            Ok(())
+        }
+        FileType::Json => {
+            let writer = WriteJsonStep {
+                prev,
+                args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
@@ -103,14 +111,13 @@ fn execute_writer(
         FileType::Xlsx => {
             let writer = WriteXlsxStep {
                 prev,
-                args: WriteXlsxArgs {
+                args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
             writer.execute()?;
             Ok(())
         }
-        _ => bail!("Only CSV, Avro, Parquet and XLSX are supported as output file types"),
     }
 }
 
@@ -171,6 +178,27 @@ mod tests {
 
         let args = ConvertArgs {
             input: "fixtures/userdata5.avro".to_string(),
+            output,
+            select: None,
+            limit: None,
+        };
+
+        let result = convert(args);
+        assert!(result.is_ok(), "Convert failed: {:?}", result.err());
+        assert!(output_path.exists(), "Output file was not created");
+    }
+
+    #[test]
+    fn test_convert_parquet_to_json() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("table.json");
+        let output = output_path
+            .to_str()
+            .expect("Failed to convert path to string")
+            .to_string();
+
+        let args = ConvertArgs {
+            input: "fixtures/table.parquet".to_string(),
             output,
             select: None,
             limit: None,

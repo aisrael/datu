@@ -17,39 +17,42 @@ pub enum Command {
 
 /// Output format for the schema command
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DisplayOutputType {
+pub enum DisplayOutputFormat {
     #[default]
     Csv,
     Json,
+    JsonPretty,
     Yaml,
 }
 
-impl TryFrom<&str> for DisplayOutputType {
+impl TryFrom<&str> for DisplayOutputFormat {
     type Error = String;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s.to_lowercase().as_str() {
-            "csv" => Ok(DisplayOutputType::Csv),
-            "json" => Ok(DisplayOutputType::Json),
-            "yaml" => Ok(DisplayOutputType::Yaml),
+            "csv" => Ok(DisplayOutputFormat::Csv),
+            "json" => Ok(DisplayOutputFormat::Json),
+            "json-pretty" => Ok(DisplayOutputFormat::JsonPretty),
+            "yaml" => Ok(DisplayOutputFormat::Yaml),
             _ => Err(format!(
-                "unknown output type '{s}', expected csv, json, or yaml"
+                "unknown output type '{s}', expected csv, json, json-pretty, or yaml"
             )),
         }
     }
 }
 
-impl std::fmt::Display for DisplayOutputType {
+impl std::fmt::Display for DisplayOutputFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DisplayOutputType::Csv => write!(f, "csv"),
-            DisplayOutputType::Json => write!(f, "json"),
-            DisplayOutputType::Yaml => write!(f, "yaml"),
+            DisplayOutputFormat::Csv => write!(f, "csv"),
+            DisplayOutputFormat::Json => write!(f, "json"),
+            DisplayOutputFormat::JsonPretty => write!(f, "json-pretty"),
+            DisplayOutputFormat::Yaml => write!(f, "yaml"),
         }
     }
 }
 
-impl FromStr for DisplayOutputType {
+impl FromStr for DisplayOutputFormat {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -65,11 +68,11 @@ pub struct SchemaArgs {
     #[arg(
         long,
         short,
-        default_value_t = DisplayOutputType::Csv,
-        value_parser = clap::value_parser!(DisplayOutputType),
-        help = "Output format: csv, json, or yaml"
+        default_value_t = DisplayOutputFormat::Csv,
+        value_parser = clap::value_parser!(DisplayOutputFormat),
+        help = "Output format: csv, json, json-pretty, or yaml"
     )]
-    pub output: DisplayOutputType,
+    pub output: DisplayOutputFormat,
 }
 
 /// head and tail command arguments (shared)
@@ -83,6 +86,14 @@ pub struct HeadsOrTails {
         help = "Number of lines to print."
     )]
     pub number: usize,
+    #[arg(
+        long,
+        short,
+        default_value_t = DisplayOutputFormat::Csv,
+        value_parser = clap::value_parser!(DisplayOutputFormat),
+        help = "Output format: csv, json, json-pretty, or yaml"
+    )]
+    pub output: DisplayOutputFormat,
     #[arg(
         long,
         help = "Columns to select. If not specified, all columns will be printed."

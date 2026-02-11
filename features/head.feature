@@ -34,3 +34,38 @@ Feature: Head
     And the output should have a header and 2 lines
     And the first line should contain "id"
     And the first line should contain "email"
+
+  Scenario: Head Parquet with --output csv
+    When I run `dtfu head fixtures/userdata.parquet -n 2 --output csv`
+    Then the command should succeed
+    And the output should have a header and 2 lines
+
+  Scenario: Head Parquet with --output json
+    When I run `dtfu head fixtures/userdata.parquet -n 2 --output json`
+    Then the command should succeed
+    And the output should contain "["
+    And the output should contain "id"
+
+  Scenario: Head Avro with --output csv
+    When I run `dtfu head fixtures/userdata5.avro -n 2 --output csv`
+    Then the command should succeed
+    And the first line should contain "id"
+    And the first line should contain "first_name"
+
+  Scenario: Head Avro with --output json
+    When I run `dtfu head fixtures/userdata5.avro -n 2 --output json`
+    Then the command should succeed
+    And the output should contain "["
+    And the output should contain "first_name"
+
+  Scenario: Head Parquet with --output yaml
+    When I run `dtfu head fixtures/userdata.parquet -n 2 --output yaml`
+    Then the command should succeed
+    And the output should contain "id"
+    And the output should contain "first_name"
+
+  Scenario: Head Avro with --output yaml
+    When I run `dtfu head fixtures/userdata5.avro -n 2 --output yaml`
+    Then the command should succeed
+    And the output should contain "first_name"
+    And the output should contain "email"

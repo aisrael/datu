@@ -1,5 +1,5 @@
 Feature: Convert
-  Convert between Parquet, Avro, CSV, and XLSX file formats.
+  Convert between Parquet, Avro, CSV, JSON, and XLSX file formats.
 
   Scenario: Parquet to Avro
     When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table.avro`
@@ -58,6 +58,18 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5_limit_select.csv" should exist
     And the first line of that file should contain "id,email"
     And that file should have 4 lines
+
+  Scenario: Parquet to JSON
+    When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table.json`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.json"
+    And the file "$TEMPDIR/table.json" should exist
+
+  Scenario: Avro to JSON
+    When I run `dtfu convert fixtures/userdata5.avro $TEMPDIR/userdata5.json`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.json"
+    And the file "$TEMPDIR/userdata5.json" should exist
 
   Scenario: Parquet to XLSX
     When I run `dtfu convert fixtures/table.parquet $TEMPDIR/table.xlsx`

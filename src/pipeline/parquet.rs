@@ -6,15 +6,17 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use crate::Error;
 use crate::Result;
 use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::Step;
+use crate::pipeline::WriteArgs;
 
-/// Arguments for reading a parquet file
+/// Arguments for reading a Parquet file.
 pub struct ReadParquetArgs {
     pub path: String,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
 
-/// A step in a pipeline that reads a parquet file
+/// Pipeline step that reads a Parquet file and produces a record batch reader.
 pub struct ReadParquetStep {
     pub args: ReadParquetArgs,
 }
@@ -41,19 +43,15 @@ pub fn read_parquet(args: &ReadParquetArgs) -> Result<ParquetRecordBatchReader> 
     builder.build().map_err(Error::ParquetError)
 }
 
-/// Arguments for writing a parquet file
-pub struct WriteParquetArgs {
-    pub path: String,
-}
-
+/// Pipeline step that writes record batches to a Parquet file.
 pub struct WriteParquetStep {
     pub prev: Box<dyn RecordBatchReaderSource>,
-    pub args: WriteParquetArgs,
+    pub args: WriteArgs,
 }
 
 pub struct WriteParquetResult {}
 
-impl crate::pipeline::Step for WriteParquetStep {
+impl Step for WriteParquetStep {
     type Input = Box<dyn RecordBatchReaderSource>;
     type Output = WriteParquetResult;
 

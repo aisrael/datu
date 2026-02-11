@@ -9,7 +9,7 @@ use anyhow::Result;
 use anyhow::bail;
 use arrow_avro::reader::ReaderBuilder;
 use dtfu::FileType;
-use dtfu::cli::DisplayOutputType;
+use dtfu::cli::DisplayOutputFormat;
 use dtfu::cli::SchemaArgs;
 use parquet::basic::ConvertedType;
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -119,9 +119,9 @@ fn column_to_schema_output(column: &Arc<ColumnDescriptor>) -> SchemaOutput {
     }
 }
 
-fn print_schema(fields: &[SchemaField], output: DisplayOutputType) -> Result<()> {
+fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat) -> Result<()> {
     match output {
-        DisplayOutputType::Csv => {
+        DisplayOutputFormat::Csv => {
             for f in fields {
                 let nullable = if f.nullable { ", nullable" } else { "" };
                 let ct = f
@@ -138,11 +138,15 @@ fn print_schema(fields: &[SchemaField], output: DisplayOutputType) -> Result<()>
                 );
             }
         }
-        DisplayOutputType::Json => {
+        DisplayOutputFormat::Json => {
+            let json = serde_json::to_string(fields).map_err(anyhow::Error::from)?;
+            println!("{json}");
+        }
+        DisplayOutputFormat::JsonPretty => {
             let json = serde_json::to_string_pretty(fields).map_err(anyhow::Error::from)?;
             println!("{json}");
         }
-        DisplayOutputType::Yaml => {
+        DisplayOutputFormat::Yaml => {
             let yaml_fields: Vec<Yaml<'static>> =
                 fields.iter().map(|f| f.to_yaml_mapping()).collect();
             let doc = Yaml::Sequence(yaml_fields);
@@ -155,7 +159,7 @@ fn print_schema(fields: &[SchemaField], output: DisplayOutputType) -> Result<()>
     Ok(())
 }
 
-fn schema_avro(path: &str, output: DisplayOutputType) -> Result<()> {
+fn schema_avro(path: &str, output: DisplayOutputFormat) -> Result<()> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let arrow_reader = ReaderBuilder::new().build(reader)?;
@@ -183,7 +187,7 @@ pub fn schema(args: SchemaArgs) -> Result<()> {
     }
 }
 
-fn schema_parquet(path: &str, output: DisplayOutputType) -> Result<()> {
+fn schema_parquet(path: &str, output: DisplayOutputFormat) -> Result<()> {
     let file = File::open(path)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&file)

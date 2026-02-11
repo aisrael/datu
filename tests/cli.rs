@@ -5,6 +5,7 @@ use std::process::Command;
 use cucumber::World;
 use cucumber::then;
 use cucumber::when;
+use gherkin::Step;
 
 const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
 
@@ -235,6 +236,25 @@ fn that_file_should_contain(world: &mut CliWorld, expected: String) {
         "Expected file {} to contain '{}', but it did not",
         path_resolved,
         expected
+    );
+}
+
+#[then(regex = r#"^the file "(.+)" should contain:$"#)]
+fn file_should_contain_docstring(world: &mut CliWorld, path: String, step: &Step) {
+    let expected = step
+        .docstring
+        .as_ref()
+        .expect("Step requires a docstring (triple-quoted or ``` block)");
+    let path_resolved = resolve_path(world, &path);
+    let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
+    let expected_trimmed = expected.trim();
+    let content_trimmed = content.trim();
+    assert!(
+        content_trimmed.contains(expected_trimmed),
+        "Expected file {} to contain the given content, but it did not.\nExpected to find:\n---\n{}\n---\nActual content:\n---\n{}\n---",
+        path_resolved,
+        expected_trimmed,
+        content_trimmed
     );
 }
 

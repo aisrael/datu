@@ -1,10 +1,12 @@
 use anyhow::Result;
 use anyhow::bail;
+use clap::Args;
 use datu::FileType;
-use datu::cli::ConvertArgs;
 use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::Step;
 use datu::pipeline::WriteArgs;
+use datu::pipeline::WriteJsonArgs;
+use datu::pipeline::WriteYamlArgs;
 use datu::pipeline::avro::ReadAvroArgs;
 use datu::pipeline::avro::ReadAvroStep;
 use datu::pipeline::avro::WriteAvroStep;
@@ -17,6 +19,32 @@ use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::xlsx::WriteXlsxStep;
 use datu::pipeline::yaml::WriteYamlStep;
 use datu::utils::parse_select_columns;
+use log::warn;
+
+/// convert command arguments
+#[derive(Args)]
+pub struct ConvertArgs {
+    pub input: String,
+    pub output: String,
+    #[arg(
+        long,
+        help = "Columns to select. If not specified, all columns will be selected."
+    )]
+    pub select: Option<Vec<String>>,
+    #[arg(long, help = "Maximum number of records to read from the input.")]
+    pub limit: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = true,
+        help = "For JSON/YAML: omit keys with null/missing values. If false, output default values (e.g. empty string)."
+    )]
+    pub sparse: bool,
+    #[arg(
+        long,
+        help = "When converting to JSON, format output with indentation and newlines. Ignored for other output formats."
+    )]
+    pub json_pretty: bool,
+}
 
 /// convert command implementation
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
@@ -68,13 +96,15 @@ fn execute_writer(
     output_file_type: FileType,
     args: &ConvertArgs,
 ) -> Result<()> {
+    if output_file_type != FileType::Json && args.json_pretty {
+        warn!("--json-pretty is only supported when converting to JSON");
+    }
     match output_file_type {
         FileType::Csv => {
             let writer = WriteCsvStep {
                 prev,
                 args: WriteArgs {
                     path: args.output.clone(),
-                    sparse: true,
                 },
             };
             writer.execute()?;
@@ -85,7 +115,6 @@ fn execute_writer(
                 prev,
                 args: WriteArgs {
                     path: args.output.clone(),
-                    sparse: true,
                 },
             };
             writer.execute()?;
@@ -96,7 +125,6 @@ fn execute_writer(
                 prev,
                 args: WriteArgs {
                     path: args.output.clone(),
-                    sparse: true,
                 },
             };
             writer.execute()?;
@@ -105,9 +133,10 @@ fn execute_writer(
         FileType::Json => {
             let writer = WriteJsonStep {
                 prev,
-                args: WriteArgs {
+                args: WriteJsonArgs {
                     path: args.output.clone(),
                     sparse: args.sparse,
+                    pretty: args.json_pretty,
                 },
             };
             writer.execute()?;
@@ -118,7 +147,6 @@ fn execute_writer(
                 prev,
                 args: WriteArgs {
                     path: args.output.clone(),
-                    sparse: true,
                 },
             };
             writer.execute()?;
@@ -127,7 +155,7 @@ fn execute_writer(
         FileType::Yaml => {
             let writer = WriteYamlStep {
                 prev,
-                args: WriteArgs {
+                args: WriteYamlArgs {
                     path: args.output.clone(),
                     sparse: args.sparse,
                 },
@@ -157,6 +185,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -179,6 +208,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -201,6 +231,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -223,6 +254,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -245,6 +277,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -267,6 +300,7 @@ mod tests {
             select: None,
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);
@@ -289,6 +323,7 @@ mod tests {
             select: Some(vec!["two".to_string(), "four".to_string()]),
             limit: None,
             sparse: true,
+            json_pretty: false,
         };
 
         let result = convert(args);

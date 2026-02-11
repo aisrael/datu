@@ -59,11 +59,25 @@ Feature: Convert
     And the first line of that file should contain "id,email"
     And that file should have 4 lines
 
-  Scenario: Parquet to JSON
+  Scenario: Parquet to JSON (default sparse)
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.json`
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.json"
     And the file "$TEMPDIR/table.json" should exist
+    And the file "$TEMPDIR/table.json" should contain:
+    ```
+    [{"one":-1.0,"two":"foo","three":true,"four":"2022-12-23T00:00:00Z","five":"2022-12-23T11:43:49","__index_level_0__":"a"},{"two":"bar","three":false,"four":"2021-12-23T00:00:00Z","five":"2021-12-23T12:44:50","__index_level_0__":"b"},{"one":2.5,"two":"baz","four":"2020-12-23T00:00:00Z","five":"2020-12-23T13:45:51","__index_level_0__":"c"}]
+    ```
+
+  Scenario: Parquet to JSON with explicit --sparse
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_sparse.json --sparse`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_sparse.json"
+    And the file "$TEMPDIR/table_sparse.json" should exist
+    And the file "$TEMPDIR/table_sparse.json" should contain:
+    ```
+    {"two":"bar","three":false,"four":"2021-12-23T00:00:00Z","five":"2021-12-23T12:44:50","__index_level_0__":"b"}
+    ```
 
   Scenario: Avro to JSON
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.json`
@@ -71,13 +85,30 @@ Feature: Convert
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.json"
     And the file "$TEMPDIR/userdata5.json" should exist
 
-  Scenario: Parquet to YAML
+  Scenario: Parquet to YAML (default sparse)
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.yaml`
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.yaml"
     And the file "$TEMPDIR/table.yaml" should exist
-    And that file should contain "one:"
-    And that file should contain "two:"
+    And the file "$TEMPDIR/table.yaml" should contain:
+    ```
+    - one: -1
+      two: foo
+      three: true
+      four: "2022-12-23T00:00:00Z"
+      five: "2022-12-23T11:43:49"
+      __index_level_0__: a
+    - two: bar
+      three: false
+      four: "2021-12-23T00:00:00Z"
+      five: "2021-12-23T12:44:50"
+      __index_level_0__: b
+    - one: 2.5
+      two: baz
+      four: "2020-12-23T00:00:00Z"
+      five: "2020-12-23T13:45:51"
+      __index_level_0__: c
+    ```
 
   Scenario: Avro to YAML
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.yaml`

@@ -3,17 +3,6 @@
 use std::str::FromStr;
 
 use clap::Args;
-use clap::Subcommand;
-
-/// The `datu` CLI top-level command
-#[derive(Subcommand)]
-pub enum Command {
-    Convert(ConvertArgs),
-    Head(HeadsOrTails),
-    Tail(HeadsOrTails),
-    Schema(SchemaArgs),
-    Version,
-}
 
 /// Output format for the schema command
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -75,7 +64,7 @@ pub struct SchemaArgs {
     pub output: DisplayOutputFormat,
 }
 
-/// head and tail command arguments (shared)
+/// head and tail command arguments
 #[derive(Args)]
 pub struct HeadsOrTails {
     pub input: String,
@@ -99,24 +88,4 @@ pub struct HeadsOrTails {
         help = "Columns to select. If not specified, all columns will be printed."
     )]
     pub select: Option<Vec<String>>,
-}
-
-/// convert command arguments
-#[derive(Args)]
-pub struct ConvertArgs {
-    pub input: String,
-    pub output: String,
-    #[arg(
-        long,
-        help = "Columns to select. If not specified, all columns will be selected."
-    )]
-    pub select: Option<Vec<String>>,
-    #[arg(long, help = "Maximum number of records to read from the input.")]
-    pub limit: Option<usize>,
-    #[arg(
-        long,
-        default_value_t = true,
-        help = "For JSON/YAML: omit keys with null/missing values. If false, output default values (e.g. empty string)."
-    )]
-    pub sparse: bool,
 }

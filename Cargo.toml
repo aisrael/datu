@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -13,6 +13,7 @@ exclude = [
 [dependencies]
 anyhow = "1.0.100"
 arrow = "57.2.0"
+log = "0.4"
 arrow-avro = "57.2.0"
 arrow-json = "57.2.0"
 clap = { version = "4.5.54", features = ["cargo", "derive"] }
@@ -31,6 +32,7 @@ rust_xlsxwriter = { version = "0.93", features = ["chrono"] }
 [dev-dependencies]
 cucumber = "0.22.1"
 futures = "0.3"
+gherkin = "0.15"
 tempfile = "3"
 
 [[test]]

@@ -142,6 +142,10 @@ fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat) -> Result<(
             let json = serde_json::to_string_pretty(fields).map_err(anyhow::Error::from)?;
             println!("{json}");
         }
+        DisplayOutputFormat::JsonPretty => {
+            let json = serde_json::to_string_pretty(fields).map_err(anyhow::Error::from)?;
+            println!("{json}");
+        }
         DisplayOutputFormat::Yaml => {
             let yaml_fields: Vec<Yaml<'static>> =
                 fields.iter().map(|f| f.to_yaml_mapping()).collect();

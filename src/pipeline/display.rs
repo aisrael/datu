@@ -64,6 +64,23 @@ where
     Ok(())
 }
 
+/// Write record batches from a reader to the given writer as pretty-formatted JSON.
+pub fn write_record_batches_as_json_pretty<W>(
+    reader: &mut dyn RecordBatchReader,
+    w: W,
+) -> Result<()>
+where
+    W: Write,
+{
+    let mut buf = Vec::new();
+    write_record_batches_as_json(reader, &mut buf)?;
+    let value: serde_json::Value = serde_json::from_slice(&buf)
+        .map_err(|e| Error::GenericError(format!("Invalid JSON: {e}")))?;
+    serde_json::to_writer_pretty(w, &value)
+        .map_err(|e| Error::GenericError(format!("Failed to write JSON: {e}")))?;
+    Ok(())
+}
+
 /// Write record batches from a reader to the given writer as YAML.
 pub fn write_record_batches_as_yaml<W>(reader: &mut dyn RecordBatchReader, mut w: W) -> Result<()>
 where
@@ -105,6 +122,9 @@ impl Step for DisplayWriterStep {
             DisplayOutputFormat::Json => {
                 write_record_batches_as_json(&mut *reader, std::io::stdout())?;
             }
+            DisplayOutputFormat::JsonPretty => {
+                write_record_batches_as_json_pretty(&mut *reader, std::io::stdout())?;
+            }
             DisplayOutputFormat::Yaml => {
                 write_record_batches_as_yaml(&mut *reader, std::io::stdout())?;
             }
@@ -126,6 +146,7 @@ mod tests {
 
     use super::write_record_batches_as_csv;
     use super::write_record_batches_as_json;
+    use super::write_record_batches_as_json_pretty;
     use super::write_record_batches_as_yaml;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::VecRecordBatchReaderSource;
@@ -171,6 +192,22 @@ mod tests {
         assert!(s.contains("1"));
         assert!(s.contains("alice"));
         assert!(s.contains("bob"));
+    }
+
+    #[test]
+    fn test_write_record_batches_as_json_pretty() {
+        let batch = make_test_batch();
+        let mut source = VecRecordBatchReaderSource::new(vec![batch]);
+        let mut reader = source.get_record_batch_reader().unwrap();
+        let mut out = Vec::new();
+        write_record_batches_as_json_pretty(&mut *reader, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("\"id\""));
+        assert!(s.contains("\"name\""));
+        assert!(s.contains("1"));
+        assert!(s.contains("alice"));
+        assert!(s.contains("bob"));
+        assert!(s.contains('\n'), "pretty output should contain newlines");
     }
 
     #[test]

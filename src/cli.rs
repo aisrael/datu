@@ -21,6 +21,7 @@ pub enum DisplayOutputFormat {
     #[default]
     Csv,
     Json,
+    JsonPretty,
     Yaml,
 }
 
@@ -31,9 +32,10 @@ impl TryFrom<&str> for DisplayOutputFormat {
         match s.to_lowercase().as_str() {
             "csv" => Ok(DisplayOutputFormat::Csv),
             "json" => Ok(DisplayOutputFormat::Json),
+            "json-pretty" => Ok(DisplayOutputFormat::JsonPretty),
             "yaml" => Ok(DisplayOutputFormat::Yaml),
             _ => Err(format!(
-                "unknown output type '{s}', expected csv, json, or yaml"
+                "unknown output type '{s}', expected csv, json, json-pretty, or yaml"
             )),
         }
     }
@@ -44,6 +46,7 @@ impl std::fmt::Display for DisplayOutputFormat {
         match self {
             DisplayOutputFormat::Csv => write!(f, "csv"),
             DisplayOutputFormat::Json => write!(f, "json"),
+            DisplayOutputFormat::JsonPretty => write!(f, "json-pretty"),
             DisplayOutputFormat::Yaml => write!(f, "yaml"),
         }
     }
@@ -67,7 +70,7 @@ pub struct SchemaArgs {
         short,
         default_value_t = DisplayOutputFormat::Csv,
         value_parser = clap::value_parser!(DisplayOutputFormat),
-        help = "Output format: csv, json, or yaml"
+        help = "Output format: csv, json, json-pretty, or yaml"
     )]
     pub output: DisplayOutputFormat,
 }
@@ -88,7 +91,7 @@ pub struct HeadsOrTails {
         short,
         default_value_t = DisplayOutputFormat::Csv,
         value_parser = clap::value_parser!(DisplayOutputFormat),
-        help = "Output format: csv, json, or yaml"
+        help = "Output format: csv, json, json-pretty, or yaml"
     )]
     pub output: DisplayOutputFormat,
     #[arg(

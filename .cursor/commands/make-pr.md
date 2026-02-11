@@ -84,6 +84,10 @@ Run:
 
 If the repo is the origin remote, you can omit `--repo aisrael/datu` and use `--base main` only. Confirm the PR was created and show the user the PR URL.
 
+## 8. Post
+
+In the output of this command, make sure the PR URL is clickable
+
 ---
 
 **Summary**

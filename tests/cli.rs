@@ -43,7 +43,9 @@ fn run_datu_with_args(world: &mut CliWorld, args: String) {
     };
 
     let args: Vec<&str> = resolved_args.split_whitespace().collect();
-    let output = Command::new(env!("CARGO_BIN_EXE_datu"))
+    let datu_path = std::env::var("CARGO_BIN_EXE_datu")
+        .expect("Environment variable 'CARGO_BIN_EXE_datu' not defined");
+    let output = Command::new(datu_path)
         .args(&args)
         .output()
         .expect("Failed to execute datu");

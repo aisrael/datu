@@ -230,6 +230,10 @@ mod tests {
         let mut out = Vec::new();
         write_record_batches_as_yaml(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
+        assert!(
+            !s.starts_with("---\n"),
+            "YAML output should not include document start marker"
+        );
         assert!(s.contains("id:"));
         assert!(s.contains("name:"));
         assert!(s.contains("1"));

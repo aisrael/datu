@@ -89,6 +89,26 @@ fn first_line_should_contain(world: &mut CliWorld, expected: String) {
     );
 }
 
+#[then(regex = r#"^the output should be:$"#)]
+fn output_should_be_docstring(world: &mut CliWorld, step: &Step) {
+    let expected = step
+        .docstring
+        .as_ref()
+        .expect("Step requires a docstring (triple-quoted or ``` block)");
+    let output = world.output.as_ref().expect("No output captured");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}{}", stdout, stderr);
+    let expected_trimmed = expected.trim();
+    let output_trimmed = combined.trim();
+    assert!(
+        output_trimmed.contains(expected_trimmed),
+        "Expected output to contain the given content, but it did not.\nExpected to find:\n---\n{}\n---\nActual output:\n---\n{}\n---",
+        expected_trimmed,
+        output_trimmed
+    );
+}
+
 #[then(regex = r#"^the output should contain "(.+)"$"#)]
 fn output_should_contain(world: &mut CliWorld, expected: String) {
     let output = world.output.as_ref().expect("No output captured");

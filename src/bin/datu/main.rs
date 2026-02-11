@@ -15,6 +15,7 @@ use crate::commands::convert::ConvertArgs;
 /// datu - a data multi-tool
 #[derive(Parser)]
 #[command(name = "datu")]
+#[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -68,7 +68,7 @@ Convert data between supported formats. Input and output formats are inferred fr
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
 
-**Supported output formats:** CSV (`.csv`), Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+**Supported output formats:** CSV (`.csv`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), XLSX (`.xlsx`).
 
 **Usage:**
 
@@ -97,6 +97,10 @@ dtfu convert events.avro events.csv --select id,timestamp,user_id
 
 # Parquet to Parquet with column subset
 dtfu convert input.parq output.parquet --select one,two,three
+
+# Parquet or Avro to Excel (.xlsx)
+dtfu convert data.parquet report.xlsx
+dtfu convert events.avro report.xlsx --select id,name,value
 ```
 
 ---

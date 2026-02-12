@@ -71,9 +71,8 @@ impl Step for WriteParquetStep {
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::ReadArgs;
-
     use super::*;
+    use crate::pipeline::ReadArgs;
 
     #[test]
     fn test_read_parquet() {

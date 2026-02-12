@@ -7,12 +7,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use anyhow::bail;
-use arrow::array::RecordBatchReader;
 use arrow_avro::reader::ReaderBuilder;
 use datu::FileType;
-use orc_rust::arrow_reader::ArrowReaderBuilder;
 use datu::cli::DisplayOutputFormat;
 use datu::cli::SchemaArgs;
+use orc_rust::arrow_reader::ArrowReaderBuilder;
 use parquet::basic::ConvertedType;
 use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::schema::types::ColumnDescriptor;
@@ -199,7 +198,7 @@ fn schema_orc(path: &str, output: DisplayOutputFormat) -> Result<()> {
     let fields: Vec<SchemaField> = schema
         .fields()
         .iter()
-        .map(|f: &arrow::datatypes::FieldRef| SchemaField {
+        .map(|f| SchemaField {
             name: f.name().to_string(),
             data_type: format!("{:?}", f.data_type()),
             converted_type: None,

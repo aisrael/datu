@@ -48,10 +48,10 @@ pub struct ConvertArgs {
 
 /// convert command implementation
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
-    println!("Converting {} to {}", args.input, args.output);
-
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
+
+    println!("Converting {} to {}", args.input, args.output);
 
     let mut reader_step: Box<dyn RecordBatchReaderSource> =
         get_reader_step(input_file_type, &args)?;
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_parquet_to_orc() {
+    fn test_convert_avro_to_orc() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("userdata5.orc");
         let output = output_path

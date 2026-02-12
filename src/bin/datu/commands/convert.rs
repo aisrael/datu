@@ -20,32 +20,6 @@ use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::xlsx::WriteXlsxStep;
 use datu::pipeline::yaml::WriteYamlStep;
 use datu::utils::parse_select_columns;
-use log::warn;
-
-/// convert command arguments
-#[derive(Args)]
-pub struct ConvertArgs {
-    pub input: String,
-    pub output: String,
-    #[arg(
-        long,
-        help = "Columns to select. If not specified, all columns will be selected."
-    )]
-    pub select: Option<Vec<String>>,
-    #[arg(long, help = "Maximum number of records to read from the input.")]
-    pub limit: Option<usize>,
-    #[arg(
-        long,
-        default_value_t = true,
-        help = "For JSON/YAML: omit keys with null/missing values. If false, output default values (e.g. empty string)."
-    )]
-    pub sparse: bool,
-    #[arg(
-        long,
-        help = "When converting to JSON, format output with indentation and newlines. Ignored for other output formats."
-    )]
-    pub json_pretty: bool,
-}
 
 /// convert command arguments
 #[derive(Args)]
@@ -167,10 +141,8 @@ fn execute_writer(
         FileType::Orc => {
             let writer = WriteOrcStep {
                 prev,
-                args: WriteJsonArgs {
+                args: WriteArgs {
                     path: args.output.clone(),
-                    sparse: args.sparse,
-                    pretty: args.json_pretty,
                 },
             };
             writer.execute()?;

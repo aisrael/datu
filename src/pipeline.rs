@@ -4,6 +4,7 @@ pub mod avro;
 pub mod csv;
 pub mod display;
 pub mod json;
+pub mod orc;
 pub mod parquet;
 pub mod record_batch_filter;
 pub mod xlsx;

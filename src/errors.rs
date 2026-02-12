@@ -18,4 +18,6 @@ pub enum Error {
     CsvError(#[from] csv::Error),
     #[error(transparent)]
     XlsxError(#[from] rust_xlsxwriter::XlsxError),
+    #[error(transparent)]
+    OrcError(#[from] orc_rust::error::OrcError),
 }

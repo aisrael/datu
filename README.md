@@ -1,11 +1,27 @@
 datu - a data file utility
 =======================
 
+> *Datu* (Filipino) - a traditional chief or local leader
+
 `datu` is intended to be a lightweight, fast, and versatile CLI tool for reading, querying, and converting data in various file formats, such as Parquet, .XLSX, CSV, and even f3.
 
 It is used non-interactively: you invoke a subcommand with arguments on the CLI or from scripts for automated pipelines.
 
 Internally, it also uses a pipeline architecture that aids in extensibility and testing, as well as allowing for parallel processing even of large datasets, if the input/output formats support it.
+
+## Installation
+
+**Prerequisites:** Rust ~> 1.95 (or recent stable)
+
+```sh
+cargo install datu
+```
+
+To install from source:
+
+```sh
+cargo install --git https://github.com/aisrael/datu
+```
 
 ## How it Works Internally
 
@@ -26,6 +42,7 @@ constructs a pipeline that reads the input, selects only the specified columns, 
 |--------|:----:|:-----:|:-------:|
 | Parquet (`.parquet`, `.parq`) | ✓ | ✓ | — |
 | Avro (`.avro`) | ✓ | ✓ | — |
+| ORC (`.orc`) | ✓ | ✓ | — |
 | CSV (`.csv`) | — | ✓ | ✓ |
 | JSON (`.json`) | — | ✓ | ✓ |
 | JSON (pretty) | — | — | ✓ |
@@ -86,9 +103,9 @@ datu schema events.avro -o YAML
 
 Convert data between supported formats. Input and output formats are inferred from file extensions.
 
-**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`).
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
 
-**Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), XLSX (`.xlsx`).
+**Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
 **Usage:**
 
@@ -118,9 +135,11 @@ datu convert events.avro events.csv --select id,timestamp,user_id
 # Parquet to Parquet with column subset
 datu convert input.parq output.parquet --select one,two,three
 
-# Parquet or Avro to Excel (.xlsx)
+# Parquet, Avro, or ORC to Excel (.xlsx)
 datu convert data.parquet report.xlsx
-datu convert events.avro report.xlsx --select id,name,value
+
+# Parquet or Avro to ORC
+datu convert data.parquet data.orc
 
 # Parquet or Avro to JSON
 datu convert data.parquet data.json

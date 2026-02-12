@@ -23,6 +23,7 @@ pub enum FileType {
     Avro,
     Csv,
     Json,
+    Orc,
     Parquet,
     Xlsx,
     Yaml,
@@ -42,6 +43,7 @@ impl TryFrom<&str> for FileType {
                 "json" => FileType::Json,
                 "csv" => FileType::Csv,
                 "parq" | "parquet" => FileType::Parquet,
+                "orc" => FileType::Orc,
                 "avro" => FileType::Avro,
                 "xlsx" => FileType::Xlsx,
                 "yaml" | "yml" => FileType::Yaml,
@@ -80,6 +82,7 @@ mod tests {
         assert_eq!(FileType::try_from("test.csv").unwrap(), FileType::Csv);
         assert_eq!(FileType::try_from("data.json").unwrap(), FileType::Json);
         assert_eq!(FileType::try_from("file.parq").unwrap(), FileType::Parquet);
+        assert_eq!(FileType::try_from("data.orc").unwrap(), FileType::Orc);
         assert_eq!(FileType::try_from("schema.avro").unwrap(), FileType::Avro);
         assert_eq!(FileType::try_from("data.xlsx").unwrap(), FileType::Xlsx);
         assert_eq!(FileType::try_from("data.yaml").unwrap(), FileType::Yaml);
@@ -91,6 +94,7 @@ mod tests {
         assert_eq!(FileType::try_from("test.CSV").unwrap(), FileType::Csv);
         assert_eq!(FileType::try_from("data.Json").unwrap(), FileType::Json);
         assert_eq!(FileType::try_from("file.PARQ").unwrap(), FileType::Parquet);
+        assert_eq!(FileType::try_from("data.ORC").unwrap(), FileType::Orc);
         assert_eq!(FileType::try_from("schema.Avro").unwrap(), FileType::Avro);
         assert_eq!(FileType::try_from("report.XLSX").unwrap(), FileType::Xlsx);
         assert_eq!(FileType::try_from("config.YAML").unwrap(), FileType::Yaml);

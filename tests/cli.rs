@@ -25,14 +25,22 @@ fn replace_tempdir(s: &str, temp_path: &str) -> String {
 fn run_datu_with_args(world: &mut CliWorld, args: String) {
     let args_str = args;
     let temp_path = if args_str.contains(TEMPDIR_PLACEHOLDER) {
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let path = temp_dir
-            .path()
-            .to_str()
-            .expect("Temp path is not valid UTF-8")
-            .to_string();
-        world.temp_dir = Some(temp_dir);
-        path
+        if let Some(ref temp_dir) = world.temp_dir {
+            temp_dir
+                .path()
+                .to_str()
+                .expect("Temp path is not valid UTF-8")
+                .to_string()
+        } else {
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+            let path = temp_dir
+                .path()
+                .to_str()
+                .expect("Temp path is not valid UTF-8")
+                .to_string();
+            world.temp_dir = Some(temp_dir);
+            path
+        }
     } else {
         String::new()
     };

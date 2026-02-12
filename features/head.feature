@@ -1,5 +1,5 @@
 Feature: Head
-  Print the first N rows of a Parquet or Avro file as CSV.
+  Print the first N rows of a Parquet, Avro, or ORC file as CSV.
 
   Scenario: Head Parquet default (10 lines)
     When I run `datu head fixtures/userdata.parquet`
@@ -34,6 +34,54 @@ Feature: Head
     And the output should have a header and 2 lines
     And the first line should contain "id"
     And the first line should contain "email"
+
+  Scenario: Head ORC default (10 lines)
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc`
+    Then the command should succeed
+    And the first line should contain "id"
+    And the first line should contain "first_name"
+
+  Scenario: Head ORC with -n 3
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc -n 3`
+    Then the command should succeed
+    And the first line should contain "id"
+
+  Scenario: Head ORC with --select
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc -n 2 --select id,first_name`
+    Then the command should succeed
+    And the output should have a header and 2 lines
+    And the first line should contain "id"
+    And the first line should contain "first_name"
+
+  Scenario: Head ORC with --output csv
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output csv`
+    Then the command should succeed
+    And the first line should contain "id"
+    And the first line should contain "first_name"
+
+  Scenario: Head ORC with --output json
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output json`
+    Then the command should succeed
+    And the output should contain "["
+    And the output should contain "id"
+
+  Scenario: Head ORC with --output yaml
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output yaml`
+    Then the command should succeed
+    And the output should contain "first_name"
+    And the output should contain "id"
 
   Scenario: Head Parquet with --output csv
     When I run `datu head fixtures/userdata.parquet -n 2 --output csv`

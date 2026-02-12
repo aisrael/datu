@@ -1,5 +1,5 @@
 Feature: Convert
-  Convert between Parquet, Avro, CSV, JSON, YAML, and XLSX file formats.
+  Convert between Parquet, Avro, ORC, CSV, JSON, YAML, and XLSX file formats.
 
   Scenario: Parquet to Avro
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.avro`
@@ -12,6 +12,26 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.parquet"
     And the file "$TEMPDIR/userdata5.parquet" should exist
+
+  Scenario: Avro to ORC
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.orc"
+    And the file "$TEMPDIR/userdata5.orc" should exist
+
+  Scenario: ORC to Parquet
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.parquet`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.parquet"
+    And the file "$TEMPDIR/userdata5.parquet" should exist
+
+  Scenario: Parquet to ORC
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/table.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/table.orc"
+    And the file "$TEMPDIR/table.orc" should exist
 
   Scenario: Parquet to CSV
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.csv`
@@ -28,6 +48,15 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5.csv" should exist
     And the first line of that file should contain "id,first_name"
     And that file should have 1001 lines
+
+  Scenario: ORC to CSV
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.csv`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.csv"
+    And the file "$TEMPDIR/userdata5.csv" should exist
+    And the first line of that file should contain "id,first_name"
 
   Scenario: Parquet to CSV with --select
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.csv --select two,four`
@@ -141,6 +170,24 @@ Feature: Convert
     And that file should contain "id:"
     And that file should contain "first_name:"
 
+  Scenario: ORC to JSON
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.json --json-pretty`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.json"
+    And the file "$TEMPDIR/userdata5.json" should exist
+
+  Scenario: ORC to YAML
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.yaml`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.yaml"
+    And the file "$TEMPDIR/userdata5.yaml" should exist
+    And that file should contain "id:"
+    And that file should contain "first_name:"
+
   Scenario: Parquet to YAML with --select
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.yaml --select two,four`
     Then the command should succeed
@@ -173,6 +220,31 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.xlsx"
     And the file "$TEMPDIR/userdata5.xlsx" should exist
+
+  Scenario: ORC to CSV with --select
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name,email --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5_select.csv --select id,first_name,email`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5_select.csv"
+    And the file "$TEMPDIR/userdata5_select.csv" should exist
+    And the first line of that file should contain "id,first_name,email"
+
+  Scenario: ORC to XLSX
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.xlsx`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.xlsx"
+    And the file "$TEMPDIR/userdata5.xlsx" should exist
+
+  Scenario: ORC to Parquet with --limit
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5_limit.parquet --limit 5`
+    Then the command should succeed
+    And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5_limit.parquet"
+    And the file "$TEMPDIR/userdata5_limit.parquet" should exist
 
   Scenario: Parquet to XLSX with --select
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.xlsx --select two,four`

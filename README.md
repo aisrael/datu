@@ -192,6 +192,8 @@ Print the last N rows of a Parquet, Avro, or ORC file to stdout (default CSV; us
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
 
+> **Note:** For Avro files, `tail` requires a full file scan since Avro does not support random access to the end of the file.
+
 **Usage:**
 
 ```sh

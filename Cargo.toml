@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -29,6 +29,7 @@ saphyr = "0.0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rust_xlsxwriter = { version = "0.93", features = ["chrono"] }
+rustc-literal-escaper = "0.0.7"
 
 [dev-dependencies]
 cucumber = "0.22.1"

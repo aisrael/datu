@@ -38,16 +38,16 @@ constructs a pipeline that reads the input, selects only the specified columns, 
 
 ## Supported Formats
 
-| Format | Read | Write | Display |
-|--------|:----:|:-----:|:-------:|
-| Parquet (`.parquet`, `.parq`) | ✓ | ✓ | — |
-| Avro (`.avro`) | ✓ | ✓ | — |
-| ORC (`.orc`) | ✓ | ✓ | — |
-| CSV (`.csv`) | — | ✓ | ✓ |
-| JSON (`.json`) | — | ✓ | ✓ |
-| JSON (pretty) | — | — | ✓ |
-| XLSX (`.xlsx`) | — | ✓ | — |
-| YAML | — | — | ✓ |
+| Format                        | Read | Write | Display |
+|-------------------------------|:----:|:-----:|:-------:|
+| Parquet (`.parquet`, `.parq`) |  ✓   |   ✓   |    —    |
+| Avro (`.avro`)                |  ✓   |   ✓   |    —    |
+| ORC (`.orc`)                  |  ✓   |   ✓   |    —    |
+| XLSX (`.xlsx`)                |  —   |   ✓   |    —    |
+| CSV (`.csv`)                  |  —   |   ✓   |    ✓    |
+| JSON (`.json`)                |  —   |   ✓   |    ✓    |
+| JSON (pretty)                 |  —   |   —   |    ✓    |
+| YAML                          |  —   |   —   |    ✓    |
 
 - **Read** — Input file formats for `convert`, `schema`, `head`, and `tail`.
 - **Write** — Output file formats for `convert`.
@@ -119,7 +119,7 @@ datu convert <INPUT> <OUTPUT> [OPTIONS]
 |--------|-------------|
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are written. Column names can be given as multiple arguments or as comma-separated values (e.g. `--select id,name,email` or `--select id --select name --select email`). |
 | `--limit <N>` | Maximum number of records to read from the input. |
-| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: true. Use `--no-sparse` to include default values (e.g. empty string). |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: true. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When converting to JSON, format output with indentation and newlines. Ignored for other output formats. |
 
 **Examples:**
@@ -167,6 +167,7 @@ datu head <INPUT> [OPTIONS]
 |--------|-------------|
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: true. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
 
 **Examples:**
@@ -204,6 +205,7 @@ datu tail <INPUT> [OPTIONS]
 |--------|-------------|
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: true. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
 
 **Examples:**

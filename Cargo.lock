@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "datu"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1568,6 +1568,7 @@ dependencies = [
  "orc-rust",
  "parquet",
  "rust_xlsxwriter",
+ "rustc-literal-escaper",
  "saphyr",
  "serde",
  "serde_json",
@@ -2905,6 +2906,12 @@ dependencies = [
  "chrono",
  "zip",
 ]
+
+[[package]]
+name = "rustc-literal-escaper"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be87abb9e40db7466e0681dc8ecd9dcfd40360cb10b4c8fe24a7c4c3669b198"
 
 [[package]]
 name = "rustc_version"

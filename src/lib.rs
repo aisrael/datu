@@ -1,4 +1,4 @@
-//! datu - a data multi-tool library
+#![doc = include_str!("../README.md")]
 
 /// The datu crate version
 pub const VERSION: &str = clap::crate_version!();

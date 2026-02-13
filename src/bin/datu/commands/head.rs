@@ -24,9 +24,11 @@ pub fn head(args: HeadsOrTails) -> Result<()> {
             columns,
         });
     }
+    let sparse = args.sparse;
     let display_step = DisplayWriterStep {
         prev: reader_step,
         output_format: args.output,
+        sparse,
     };
     display_step.execute().map_err(Into::into)
 }

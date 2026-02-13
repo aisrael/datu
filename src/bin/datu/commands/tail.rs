@@ -51,9 +51,11 @@ fn tail_parquet(args: HeadsOrTails) -> Result<()> {
             columns,
         });
     }
+    let sparse = args.sparse;
     let display_step = DisplayWriterStep {
         prev: reader_step,
         output_format: args.output,
+        sparse,
     };
     display_step.execute().map_err(Into::into)
 }
@@ -62,6 +64,7 @@ fn tail_from_reader(
     mut reader_step: Box<dyn RecordBatchReaderSource>,
     number: usize,
     output: datu::cli::DisplayOutputFormat,
+    sparse: bool,
 ) -> Result<()> {
     let reader = reader_step.get_record_batch_reader()?;
     let batches: Vec<arrow::record_batch::RecordBatch> = reader
@@ -96,6 +99,7 @@ fn tail_from_reader(
     let display_step = DisplayWriterStep {
         prev: reader_step,
         output_format: output,
+        sparse,
     };
     display_step.execute().map_err(Into::into)
 }
@@ -115,7 +119,8 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
             columns,
         });
     }
-    tail_from_reader(reader_step, args.number, args.output)
+    let sparse = args.sparse;
+    tail_from_reader(reader_step, args.number, args.output, sparse)
 }
 
 fn tail_orc(args: HeadsOrTails) -> Result<()> {
@@ -133,5 +138,6 @@ fn tail_orc(args: HeadsOrTails) -> Result<()> {
             columns,
         });
     }
-    tail_from_reader(reader_step, args.number, args.output)
+    let sparse = args.sparse;
+    tail_from_reader(reader_step, args.number, args.output, sparse)
 }

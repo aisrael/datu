@@ -5,6 +5,7 @@ use std::process::Command;
 use cucumber::World;
 use cucumber::then;
 use cucumber::when;
+use datu::utils;
 use gherkin::Step;
 
 const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
@@ -259,6 +260,22 @@ fn that_file_should_contain(world: &mut CliWorld, expected: String) {
         .as_ref()
         .expect("No file has been set; use 'the file \"...\" should exist' first");
     let content = std::fs::read_to_string(path_resolved).expect("Failed to read file");
+    assert!(
+        content.contains(&expected),
+        "Expected file {} to contain '{}', but it did not",
+        path_resolved,
+        expected
+    );
+}
+
+#[then(regex = r#"^that file should contain `(.+)`$"#)]
+fn that_file_should_contain_literal(world: &mut CliWorld, expected: String) {
+    let path_resolved = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path_resolved).expect("Failed to read file");
+    let expected = utils::unescape_str(&expected).expect("Failed to unescape string: `{expected}`");
     assert!(
         content.contains(&expected),
         "Expected file {} to contain '{}', but it did not",

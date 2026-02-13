@@ -2,7 +2,8 @@ use std::io::Write;
 
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
-use arrow_json::ArrayWriter;
+use arrow_json::writer::JsonArray;
+use arrow_json::writer::WriterBuilder;
 use saphyr::Yaml;
 use saphyr::YamlEmitter;
 
@@ -51,7 +52,11 @@ where
 }
 
 /// Write record batches from a reader to the given writer as JSON.
-pub fn write_record_batches_as_json<W>(reader: &mut dyn RecordBatchReader, w: W) -> Result<()>
+pub fn write_record_batches_as_json<W>(
+    reader: &mut dyn RecordBatchReader,
+    w: W,
+    sparse: bool,
+) -> Result<()>
 where
     W: Write,
 {
@@ -59,7 +64,8 @@ where
         .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
         .map_err(Error::ArrowError)?;
     let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
-    let mut writer = ArrayWriter::new(w);
+    let builder = WriterBuilder::new().with_explicit_nulls(!sparse);
+    let mut writer = builder.build::<_, JsonArray>(w);
     writer
         .write_batches(&batch_refs)
         .map_err(Error::ArrowError)?;
@@ -71,12 +77,13 @@ where
 pub fn write_record_batches_as_json_pretty<W>(
     reader: &mut dyn RecordBatchReader,
     w: W,
+    sparse: bool,
 ) -> Result<()>
 where
     W: Write,
 {
     let mut buf = Vec::new();
-    write_record_batches_as_json(reader, &mut buf)?;
+    write_record_batches_as_json(reader, &mut buf, sparse)?;
     let value: serde_json::Value = serde_json::from_slice(&buf)
         .map_err(|e| Error::GenericError(format!("Invalid JSON: {e}")))?;
     serde_json::to_writer_pretty(w, &value)
@@ -115,6 +122,7 @@ where
 pub struct DisplayWriterStep {
     pub prev: Box<dyn RecordBatchReaderSource>,
     pub output_format: DisplayOutputFormat,
+    pub sparse: bool,
 }
 
 impl Step for DisplayWriterStep {
@@ -128,13 +136,13 @@ impl Step for DisplayWriterStep {
                 write_record_batches_as_csv(&mut *reader, std::io::stdout())?;
             }
             DisplayOutputFormat::Json => {
-                write_record_batches_as_json(&mut *reader, std::io::stdout())?;
+                write_record_batches_as_json(&mut *reader, std::io::stdout(), self.sparse)?;
             }
             DisplayOutputFormat::JsonPretty => {
-                write_record_batches_as_json_pretty(&mut *reader, std::io::stdout())?;
+                write_record_batches_as_json_pretty(&mut *reader, std::io::stdout(), self.sparse)?;
             }
             DisplayOutputFormat::Yaml => {
-                write_record_batches_as_yaml(&mut *reader, std::io::stdout(), true)?;
+                write_record_batches_as_yaml(&mut *reader, std::io::stdout(), self.sparse)?;
             }
         }
         Ok(())
@@ -193,7 +201,7 @@ mod tests {
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
         let mut reader = source.get_record_batch_reader().unwrap();
         let mut out = Vec::new();
-        write_record_batches_as_json(&mut *reader, &mut out).unwrap();
+        write_record_batches_as_json(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\"id\""));
         assert!(s.contains("\"name\""));
@@ -208,7 +216,7 @@ mod tests {
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
         let mut reader = source.get_record_batch_reader().unwrap();
         let mut out = Vec::new();
-        write_record_batches_as_json_pretty(&mut *reader, &mut out).unwrap();
+        write_record_batches_as_json_pretty(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\"id\""));
         assert!(s.contains("\"name\""));

@@ -36,7 +36,8 @@ pub struct ConvertArgs {
     #[arg(
         long,
         default_value_t = true,
-        help = "For JSON/YAML: omit keys with null/missing values. If false, output default values (e.g. empty string)."
+        action = clap::ArgAction::Set,
+        help = "For JSON/YAML: omit keys with null/missing values. Default: true. Use --sparse=false to include default values (e.g. empty string)."
     )]
     pub sparse: bool,
     #[arg(
@@ -63,7 +64,8 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         });
         reader_step = select_step;
     }
-    execute_writer(reader_step, output_file_type, &args)?;
+    let sparse = args.sparse;
+    execute_writer(reader_step, output_file_type, &args, sparse)?;
 
     Ok(())
 }
@@ -103,6 +105,7 @@ fn execute_writer(
     prev: Box<dyn RecordBatchReaderSource>,
     output_file_type: FileType,
     args: &ConvertArgs,
+    sparse: bool,
 ) -> Result<()> {
     if output_file_type != FileType::Json && args.json_pretty {
         eprintln!("Warning: --json-pretty is only supported when converting to JSON");
@@ -153,7 +156,7 @@ fn execute_writer(
                 prev,
                 args: WriteJsonArgs {
                     path: args.output.clone(),
-                    sparse: args.sparse,
+                    sparse,
                     pretty: args.json_pretty,
                 },
             };
@@ -175,7 +178,7 @@ fn execute_writer(
                 prev,
                 args: WriteYamlArgs {
                     path: args.output.clone(),
-                    sparse: args.sparse,
+                    sparse,
                 },
             };
             writer.execute()?;

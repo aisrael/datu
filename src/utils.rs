@@ -1,5 +1,24 @@
 use std::path::Path;
 
+use rustc_literal_escaper::unescape_str as unescape_str_raw;
+
+/// Unescape a string as if it were a Rust string literal.
+/// Returns the unescaped string, or an error if the input contains invalid escape sequences.
+pub fn unescape_str(s: &str) -> Result<String, rustc_literal_escaper::EscapeError> {
+    let mut result = String::new();
+    let mut first_error = None;
+    unescape_str_raw(s, |_range, char_result| {
+        if first_error.is_some() {
+            return;
+        }
+        match char_result {
+            Ok(c) => result.push(c),
+            Err(e) => first_error = Some(e),
+        }
+    });
+    first_error.map_or(Ok(result), Err)
+}
+
 /// Parse column names from `select` by splitting each string at commas, trimming and
 /// discarding empty parts. E.g. `["a, b", "c"]` becomes `["a", "b", "c"]`.
 pub fn parse_select_columns(select: &[String]) -> Vec<String> {
@@ -59,6 +78,12 @@ impl TryFrom<&str> for FileType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unescape_str() {
+        assert_eq!(unescape_str("\\u{1f4a9}").unwrap(), "💩");
+        assert_eq!(unescape_str(r#"\"one:\""#).unwrap(), r#""one:""#);
+    }
 
     #[test]
     fn test_parse_select_columns() {

@@ -15,6 +15,7 @@ use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::utils::parse_select_columns;
+use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// tail command implementation: print the last N lines of an Avro, Parquet, or ORC file.
@@ -124,11 +125,17 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
 }
 
 fn tail_orc(args: HeadsOrTails) -> Result<()> {
+    let mut file = File::open(&args.input).map_err(Error::IoError)?;
+    let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
+    let total_rows = metadata.number_of_rows() as usize;
+    let number = args.number.min(total_rows);
+    let offset = total_rows.saturating_sub(number);
+
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadOrcStep {
         args: ReadArgs {
             path: args.input.clone(),
-            limit: None,
-            offset: None,
+            limit: Some(number),
+            offset: Some(offset),
         },
     });
     if let Some(select) = &args.select {
@@ -139,5 +146,10 @@ fn tail_orc(args: HeadsOrTails) -> Result<()> {
         });
     }
     let sparse = args.sparse;
-    tail_from_reader(reader_step, args.number, args.output, sparse)
+    let display_step = DisplayWriterStep {
+        prev: reader_step,
+        output_format: args.output,
+        sparse,
+    };
+    display_step.execute().map_err(Into::into)
 }

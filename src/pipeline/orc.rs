@@ -1,6 +1,7 @@
 use arrow::array::RecordBatchReader;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use orc_rust::arrow_writer::ArrowWriterBuilder;
+use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
 use crate::Result;
@@ -23,18 +24,30 @@ impl Source<dyn RecordBatchReader + 'static> for ReadOrcStep {
 }
 
 /// Read an ORC file and return a RecordBatchReader.
+///
+/// When both offset and limit are specified, uses ORC row selection for efficient
+/// seeking—only the requested rows are decoded, avoiding full file scans.
 pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
-    let arrow_reader = ArrowReaderBuilder::try_new(file)
-        .map_err(Error::OrcError)?
-        .build();
+    let builder = ArrowReaderBuilder::try_new(file).map_err(Error::OrcError)?;
 
-    if let Some(limit) = args.limit {
-        Ok(Box::new(LimitingRecordBatchReader {
-            inner: arrow_reader,
-            limit,
-            records_read: 0,
-        }))
+    let arrow_reader = if let (Some(offset), Some(limit)) = (args.offset, args.limit) {
+        let selection = vec![RowSelector::skip(offset), RowSelector::select(limit)].into();
+        builder.with_row_selection(selection).build()
+    } else {
+        builder.build()
+    };
+
+    if args.offset.is_none() {
+        if let Some(limit) = args.limit {
+            Ok(Box::new(LimitingRecordBatchReader {
+                inner: arrow_reader,
+                limit,
+                records_read: 0,
+            }))
+        } else {
+            Ok(Box::new(arrow_reader))
+        }
     } else {
         Ok(Box::new(arrow_reader))
     }

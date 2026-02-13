@@ -44,6 +44,7 @@ pub struct WriteParquetStep {
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing a Parquet file.
 pub struct WriteParquetResult {}
 
 impl Step for WriteParquetStep {

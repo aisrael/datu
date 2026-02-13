@@ -54,6 +54,7 @@ pub trait Step {
 
 /// A source that yields a value of type `T`.
 pub trait Source<T: ?Sized> {
+    /// Produces the next value from this source; consumes the source on first call.
     fn get(&mut self) -> Result<Box<T>>;
 }
 

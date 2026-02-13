@@ -28,6 +28,7 @@ pub struct WriteXlsxStep {
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing an XLSX file.
 pub struct WriteXlsxResult {}
 
 impl Step for WriteXlsxStep {
@@ -65,6 +66,7 @@ impl Step for WriteXlsxStep {
     }
 }
 
+/// Writes a single Arrow array cell value to an Excel worksheet cell.
 fn write_arrow_cell(
     worksheet: &mut Worksheet,
     row: u32,
@@ -152,6 +154,7 @@ fn write_arrow_cell(
     Ok(())
 }
 
+/// Converts an Arrow temporal/date array value at the given index to a chrono datetime.
 fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::NaiveDateTime> {
     use arrow::array::TimestampMillisecondArray;
     use arrow::array::TimestampSecondArray;
@@ -191,6 +194,7 @@ fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::Na
     None
 }
 
+/// Formats an Arrow array value as a string for types not directly supported by Excel.
 fn format_arrow_value_unknown(array: &ArrayRef, index: usize) -> String {
     arrow::util::display::array_value_to_string(array.as_ref(), index)
         .unwrap_or_else(|_| "-".to_string())

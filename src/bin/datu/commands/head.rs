@@ -32,6 +32,7 @@ pub fn head(args: HeadsOrTails) -> Result<()> {
     display_step.execute().map_err(Into::into)
 }
 
+/// Builds a record batch reader source for the given input file type and head args.
 fn get_reader_step(
     input_file_type: FileType,
     args: &HeadsOrTails,

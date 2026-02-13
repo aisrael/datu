@@ -48,6 +48,7 @@ pub struct WriteAvroStep {
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing an Avro file.
 pub struct WriteAvroResult {}
 
 impl Step for WriteAvroStep {

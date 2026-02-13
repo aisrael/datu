@@ -10,6 +10,7 @@ pub struct WriteCsvStep {
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing a CSV file.
 pub struct WriteCsvResult {}
 
 impl Step for WriteCsvStep {

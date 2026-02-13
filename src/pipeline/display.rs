@@ -13,6 +13,7 @@ use crate::cli::DisplayOutputFormat;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 
+/// Converts a record batch into YAML row objects; when `sparse` is true, omits null values.
 fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'static>> {
     let schema = batch.schema();
     let num_rows = batch.num_rows();

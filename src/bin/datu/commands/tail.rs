@@ -29,6 +29,7 @@ pub fn tail(args: HeadsOrTails) -> Result<()> {
     }
 }
 
+/// Prints the last N lines of a Parquet file.
 fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let meta_file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
@@ -61,6 +62,7 @@ fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     display_step.execute().map_err(Into::into)
 }
 
+/// Prints the last N rows from a generic record batch reader (used for Avro).
 fn tail_from_reader(
     mut reader_step: RecordBatchReaderSource,
     number: usize,
@@ -105,6 +107,7 @@ fn tail_from_reader(
     display_step.execute().map_err(Into::into)
 }
 
+/// Prints the last N lines of an Avro file.
 fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
         args: ReadArgs {
@@ -124,6 +127,7 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
     tail_from_reader(reader_step, args.number, args.output, sparse)
 }
 
+/// Prints the last N lines of an ORC file.
 fn tail_orc(args: HeadsOrTails) -> Result<()> {
     let mut file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;

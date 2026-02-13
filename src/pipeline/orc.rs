@@ -59,6 +59,7 @@ pub struct WriteOrcStep {
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing an ORC file.
 pub struct WriteOrcResult {}
 
 impl Step for WriteOrcStep {

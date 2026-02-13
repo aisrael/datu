@@ -4,6 +4,7 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 
+/// Pipeline step that filters record batches to only the specified columns.
 pub struct SelectColumnsStep {
     pub prev: RecordBatchReaderSource,
     pub columns: Vec<String>,
@@ -39,6 +40,7 @@ impl Source<dyn RecordBatchReader + 'static> for SelectColumnsStep {
     }
 }
 
+/// Record batch reader that projects only the selected column indices.
 pub struct SelectColumnRecordBatchReader {
     reader: Box<dyn RecordBatchReader>,
     schema: arrow::datatypes::SchemaRef,

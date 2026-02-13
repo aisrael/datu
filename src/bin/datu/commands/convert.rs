@@ -21,7 +21,7 @@ use datu::pipeline::xlsx::WriteXlsxStep;
 use datu::pipeline::yaml::WriteYamlStep;
 use datu::utils::parse_select_columns;
 
-/// convert command arguments
+/// Arguments for the `datu convert` command.
 #[derive(Args)]
 pub struct ConvertArgs {
     pub input: String,
@@ -47,7 +47,7 @@ pub struct ConvertArgs {
     pub json_pretty: bool,
 }
 
-/// convert command implementation
+/// Converts between file formats; reads from input and writes to output.
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
@@ -69,6 +69,7 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Builds a record batch reader source for the given input file type and convert args.
 fn get_reader_step(
     input_file_type: FileType,
     args: &ConvertArgs,
@@ -100,6 +101,7 @@ fn get_reader_step(
     Ok(reader)
 }
 
+/// Writes record batches from the reader to the output file in the specified format.
 fn execute_writer(
     prev: RecordBatchReaderSource,
     output_file_type: FileType,

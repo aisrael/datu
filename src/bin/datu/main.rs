@@ -12,7 +12,7 @@ use commands::tail;
 
 use crate::commands::convert::ConvertArgs;
 
-/// datu - a data multi-tool
+/// Top-level CLI structure that parses command-line arguments.
 #[derive(Parser)]
 #[command(name = "datu")]
 #[command(version, about, long_about = None)]
@@ -36,6 +36,7 @@ pub enum Command {
     Version,
 }
 
+/// Application entry point; parses CLI args and dispatches to the appropriate command.
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {

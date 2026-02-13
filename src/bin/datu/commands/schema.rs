@@ -21,6 +21,7 @@ use saphyr::Yaml;
 use saphyr::YamlEmitter;
 use serde::Serialize;
 
+/// A schema field with name, data type, converted type (if any), and nullability.
 #[derive(Clone, Serialize)]
 struct SchemaField {
     name: String,
@@ -31,6 +32,7 @@ struct SchemaField {
 }
 
 impl SchemaField {
+    /// Converts this field to a YAML mapping entry; when `sparse` is true, omits null values.
     fn to_yaml_mapping(&self, sparse: bool) -> Yaml<'static> {
         let mut map = hashlink::LinkedHashMap::new();
         map.insert(
@@ -65,7 +67,7 @@ impl SchemaField {
     }
 }
 
-/// Schema field with all optional fields always serialized (for sparse=false).
+/// Full schema field used when sparse=false; all optional fields are always serialized.
 #[derive(Clone, Serialize)]
 struct SchemaFieldFull {
     name: String,
@@ -75,6 +77,7 @@ struct SchemaFieldFull {
 }
 
 impl From<&SchemaField> for SchemaFieldFull {
+    /// Creates a full schema field from a sparse schema field.
     fn from(f: &SchemaField) -> Self {
         SchemaFieldFull {
             name: f.name.clone(),
@@ -85,6 +88,7 @@ impl From<&SchemaField> for SchemaFieldFull {
     }
 }
 
+/// Internal representation of a schema column from Parquet metadata.
 struct SchemaOutput {
     column_name: String,
     data_type: String,
@@ -93,6 +97,7 @@ struct SchemaOutput {
 }
 
 impl SchemaOutput {
+    /// Converts this Parquet schema output into a `SchemaField` for display.
     fn to_schema_field(&self) -> SchemaField {
         SchemaField {
             name: self.column_name.clone(),
@@ -104,6 +109,7 @@ impl SchemaOutput {
 }
 
 impl Display for SchemaOutput {
+    /// Formats the schema output for human-readable display.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let nullable = if self.nullable { ", nullable" } else { "" };
         if let Some(converted_type) = &self.converted_type {
@@ -151,6 +157,7 @@ fn column_to_schema_output(column: &Arc<ColumnDescriptor>) -> SchemaOutput {
     }
 }
 
+/// Prints schema fields in CSV-like format (one field per line).
 fn print_schema_csv(fields: &[SchemaField]) -> Result<()> {
     for f in fields {
         let nullable = if f.nullable { ", nullable" } else { "" };
@@ -170,6 +177,7 @@ fn print_schema_csv(fields: &[SchemaField]) -> Result<()> {
     Ok(())
 }
 
+/// Prints schema fields as compact JSON.
 fn print_schema_json(fields: &[SchemaField], sparse: bool) -> Result<()> {
     let json = if sparse {
         serde_json::to_string(fields)?
@@ -181,6 +189,7 @@ fn print_schema_json(fields: &[SchemaField], sparse: bool) -> Result<()> {
     Ok(())
 }
 
+/// Prints schema fields as pretty-printed JSON.
 fn print_schema_json_pretty(fields: &[SchemaField], sparse: bool) -> Result<()> {
     let json = if sparse {
         serde_json::to_string_pretty(fields)?
@@ -192,6 +201,7 @@ fn print_schema_json_pretty(fields: &[SchemaField], sparse: bool) -> Result<()> 
     Ok(())
 }
 
+/// Prints schema fields as YAML.
 fn print_schema_yaml(fields: &[SchemaField], sparse: bool) -> Result<()> {
     let yaml_fields: Vec<Yaml<'static>> =
         fields.iter().map(|f| f.to_yaml_mapping(sparse)).collect();
@@ -203,6 +213,7 @@ fn print_schema_yaml(fields: &[SchemaField], sparse: bool) -> Result<()> {
     Ok(())
 }
 
+/// Prints schema fields in the specified output format.
 fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     match output {
         DisplayOutputFormat::Csv => print_schema_csv(fields),
@@ -212,6 +223,7 @@ fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat, sparse: boo
     }
 }
 
+/// Extracts and prints the schema of an Avro file.
 fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
@@ -241,6 +253,7 @@ pub fn schema(args: SchemaArgs) -> Result<()> {
     }
 }
 
+/// Extracts and prints the schema of an ORC file.
 fn schema_orc(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let arrow_reader = ArrowReaderBuilder::try_new(file)?.build();
@@ -258,6 +271,7 @@ fn schema_orc(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<(
     print_schema(&fields, output, sparse)
 }
 
+/// Extracts and prints the schema of a Parquet file.
 fn schema_parquet(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let metadata = ParquetMetaDataReader::new().parse_and_finish(&file)?;

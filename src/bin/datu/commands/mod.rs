@@ -1,3 +1,5 @@
+//! CLI command implementations (convert, head, schema, tail).
+
 pub mod convert;
 mod head;
 mod schema;

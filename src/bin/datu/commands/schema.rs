@@ -170,8 +170,6 @@ fn print_schema_csv(fields: &[SchemaField]) -> Result<()> {
             "{name}: {data_type}{ct}{nullable}",
             name = f.name,
             data_type = f.data_type,
-            ct = ct,
-            nullable = nullable
         );
     }
     Ok(())

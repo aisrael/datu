@@ -72,6 +72,7 @@ Feature: Head
     Then the command should succeed
     When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "id"
 
@@ -80,6 +81,7 @@ Feature: Head
     Then the command should succeed
     When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "first_name"
     And the output should contain "id"
 
@@ -91,6 +93,7 @@ Feature: Head
   Scenario: Head Parquet with --output json
     When I run `datu head fixtures/userdata.parquet -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "id"
 
@@ -103,17 +106,20 @@ Feature: Head
   Scenario: Head Avro with --output json
     When I run `datu head fixtures/userdata5.avro -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "first_name"
 
   Scenario: Head Parquet with --output yaml
     When I run `datu head fixtures/userdata.parquet -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "id"
     And the output should contain "first_name"
 
   Scenario: Head Avro with --output yaml
     When I run `datu head fixtures/userdata5.avro -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "first_name"
     And the output should contain "email"

@@ -93,6 +93,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.json"
     And the file "$TEMPDIR/table.json" should exist
+    And the file "$TEMPDIR/table.json" should be valid JSON
     And the file "$TEMPDIR/table.json" should contain:
       ```
       [{"one":-1.0,"two":"foo","three":true,"four":"2022-12-23T00:00:00Z","five":"2022-12-23T11:43:49","__index_level_0__":"a"},{"two":"bar","three":false,"four":"2021-12-23T00:00:00Z","five":"2021-12-23T12:44:50","__index_level_0__":"b"},{"one":2.5,"two":"baz","four":"2020-12-23T00:00:00Z","five":"2020-12-23T13:45:51","__index_level_0__":"c"}]
@@ -103,6 +104,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_sparse.json"
     And the file "$TEMPDIR/table_sparse.json" should exist
+    And the file "$TEMPDIR/table_sparse.json" should be valid JSON
     And the file "$TEMPDIR/table_sparse.json" should contain:
       ```
       [
@@ -136,12 +138,14 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.json"
     And the file "$TEMPDIR/userdata5.json" should exist
+    And the file "$TEMPDIR/userdata5.json" should be valid JSON
 
   Scenario: Parquet to YAML (default sparse)
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.yaml`
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table.yaml"
     And the file "$TEMPDIR/table.yaml" should exist
+    And the file "$TEMPDIR/table.yaml" should be valid YAML
     And the file "$TEMPDIR/table.yaml" should contain:
       ```
       - one: -1
@@ -167,6 +171,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_no_sparse.json"
     And the file "$TEMPDIR/table_no_sparse.json" should exist
+    And that file should be valid JSON
     And that file should contain "one"
     And that file should contain "null"
 
@@ -175,6 +180,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_no_sparse.yaml"
     And the file "$TEMPDIR/table_no_sparse.yaml" should exist
+    And that file should be valid YAML
     And that file should contain "one:"
 
   Scenario: Avro to YAML
@@ -182,6 +188,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.yaml"
     And the file "$TEMPDIR/userdata5.yaml" should exist
+    And that file should be valid YAML
     And that file should contain "id:"
     And that file should contain "first_name:"
 
@@ -192,6 +199,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.json"
     And the file "$TEMPDIR/userdata5.json" should exist
+    And the file "$TEMPDIR/userdata5.json" should be valid JSON
 
   Scenario: ORC to YAML
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
@@ -200,6 +208,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting $TEMPDIR/userdata5.orc to $TEMPDIR/userdata5.yaml"
     And the file "$TEMPDIR/userdata5.yaml" should exist
+    And that file should be valid YAML
     And that file should contain "id:"
     And that file should contain "first_name:"
 
@@ -208,6 +217,7 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_select.yaml"
     And the file "$TEMPDIR/table_select.yaml" should exist
+    And that file should be valid YAML
     And that file should contain "two:"
     And that file should contain "four:"
 
@@ -216,12 +226,14 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converting fixtures/table.parquet to $TEMPDIR/table_limit.yaml"
     And the file "$TEMPDIR/table_limit.yaml" should exist
+    And that file should be valid YAML
 
   Scenario: Avro to YAML with .yml extension
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.yml`
     Then the command should succeed
     And the output should contain "Converting fixtures/userdata5.avro to $TEMPDIR/userdata5.yml"
     And the file "$TEMPDIR/userdata5.yml" should exist
+    And that file should be valid YAML
     And that file should contain "email:"
 
   Scenario: Parquet to XLSX

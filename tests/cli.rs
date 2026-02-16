@@ -2,9 +2,9 @@ use std::io::BufRead;
 use std::path::Path;
 use std::process::Command;
 
-use cucumber::World;
 use cucumber::then;
 use cucumber::when;
+use cucumber::World;
 use datu::utils;
 use gherkin::Step;
 
@@ -141,6 +141,24 @@ fn output_should_contain(world: &mut CliWorld, expected: String) {
         expected_resolved,
         stdout,
         stderr
+    );
+}
+
+#[then(regex = r#"^the output should be valid JSON$"#)]
+fn output_should_be_valid_json(world: &mut CliWorld) {
+    let output = world.output.as_ref().expect("No output captured");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(stdout.trim()).expect(
+        "Expected output to be valid JSON, but parsing failed",
+    );
+}
+
+#[then(regex = r#"^the output should be valid YAML$"#)]
+fn output_should_be_valid_yaml(world: &mut CliWorld) {
+    let output = world.output.as_ref().expect("No output captured");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_yaml::from_str::<serde_yaml::Value>(stdout.trim()).expect(
+        "Expected output to be valid YAML, but parsing failed",
     );
 }
 
@@ -281,6 +299,48 @@ fn that_file_should_contain_literal(world: &mut CliWorld, expected: String) {
         "Expected file {} to contain '{}', but it did not",
         path_resolved,
         expected
+    );
+}
+
+#[then(regex = r#"^the file "(.+)" should be valid JSON$"#)]
+fn file_should_be_valid_json(world: &mut CliWorld, path: String) {
+    let path_resolved = resolve_path(world, &path);
+    let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
+    serde_json::from_str::<serde_json::Value>(content.trim()).expect(
+        "Expected file to contain valid JSON, but parsing failed",
+    );
+}
+
+#[then(regex = r#"^the file "(.+)" should be valid YAML$"#)]
+fn file_should_be_valid_yaml(world: &mut CliWorld, path: String) {
+    let path_resolved = resolve_path(world, &path);
+    let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
+    serde_yaml::from_str::<serde_yaml::Value>(content.trim()).expect(
+        "Expected file to contain valid YAML, but parsing failed",
+    );
+}
+
+#[then(regex = r#"^that file should be valid JSON$"#)]
+fn that_file_should_be_valid_json(world: &mut CliWorld) {
+    let path_resolved = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path_resolved).expect("Failed to read file");
+    serde_json::from_str::<serde_json::Value>(content.trim()).expect(
+        "Expected file to contain valid JSON, but parsing failed",
+    );
+}
+
+#[then(regex = r#"^that file should be valid YAML$"#)]
+fn that_file_should_be_valid_yaml(world: &mut CliWorld) {
+    let path_resolved = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path_resolved).expect("Failed to read file");
+    serde_yaml::from_str::<serde_yaml::Value>(content.trim()).expect(
+        "Expected file to contain valid YAML, but parsing failed",
     );
 }
 

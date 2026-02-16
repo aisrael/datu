@@ -17,6 +17,7 @@ Feature: Schema
   Scenario: Schema Parquet with --output json
     When I run `datu schema fixtures/table.parquet --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "name"
     And the output should contain "data_type"
     And the output should contain "one"
@@ -24,12 +25,14 @@ Feature: Schema
   Scenario: Schema Avro with --output json
     When I run `datu schema fixtures/userdata5.avro -o json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "nullable"
     And the output should contain "id"
 
   Scenario: Schema Parquet with --output json-pretty
     When I run `datu schema fixtures/table.parquet --output json-pretty`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "name"
     And the output should contain "data_type"
     And the output should contain "one"
@@ -37,18 +40,21 @@ Feature: Schema
   Scenario: Schema Avro with --output json-pretty
     When I run `datu schema fixtures/userdata5.avro -o json-pretty`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "nullable"
     And the output should contain "id"
 
   Scenario: Schema Parquet with --output yaml
     When I run `datu schema fixtures/table.parquet --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "name"
     And the output should contain "one"
 
   Scenario: Schema Avro with --output yaml
     When I run `datu schema fixtures/userdata5.avro -o yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "email"
 
   Scenario: Schema ORC default (csv output)

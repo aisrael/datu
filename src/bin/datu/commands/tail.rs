@@ -48,18 +48,15 @@ fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     });
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        reader_step = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     let display_step = DisplayWriterStep {
-        prev: reader_step,
         output_format: args.output,
         sparse,
     };
-    display_step.execute().map_err(Into::into)
+    display_step.execute(reader_step).map_err(Into::into)
 }
 
 /// Prints the last N rows from a generic record batch reader (used for Avro).
@@ -100,11 +97,10 @@ fn tail_from_reader(
     let reader_step: RecordBatchReaderSource =
         Box::new(VecRecordBatchReaderSource::new(tail_batches));
     let display_step = DisplayWriterStep {
-        prev: reader_step,
         output_format: output,
         sparse,
     };
-    display_step.execute().map_err(Into::into)
+    display_step.execute(reader_step).map_err(Into::into)
 }
 
 /// Prints the last N lines of an Avro file.
@@ -118,10 +114,8 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
     });
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        reader_step = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     tail_from_reader(reader_step, args.number, args.output, sparse)
@@ -144,16 +138,13 @@ fn tail_orc(args: HeadsOrTails) -> Result<()> {
     });
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        reader_step = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     let display_step = DisplayWriterStep {
-        prev: reader_step,
         output_format: args.output,
         sparse,
     };
-    display_step.execute().map_err(Into::into)
+    display_step.execute(reader_step).map_err(Into::into)
 }

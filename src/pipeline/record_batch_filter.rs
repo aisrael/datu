@@ -4,9 +4,20 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 
+/// A Source that wraps a single RecordBatchReader and yields it on get().
+struct RecordBatchReaderHolder {
+    reader: Option<Box<dyn RecordBatchReader + 'static>>,
+}
+
+impl Source<dyn RecordBatchReader + 'static> for RecordBatchReaderHolder {
+    fn get(&mut self) -> crate::Result<Box<dyn RecordBatchReader + 'static>> {
+        std::mem::take(&mut self.reader)
+            .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))
+    }
+}
+
 /// Pipeline step that filters record batches to only the specified columns.
 pub struct SelectColumnsStep {
-    pub prev: RecordBatchReaderSource,
     pub columns: Vec<String>,
 }
 
@@ -14,14 +25,8 @@ impl Step for SelectColumnsStep {
     type Input = RecordBatchReaderSource;
     type Output = RecordBatchReaderSource;
 
-    fn execute(self) -> crate::Result<Self::Output> {
-        Ok(Box::new(self))
-    }
-}
-
-impl Source<dyn RecordBatchReader + 'static> for SelectColumnsStep {
-    fn get(&mut self) -> crate::Result<Box<dyn RecordBatchReader + 'static>> {
-        let reader = self.prev.get()?;
+    fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
+        let reader = input.get()?;
         let indices: Vec<usize> = self
             .columns
             .iter()
@@ -32,11 +37,14 @@ impl Source<dyn RecordBatchReader + 'static> for SelectColumnsStep {
             })
             .collect::<crate::Result<Vec<_>>>()?;
         let projected_schema = reader.schema().project(&indices)?;
-        Ok(Box::new(SelectColumnRecordBatchReader {
+        let projected_reader = SelectColumnRecordBatchReader {
             reader,
             schema: std::sync::Arc::new(projected_schema),
             indices,
-        }) as Box<dyn RecordBatchReader + 'static>)
+        };
+        Ok(Box::new(RecordBatchReaderHolder {
+            reader: Some(Box::new(projected_reader)),
+        }))
     }
 }
 
@@ -67,6 +75,7 @@ impl Iterator for SelectColumnRecordBatchReader {
 mod tests {
     use super::*;
     use crate::pipeline::ReadArgs;
+    use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::parquet::ReadParquetStep;
 
     #[test]
@@ -79,12 +88,14 @@ mod tests {
         };
         let parquet_step = ReadParquetStep { args };
 
-        let source = Box::new(parquet_step);
-        let mut select_source = SelectColumnsStep {
-            prev: source,
+        let source: RecordBatchReaderSource = Box::new(parquet_step);
+        let select_step = SelectColumnsStep {
             columns: vec!["two".to_string(), "four".to_string()],
         };
-        let mut projected_reader = select_source
+        let mut projected_source = select_step
+            .execute(source)
+            .expect("Failed to execute select columns");
+        let mut projected_reader = projected_source
             .get()
             .expect("Failed to get record batch reader");
 

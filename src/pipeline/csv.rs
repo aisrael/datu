@@ -6,7 +6,6 @@ use crate::pipeline::WriteArgs;
 
 /// Pipeline step that writes record batches to a CSV file.
 pub struct WriteCsvStep {
-    pub prev: RecordBatchReaderSource,
     pub args: WriteArgs,
 }
 
@@ -17,11 +16,11 @@ impl Step for WriteCsvStep {
     type Input = RecordBatchReaderSource;
     type Output = WriteCsvResult;
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let mut writer = arrow::csv::Writer::new(file);
-        let reader = self.prev.get()?;
+        let reader = input.get()?;
         for batch in reader {
             let batch = batch.map_err(Error::ArrowError)?;
             writer.write(&batch).map_err(Error::ArrowError)?;
@@ -72,8 +71,8 @@ mod tests {
         });
 
         let args = WriteArgs { path };
-        let writer = WriteCsvStep { prev, args };
-        let result = writer.execute();
+        let writer = WriteCsvStep { args };
+        let result = writer.execute(prev);
         assert!(result.is_ok());
         assert!(output_path.exists());
     }

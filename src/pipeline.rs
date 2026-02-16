@@ -49,7 +49,7 @@ pub trait Step {
     type Output;
 
     /// Execute the step
-    fn execute(self) -> Result<Self::Output>;
+    fn execute(self, input: Self::Input) -> Result<Self::Output>;
 }
 
 /// A source that yields a value of type `T`.

@@ -55,7 +55,6 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
 
 /// Pipeline step that writes record batches to an ORC file.
 pub struct WriteOrcStep {
-    pub prev: RecordBatchReaderSource,
     pub args: WriteArgs,
 }
 
@@ -66,11 +65,11 @@ impl Step for WriteOrcStep {
     type Input = RecordBatchReaderSource;
     type Output = WriteOrcResult;
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
 
-        let reader = self.prev.get()?;
+        let reader = input.get()?;
         let schema = reader.schema();
 
         let mut writer = ArrowWriterBuilder::new(file, schema)

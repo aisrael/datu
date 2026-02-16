@@ -57,11 +57,8 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let mut reader_step: RecordBatchReaderSource = get_reader_step(input_file_type, &args)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        let select_step: RecordBatchReaderSource = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
-        reader_step = select_step;
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     execute_writer(reader_step, output_file_type, &args, sparse)?;
@@ -114,75 +111,68 @@ fn execute_writer(
     match output_file_type {
         FileType::Csv => {
             let writer = WriteCsvStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Avro => {
             let writer = WriteAvroStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Parquet => {
             let writer = WriteParquetStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Orc => {
             let writer = WriteOrcStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Json => {
             let writer = WriteJsonStep {
-                prev,
                 args: WriteJsonArgs {
                     path: args.output.clone(),
                     sparse,
                     pretty: args.json_pretty,
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Xlsx => {
             let writer = WriteXlsxStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Yaml => {
             let writer = WriteYamlStep {
-                prev,
                 args: WriteYamlArgs {
                     path: args.output.clone(),
                     sparse,
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
     }

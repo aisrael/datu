@@ -121,7 +121,6 @@ where
 
 /// Pipeline step that writes record batches to stdout as CSV or JSON.
 pub struct DisplayWriterStep {
-    pub prev: RecordBatchReaderSource,
     pub output_format: DisplayOutputFormat,
     pub sparse: bool,
 }
@@ -130,8 +129,8 @@ impl Step for DisplayWriterStep {
     type Input = RecordBatchReaderSource;
     type Output = ();
 
-    fn execute(mut self) -> Result<Self::Output> {
-        let mut reader = self.prev.get()?;
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+        let mut reader = input.get()?;
         match self.output_format {
             DisplayOutputFormat::Csv => {
                 write_record_batches_as_csv(&mut *reader, std::io::stdout())?;

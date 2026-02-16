@@ -2,16 +2,16 @@ Feature: CLI
 
   Scenario: Print version
     When I run `datu --version`
-    Then the output should contain "datu 0.2.3"
+    Then the output should contain "datu 0.2.4"
 
   Scenario: Print help with help subcommand
     When I run `datu help`
     Then the output should be:
       ```
       datu - a data file utility
-
+      
       Usage: datu <COMMAND>
-
+      
       Commands:
         convert  convert between file formats
         count    return the number of rows in a file
@@ -20,7 +20,7 @@ Feature: CLI
         schema   display the schema of a file
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)
-
+      
       Options:
         -h, --help     Print help
         -V, --version  Print version
@@ -31,9 +31,9 @@ Feature: CLI
     Then the output should be:
       ```
       datu - a data file utility
-
+      
       Usage: datu <COMMAND>
-
+      
       Commands:
         convert  convert between file formats
         count    return the number of rows in a file
@@ -42,7 +42,7 @@ Feature: CLI
         schema   display the schema of a file
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)
-
+      
       Options:
         -h, --help     Print help
         -V, --version  Print version

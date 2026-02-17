@@ -15,29 +15,26 @@ use datu::utils::parse_select_columns;
 /// head command implementation: print the first N lines of an Avro, Parquet, or ORC file.
 pub fn head(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
-    let mut reader_step: Box<dyn RecordBatchReaderSource> =
-        get_reader_step(input_file_type, &args)?;
+    let mut reader_step: RecordBatchReaderSource = get_reader_step(input_file_type, &args)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        reader_step = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     let display_step = DisplayWriterStep {
-        prev: reader_step,
         output_format: args.output,
         sparse,
     };
-    display_step.execute().map_err(Into::into)
+    display_step.execute(reader_step).map_err(Into::into)
 }
 
+/// Builds a record batch reader source for the given input file type and head args.
 fn get_reader_step(
     input_file_type: FileType,
     args: &HeadsOrTails,
-) -> Result<Box<dyn RecordBatchReaderSource>> {
-    let reader: Box<dyn RecordBatchReaderSource> = match input_file_type {
+) -> Result<RecordBatchReaderSource> {
+    let reader: RecordBatchReaderSource = match input_file_type {
         FileType::Parquet => Box::new(ReadParquetStep {
             args: ReadArgs {
                 path: args.input.clone(),

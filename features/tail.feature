@@ -71,6 +71,7 @@ Feature: Tail
     Then the command should succeed
     When I run `datu tail $TEMPDIR/userdata5.orc -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "id"
 
@@ -79,6 +80,7 @@ Feature: Tail
     Then the command should succeed
     When I run `datu tail $TEMPDIR/userdata5.orc -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "id"
     And the output should contain "first_name"
 
@@ -91,6 +93,7 @@ Feature: Tail
   Scenario: Tail Parquet with --output json
     When I run `datu tail fixtures/table.parquet -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "one"
 
@@ -103,17 +106,20 @@ Feature: Tail
   Scenario: Tail Avro with --output json
     When I run `datu tail fixtures/userdata5.avro -n 2 --output json`
     Then the command should succeed
+    And the output should be valid JSON
     And the output should contain "["
     And the output should contain "email"
 
   Scenario: Tail Parquet with --output yaml
     When I run `datu tail fixtures/table.parquet -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "one"
     And the output should contain "two"
 
   Scenario: Tail Avro with --output yaml
     When I run `datu tail fixtures/userdata5.avro -n 2 --output yaml`
     Then the command should succeed
+    And the output should be valid YAML
     And the output should contain "id"
     And the output should contain "email"

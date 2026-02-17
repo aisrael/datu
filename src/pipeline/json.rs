@@ -10,17 +10,16 @@ use crate::pipeline::WriteJsonArgs;
 
 /// Pipeline step that writes record batches to a JSON file (single array of objects).
 pub struct WriteJsonStep {
-    pub prev: Box<dyn RecordBatchReaderSource>,
     pub args: WriteJsonArgs,
 }
 
 impl Step for WriteJsonStep {
-    type Input = Box<dyn RecordBatchReaderSource>;
+    type Input = RecordBatchReaderSource;
     type Output = ();
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
-        let reader = self.prev.get_record_batch_reader()?;
+        let reader = input.get()?;
         let batches: Vec<RecordBatch> = reader
             .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
             .map_err(Error::ArrowError)?;

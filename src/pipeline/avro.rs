@@ -8,6 +8,7 @@ use crate::Result;
 use crate::pipeline::LimitingRecordBatchReader;
 use crate::pipeline::ReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::WriteArgs;
 
@@ -16,8 +17,8 @@ pub struct ReadAvroStep {
     pub args: ReadArgs,
 }
 
-impl RecordBatchReaderSource for ReadAvroStep {
-    fn get_record_batch_reader(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+impl Source<dyn RecordBatchReader + 'static> for ReadAvroStep {
+    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         read_avro(&self.args).map(|reader| Box::new(reader) as Box<dyn RecordBatchReader + 'static>)
     }
 }
@@ -43,23 +44,23 @@ pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
 
 /// Pipeline step that writes record batches to an Avro file.
 pub struct WriteAvroStep {
-    pub prev: Box<dyn RecordBatchReaderSource>,
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing an Avro file.
 pub struct WriteAvroResult {}
 
 impl Step for WriteAvroStep {
-    type Input = Box<dyn RecordBatchReaderSource>;
+    type Input = RecordBatchReaderSource;
     type Output = WriteAvroResult;
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         use arrow_avro::writer::AvroWriter;
 
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
 
-        let reader = self.prev.get_record_batch_reader()?;
+        let reader = input.get()?;
         let schema = reader.schema();
 
         let mut writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;

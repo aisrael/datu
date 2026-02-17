@@ -2,7 +2,7 @@ Feature: CLI
 
   Scenario: Print version
     When I run `datu --version`
-    Then the output should contain "datu 0.2.3"
+    Then the output should contain "datu 0.2.4"
 
   Scenario: Print help with help subcommand
     When I run `datu help`
@@ -14,6 +14,7 @@ Feature: CLI
       
       Commands:
         convert  convert between file formats
+        count    return the number of rows in a file
         head     print the first n lines of a file
         tail     print the last n lines of a file
         schema   display the schema of a file
@@ -35,6 +36,7 @@ Feature: CLI
       
       Commands:
         convert  convert between file formats
+        count    return the number of rows in a file
         head     print the first n lines of a file
         tail     print the last n lines of a file
         schema   display the schema of a file

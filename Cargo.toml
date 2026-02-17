@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -32,10 +32,16 @@ rust_xlsxwriter = { version = "0.93", features = ["chrono"] }
 rustc-literal-escaper = "0.0.7"
 
 [dev-dependencies]
+criterion = "0.5"
 cucumber = "0.22.1"
+serde_yaml = "0.9"
 futures = "0.3"
 gherkin = "0.15"
 tempfile = "3"
+
+[[bench]]
+name = "parquet_to_avro"
+harness = false
 
 [[test]]
 name = "cli"

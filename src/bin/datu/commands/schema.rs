@@ -21,6 +21,7 @@ use saphyr::Yaml;
 use saphyr::YamlEmitter;
 use serde::Serialize;
 
+/// A schema field with name, data type, converted type (if any), and nullability.
 #[derive(Clone, Serialize)]
 struct SchemaField {
     name: String,
@@ -31,6 +32,7 @@ struct SchemaField {
 }
 
 impl SchemaField {
+    /// Converts this field to a YAML mapping entry; when `sparse` is true, omits null values.
     fn to_yaml_mapping(&self, sparse: bool) -> Yaml<'static> {
         let mut map = hashlink::LinkedHashMap::new();
         map.insert(
@@ -65,7 +67,7 @@ impl SchemaField {
     }
 }
 
-/// Schema field with all optional fields always serialized (for sparse=false).
+/// Full schema field used when sparse=false; all optional fields are always serialized.
 #[derive(Clone, Serialize)]
 struct SchemaFieldFull {
     name: String,
@@ -75,6 +77,7 @@ struct SchemaFieldFull {
 }
 
 impl From<&SchemaField> for SchemaFieldFull {
+    /// Creates a full schema field from a sparse schema field.
     fn from(f: &SchemaField) -> Self {
         SchemaFieldFull {
             name: f.name.clone(),
@@ -85,6 +88,7 @@ impl From<&SchemaField> for SchemaFieldFull {
     }
 }
 
+/// Internal representation of a schema column from Parquet metadata.
 struct SchemaOutput {
     column_name: String,
     data_type: String,
@@ -93,6 +97,7 @@ struct SchemaOutput {
 }
 
 impl SchemaOutput {
+    /// Converts this Parquet schema output into a `SchemaField` for display.
     fn to_schema_field(&self) -> SchemaField {
         SchemaField {
             name: self.column_name.clone(),
@@ -104,6 +109,7 @@ impl SchemaOutput {
 }
 
 impl Display for SchemaOutput {
+    /// Formats the schema output for human-readable display.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let nullable = if self.nullable { ", nullable" } else { "" };
         if let Some(converted_type) = &self.converted_type {
@@ -151,56 +157,71 @@ fn column_to_schema_output(column: &Arc<ColumnDescriptor>) -> SchemaOutput {
     }
 }
 
-fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat, sparse: bool) -> Result<()> {
-    match output {
-        DisplayOutputFormat::Csv => {
-            for f in fields {
-                let nullable = if f.nullable { ", nullable" } else { "" };
-                let ct = f
-                    .converted_type
-                    .as_ref()
-                    .map(|c| format!(" ({c})"))
-                    .unwrap_or_default();
-                println!(
-                    "{name}: {data_type}{ct}{nullable}",
-                    name = f.name,
-                    data_type = f.data_type,
-                    ct = ct,
-                    nullable = nullable
-                );
-            }
-        }
-        DisplayOutputFormat::Json => {
-            let json = if sparse {
-                serde_json::to_string(fields)?
-            } else {
-                let full: Vec<SchemaFieldFull> = fields.iter().map(SchemaFieldFull::from).collect();
-                serde_json::to_string(&full)?
-            };
-            println!("{json}");
-        }
-        DisplayOutputFormat::JsonPretty => {
-            let json = if sparse {
-                serde_json::to_string_pretty(fields)?
-            } else {
-                let full: Vec<SchemaFieldFull> = fields.iter().map(SchemaFieldFull::from).collect();
-                serde_json::to_string_pretty(&full)?
-            };
-            println!("{json}");
-        }
-        DisplayOutputFormat::Yaml => {
-            let yaml_fields: Vec<Yaml<'static>> =
-                fields.iter().map(|f| f.to_yaml_mapping(sparse)).collect();
-            let doc = Yaml::Sequence(yaml_fields);
-            let mut out = String::new();
-            let mut emitter = YamlEmitter::new(&mut out);
-            emitter.dump(&doc)?;
-            println!("{out}");
-        }
+/// Prints schema fields in CSV-like format (one field per line).
+fn print_schema_csv(fields: &[SchemaField]) -> Result<()> {
+    for f in fields {
+        let nullable = if f.nullable { ", nullable" } else { "" };
+        let ct = f
+            .converted_type
+            .as_ref()
+            .map(|c| format!(" ({c})"))
+            .unwrap_or_default();
+        println!(
+            "{name}: {data_type}{ct}{nullable}",
+            name = f.name,
+            data_type = f.data_type,
+        );
     }
     Ok(())
 }
 
+/// Prints schema fields as compact JSON.
+fn print_schema_json(fields: &[SchemaField], sparse: bool) -> Result<()> {
+    let json = if sparse {
+        serde_json::to_string(fields)?
+    } else {
+        let full: Vec<SchemaFieldFull> = fields.iter().map(SchemaFieldFull::from).collect();
+        serde_json::to_string(&full)?
+    };
+    println!("{json}");
+    Ok(())
+}
+
+/// Prints schema fields as pretty-printed JSON.
+fn print_schema_json_pretty(fields: &[SchemaField], sparse: bool) -> Result<()> {
+    let json = if sparse {
+        serde_json::to_string_pretty(fields)?
+    } else {
+        let full: Vec<SchemaFieldFull> = fields.iter().map(SchemaFieldFull::from).collect();
+        serde_json::to_string_pretty(&full)?
+    };
+    println!("{json}");
+    Ok(())
+}
+
+/// Prints schema fields as YAML.
+fn print_schema_yaml(fields: &[SchemaField], sparse: bool) -> Result<()> {
+    let yaml_fields: Vec<Yaml<'static>> =
+        fields.iter().map(|f| f.to_yaml_mapping(sparse)).collect();
+    let doc = Yaml::Sequence(yaml_fields);
+    let mut out = String::new();
+    let mut emitter = YamlEmitter::new(&mut out);
+    emitter.dump(&doc)?;
+    println!("{out}");
+    Ok(())
+}
+
+/// Prints schema fields in the specified output format.
+fn print_schema(fields: &[SchemaField], output: DisplayOutputFormat, sparse: bool) -> Result<()> {
+    match output {
+        DisplayOutputFormat::Csv => print_schema_csv(fields),
+        DisplayOutputFormat::Json => print_schema_json(fields, sparse),
+        DisplayOutputFormat::JsonPretty => print_schema_json_pretty(fields, sparse),
+        DisplayOutputFormat::Yaml => print_schema_yaml(fields, sparse),
+    }
+}
+
+/// Extracts and prints the schema of an Avro file.
 fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
@@ -230,6 +251,7 @@ pub fn schema(args: SchemaArgs) -> Result<()> {
     }
 }
 
+/// Extracts and prints the schema of an ORC file.
 fn schema_orc(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let arrow_reader = ArrowReaderBuilder::try_new(file)?.build();
@@ -247,6 +269,7 @@ fn schema_orc(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<(
     print_schema(&fields, output, sparse)
 }
 
+/// Extracts and prints the schema of a Parquet file.
 fn schema_parquet(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<()> {
     let file = File::open(path)?;
     let metadata = ParquetMetaDataReader::new().parse_and_finish(&file)?;

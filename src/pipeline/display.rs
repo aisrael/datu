@@ -13,6 +13,14 @@ use crate::cli::DisplayOutputFormat;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 
+/// Normalizes string values for YAML emission. Unicode line/paragraph separators (U+2028, U+2029)
+/// are replaced with newlines so that saphyr's emitter will quote and escape them, producing
+/// valid YAML that parses correctly.
+fn normalize_yaml_string_value(s: String) -> String {
+    s.replace(['\u{2028}', '\u{2029}'], "\n")
+}
+
+/// Converts a record batch into YAML row objects; when `sparse` is true, omits null values.
 fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'static>> {
     let schema = batch.schema();
     let num_rows = batch.num_rows();
@@ -28,6 +36,7 @@ fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'sta
                 let value_str =
                     arrow::util::display::array_value_to_string(array.as_ref(), row_idx)
                         .unwrap_or_else(|_| "-".to_string());
+                let value_str = normalize_yaml_string_value(value_str);
                 map.insert(
                     Yaml::scalar_from_string(col_name),
                     Yaml::scalar_from_string(value_str),
@@ -120,17 +129,16 @@ where
 
 /// Pipeline step that writes record batches to stdout as CSV or JSON.
 pub struct DisplayWriterStep {
-    pub prev: Box<dyn RecordBatchReaderSource>,
     pub output_format: DisplayOutputFormat,
     pub sparse: bool,
 }
 
 impl Step for DisplayWriterStep {
-    type Input = Box<dyn RecordBatchReaderSource>;
+    type Input = RecordBatchReaderSource;
     type Output = ();
 
-    fn execute(mut self) -> Result<Self::Output> {
-        let mut reader = self.prev.get_record_batch_reader()?;
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+        let mut reader = input.get()?;
         match self.output_format {
             DisplayOutputFormat::Csv => {
                 write_record_batches_as_csv(&mut *reader, std::io::stdout())?;
@@ -164,7 +172,7 @@ mod tests {
     use super::write_record_batches_as_json;
     use super::write_record_batches_as_json_pretty;
     use super::write_record_batches_as_yaml;
-    use crate::pipeline::RecordBatchReaderSource;
+    use crate::pipeline::Source;
     use crate::pipeline::VecRecordBatchReaderSource;
 
     fn make_test_batch() -> RecordBatch {
@@ -186,7 +194,7 @@ mod tests {
     fn test_write_record_batches_as_csv() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get_record_batch_reader().unwrap();
+        let mut reader = source.get().unwrap();
         let mut out = Vec::new();
         write_record_batches_as_csv(&mut *reader, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -199,7 +207,7 @@ mod tests {
     fn test_write_record_batches_as_json() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get_record_batch_reader().unwrap();
+        let mut reader = source.get().unwrap();
         let mut out = Vec::new();
         write_record_batches_as_json(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -214,7 +222,7 @@ mod tests {
     fn test_write_record_batches_as_json_pretty() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get_record_batch_reader().unwrap();
+        let mut reader = source.get().unwrap();
         let mut out = Vec::new();
         write_record_batches_as_json_pretty(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -230,7 +238,7 @@ mod tests {
     fn test_write_record_batches_as_yaml() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get_record_batch_reader().unwrap();
+        let mut reader = source.get().unwrap();
         let mut out = Vec::new();
         write_record_batches_as_yaml(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();

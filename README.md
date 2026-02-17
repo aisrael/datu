@@ -3,11 +3,7 @@ datu - a data file utility
 
 > *Datu* (Filipino) - a traditional chief or local leader
 
-`datu` is intended to be a lightweight, fast, and versatile CLI tool for reading, querying, and converting data in various file formats, such as Parquet, .XLSX, CSV, and even f3.
-
-It is used non-interactively: you invoke a subcommand with arguments on the CLI or from scripts for automated pipelines.
-
-Internally, it also uses a pipeline architecture that aids in extensibility and testing, as well as allowing for parallel processing even of large datasets, if the input/output formats support it.
+`datu` is intended to be a lightweight, fast, and versatile CLI tool for reading, querying, and converting data in various file formats, such as Parquet, Avro, ORC, CSV, JSON, YAML, and .XLSX.
 
 ## Installation
 
@@ -34,7 +30,10 @@ For example, the following invocation
 datu convert input.parquet output.csv --select id,name,email
 ```
 
-constructs a pipeline that reads the input, selects only the specified columns, and writes the output.
+constructs a pipeline that composed of:
+  - a parquet reader step that reads the `input.parquet` file then chains to
+  - a "select column" step that filters for only the `id`, `name`, and `email` columns, then finally
+  - a CSV writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`
 
 ## Supported Formats
 
@@ -49,7 +48,7 @@ constructs a pipeline that reads the input, selects only the specified columns, 
 | JSON (pretty)                 |  —   |   —   |    ✓    |
 | YAML                          |  —   |   —   |    ✓    |
 
-- **Read** — Input file formats for `convert`, `schema`, `head`, and `tail`.
+- **Read** — Input file formats for `convert`, `count`, `schema`, `head`, and `tail`.
 - **Write** — Output file formats for `convert`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
@@ -95,6 +94,31 @@ datu schema data.parquet --output json-pretty
 # YAML output (e.g. for config or tooling)
 datu schema events.avro --output yaml
 datu schema events.avro -o YAML
+```
+
+---
+
+### `count`
+
+Return the number of rows in a Parquet, Avro, or ORC file.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
+
+**Usage:**
+
+```sh
+datu count <FILE>
+```
+
+**Examples:**
+
+```sh
+# Count rows in a Parquet file
+datu count data.parquet
+
+# Count rows in an Avro or ORC file
+datu count events.avro
+datu count data.orc
 ```
 
 ---
@@ -192,6 +216,8 @@ datu head data.parquet -n 20 --select id,name,email
 Print the last N rows of a Parquet, Avro, or ORC file to stdout (default CSV; use `--output` for other formats).
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
+
+> **Note:** For Avro files, `tail` requires a full file scan since Avro does not support random access to the end of the file.
 
 **Usage:**
 

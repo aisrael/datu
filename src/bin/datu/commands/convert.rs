@@ -21,7 +21,7 @@ use datu::pipeline::xlsx::WriteXlsxStep;
 use datu::pipeline::yaml::WriteYamlStep;
 use datu::utils::parse_select_columns;
 
-/// convert command arguments
+/// Arguments for the `datu convert` command.
 #[derive(Args)]
 pub struct ConvertArgs {
     pub input: String,
@@ -47,22 +47,18 @@ pub struct ConvertArgs {
     pub json_pretty: bool,
 }
 
-/// convert command implementation
+/// Converts between file formats; reads from input and writes to output.
 pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
     println!("Converting {} to {}", args.input, args.output);
 
-    let mut reader_step: Box<dyn RecordBatchReaderSource> =
-        get_reader_step(input_file_type, &args)?;
+    let mut reader_step: RecordBatchReaderSource = get_reader_step(input_file_type, &args)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        let select_step: Box<dyn RecordBatchReaderSource> = Box::new(SelectColumnsStep {
-            prev: reader_step,
-            columns,
-        });
-        reader_step = select_step;
+        let select_step = SelectColumnsStep { columns };
+        reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
     execute_writer(reader_step, output_file_type, &args, sparse)?;
@@ -70,11 +66,12 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Builds a record batch reader source for the given input file type and convert args.
 fn get_reader_step(
     input_file_type: FileType,
     args: &ConvertArgs,
-) -> Result<Box<dyn RecordBatchReaderSource>> {
-    let reader: Box<dyn RecordBatchReaderSource> = match input_file_type {
+) -> Result<RecordBatchReaderSource> {
+    let reader: RecordBatchReaderSource = match input_file_type {
         FileType::Parquet => Box::new(ReadParquetStep {
             args: ReadArgs {
                 path: args.input.clone(),
@@ -101,8 +98,9 @@ fn get_reader_step(
     Ok(reader)
 }
 
+/// Writes record batches from the reader to the output file in the specified format.
 fn execute_writer(
-    prev: Box<dyn RecordBatchReaderSource>,
+    prev: RecordBatchReaderSource,
     output_file_type: FileType,
     args: &ConvertArgs,
     sparse: bool,
@@ -113,75 +111,68 @@ fn execute_writer(
     match output_file_type {
         FileType::Csv => {
             let writer = WriteCsvStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Avro => {
             let writer = WriteAvroStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Parquet => {
             let writer = WriteParquetStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Orc => {
             let writer = WriteOrcStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Json => {
             let writer = WriteJsonStep {
-                prev,
                 args: WriteJsonArgs {
                     path: args.output.clone(),
                     sparse,
                     pretty: args.json_pretty,
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Xlsx => {
             let writer = WriteXlsxStep {
-                prev,
                 args: WriteArgs {
                     path: args.output.clone(),
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
         FileType::Yaml => {
             let writer = WriteYamlStep {
-                prev,
                 args: WriteYamlArgs {
                     path: args.output.clone(),
                     sparse,
                 },
             };
-            writer.execute()?;
+            writer.execute(prev)?;
             Ok(())
         }
     }

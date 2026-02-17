@@ -1,5 +1,8 @@
+//! Error types for the datu crate.
+
 use thiserror::Error;
 
+/// Errors that can occur during datu operations.
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("An error occurred: {0}")]

@@ -7,6 +7,7 @@ use crate::Error;
 use crate::Result;
 use crate::pipeline::ReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::WriteArgs;
 
@@ -15,8 +16,8 @@ pub struct ReadParquetStep {
     pub args: ReadArgs,
 }
 
-impl RecordBatchReaderSource for ReadParquetStep {
-    fn get_record_batch_reader(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+impl Source<dyn RecordBatchReader + 'static> for ReadParquetStep {
+    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         read_parquet(&self.args)
             .map(|reader| Box::new(reader) as Box<dyn RecordBatchReader + 'static>)
     }
@@ -39,21 +40,21 @@ pub fn read_parquet(args: &ReadArgs) -> Result<ParquetRecordBatchReader> {
 
 /// Pipeline step that writes record batches to a Parquet file.
 pub struct WriteParquetStep {
-    pub prev: Box<dyn RecordBatchReaderSource>,
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing a Parquet file.
 pub struct WriteParquetResult {}
 
 impl Step for WriteParquetStep {
-    type Input = Box<dyn RecordBatchReaderSource>;
+    type Input = RecordBatchReaderSource;
     type Output = WriteParquetResult;
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
 
-        let reader = self.prev.get_record_batch_reader()?;
+        let reader = input.get()?;
         let schema = reader.schema();
 
         let mut writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;

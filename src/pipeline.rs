@@ -49,13 +49,17 @@ pub trait Step {
     type Output;
 
     /// Execute the step
-    fn execute(self) -> Result<Self::Output>;
+    fn execute(self, input: Self::Input) -> Result<Self::Output>;
 }
 
-/// A source of `RecordBatchReader`
-pub trait RecordBatchReaderSource {
-    fn get_record_batch_reader(&mut self) -> Result<Box<dyn RecordBatchReader>>;
+/// A source that yields a value of type `T`.
+pub trait Source<T: ?Sized> {
+    /// Produces the next value from this source; consumes the source on first call.
+    fn get(&mut self) -> Result<Box<T>>;
 }
+
+/// Type alias for a boxed source of `RecordBatchReader`.
+pub type RecordBatchReaderSource = Box<dyn Source<dyn RecordBatchReader + 'static>>;
 
 /// A RecordBatchReader that limits the number of rows read.
 pub struct LimitingRecordBatchReader<Inner: RecordBatchReader + 'static> {
@@ -136,8 +140,8 @@ impl VecRecordBatchReaderSource {
     }
 }
 
-impl RecordBatchReaderSource for VecRecordBatchReaderSource {
-    fn get_record_batch_reader(&mut self) -> Result<Box<dyn RecordBatchReader>> {
+impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
+    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         let batches = std::mem::take(&mut self.batches)
             .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))?;
         Ok(Box::new(VecRecordBatchReader { batches, index: 0 }))

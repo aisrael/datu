@@ -11,4 +11,5 @@ pub mod utils;
 pub use errors::Error;
 pub use utils::FileType;
 
+/// Result type alias for datu operations.
 pub type Result<T> = std::result::Result<T, Error>;

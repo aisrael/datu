@@ -24,22 +24,22 @@ use crate::pipeline::WriteArgs;
 
 /// Pipeline step that writes record batches to an Excel (.xlsx) file.
 pub struct WriteXlsxStep {
-    pub prev: Box<dyn RecordBatchReaderSource>,
     pub args: WriteArgs,
 }
 
+/// Result of successfully writing an XLSX file.
 pub struct WriteXlsxResult {}
 
 impl Step for WriteXlsxStep {
-    type Input = Box<dyn RecordBatchReaderSource>;
+    type Input = RecordBatchReaderSource;
     type Output = WriteXlsxResult;
 
-    fn execute(mut self) -> Result<Self::Output> {
+    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let mut workbook = Workbook::new();
         let worksheet = workbook.add_worksheet();
 
-        let reader = self.prev.get_record_batch_reader()?;
+        let reader = input.get()?;
         let schema = reader.schema();
         let column_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
 
@@ -65,6 +65,7 @@ impl Step for WriteXlsxStep {
     }
 }
 
+/// Writes a single Arrow array cell value to an Excel worksheet cell.
 fn write_arrow_cell(
     worksheet: &mut Worksheet,
     row: u32,
@@ -152,6 +153,7 @@ fn write_arrow_cell(
     Ok(())
 }
 
+/// Converts an Arrow temporal/date array value at the given index to a chrono datetime.
 fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::NaiveDateTime> {
     use arrow::array::TimestampMillisecondArray;
     use arrow::array::TimestampSecondArray;
@@ -191,6 +193,7 @@ fn arrow_temporal_to_chrono(array: &ArrayRef, index: usize) -> Option<chrono::Na
     None
 }
 
+/// Formats an Arrow array value as a string for types not directly supported by Excel.
 fn format_arrow_value_unknown(array: &ArrayRef, index: usize) -> String {
     arrow::util::display::array_value_to_string(array.as_ref(), index)
         .unwrap_or_else(|_| "-".to_string())

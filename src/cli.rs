@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use clap::Args;
 
-/// Output format for the schema command
+/// Output format for schema, head, and tail commands (csv, json, json-pretty, yaml).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DisplayOutputFormat {
     #[default]
@@ -49,7 +49,7 @@ impl FromStr for DisplayOutputFormat {
     }
 }
 
-/// schema command arguments
+/// Arguments for the `datu schema` command.
 #[derive(Args)]
 pub struct SchemaArgs {
     /// Path to the Parquet or Avro file
@@ -70,7 +70,14 @@ pub struct SchemaArgs {
     pub sparse: bool,
 }
 
-/// head and tail command arguments
+/// Arguments for the `datu count` command.
+#[derive(Args)]
+pub struct CountArgs {
+    /// Path to the Parquet, Avro, or ORC file
+    pub file: String,
+}
+
+/// Arguments for the `datu head` and `datu tail` commands.
 #[derive(Args)]
 pub struct HeadsOrTails {
     pub input: String,

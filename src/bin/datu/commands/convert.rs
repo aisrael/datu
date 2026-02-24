@@ -61,13 +61,11 @@ pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         reader_step = select_step.execute(reader_step)?;
     }
     let sparse = args.sparse;
-    execute_writer(reader_step, output_file_type, &args, sparse)?;
-
-    Ok(())
+    get_writer_step(reader_step, output_file_type, &args, sparse)
 }
 
 /// Builds a record batch reader source for the given input file type and convert args.
-fn get_reader_step(
+pub fn get_reader_step(
     input_file_type: FileType,
     args: &ConvertArgs,
 ) -> Result<RecordBatchReaderSource> {
@@ -98,9 +96,17 @@ fn get_reader_step(
     Ok(reader)
 }
 
-/// Writes record batches from the reader to the output file in the specified format.
-fn execute_writer(
-    prev: RecordBatchReaderSource,
+impl From<&ConvertArgs> for WriteArgs {
+    fn from(args: &ConvertArgs) -> Self {
+        WriteArgs {
+            path: args.output.clone(),
+        }
+    }
+}
+
+/// Builds a writer step from the reader step for the given output format and executes it.
+fn get_writer_step(
+    reader_step: RecordBatchReaderSource,
     output_file_type: FileType,
     args: &ConvertArgs,
     sparse: bool,
@@ -110,69 +116,66 @@ fn execute_writer(
     }
     match output_file_type {
         FileType::Csv => {
-            let writer = WriteCsvStep {
-                args: WriteArgs {
-                    path: args.output.clone(),
-                },
+            let writer_step = WriteCsvStep {
+                args: args.into(),
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Avro => {
-            let writer = WriteAvroStep {
-                args: WriteArgs {
-                    path: args.output.clone(),
-                },
+            let writer_step = WriteAvroStep {
+                args: args.into(),
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Parquet => {
-            let writer = WriteParquetStep {
-                args: WriteArgs {
-                    path: args.output.clone(),
-                },
+            let writer_step = WriteParquetStep {
+                args: args.into(),
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Orc => {
-            let writer = WriteOrcStep {
-                args: WriteArgs {
-                    path: args.output.clone(),
-                },
+            let writer_step = WriteOrcStep {
+                args: args.into(),
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Json => {
-            let writer = WriteJsonStep {
+            let writer_step = WriteJsonStep {
                 args: WriteJsonArgs {
                     path: args.output.clone(),
                     sparse,
                     pretty: args.json_pretty,
                 },
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Xlsx => {
-            let writer = WriteXlsxStep {
-                args: WriteArgs {
-                    path: args.output.clone(),
-                },
+            let writer_step = WriteXlsxStep {
+                args: args.into(),
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
         FileType::Yaml => {
-            let writer = WriteYamlStep {
+            let writer_step = WriteYamlStep {
                 args: WriteYamlArgs {
                     path: args.output.clone(),
                     sparse,
                 },
+                source: reader_step,
             };
-            writer.execute(prev)?;
+            writer_step.execute(())?;
             Ok(())
         }
     }

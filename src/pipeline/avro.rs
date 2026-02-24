@@ -45,22 +45,24 @@ pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
 /// Pipeline step that writes record batches to an Avro file.
 pub struct WriteAvroStep {
     pub args: WriteArgs,
+    pub source: RecordBatchReaderSource,
 }
 
 /// Result of successfully writing an Avro file.
 pub struct WriteAvroResult {}
 
 impl Step for WriteAvroStep {
-    type Input = RecordBatchReaderSource;
+    type Input = ();
     type Output = WriteAvroResult;
 
-    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         use arrow_avro::writer::AvroWriter;
 
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
 
-        let reader = input.get()?;
+        let mut source = self.source;
+        let reader = source.get()?;
         let schema = reader.schema();
 
         let mut writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;

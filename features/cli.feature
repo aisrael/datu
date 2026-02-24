@@ -10,7 +10,7 @@ Feature: CLI
       ```
       datu - a data file utility
       
-      Usage: datu <COMMAND>
+      Usage: datu [COMMAND]
       
       Commands:
         convert  convert between file formats
@@ -32,7 +32,7 @@ Feature: CLI
       ```
       datu - a data file utility
       
-      Usage: datu <COMMAND>
+      Usage: datu [COMMAND]
       
       Commands:
         convert  convert between file formats

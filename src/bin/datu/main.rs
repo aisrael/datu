@@ -4,6 +4,7 @@ use clap::Parser;
 use clap::Subcommand;
 
 mod commands;
+mod repl;
 
 use commands::convert;
 use commands::count;
@@ -19,7 +20,7 @@ use crate::commands::convert::ConvertArgs;
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 /// The `datu` CLI top-level command
@@ -43,12 +44,13 @@ pub enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Convert(args) => convert(args),
-        Command::Count(args) => count(args),
-        Command::Head(args) => head(args),
-        Command::Schema(args) => schema(args),
-        Command::Tail(args) => tail(args),
-        Command::Version => {
+        None => repl::run(),
+        Some(Command::Convert(args)) => convert(args),
+        Some(Command::Count(args)) => count(args),
+        Some(Command::Head(args)) => head(args),
+        Some(Command::Schema(args)) => schema(args),
+        Some(Command::Tail(args)) => tail(args),
+        Some(Command::Version) => {
             println!("datu v{}", datu::VERSION);
             Ok(())
         }

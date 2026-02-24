@@ -2,17 +2,25 @@
 
 use anyhow::Result;
 use datu::Error;
+use datu::FileType;
+use datu::pipeline::RecordBatchReaderSource;
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
+use flt::ast::Literal;
 use flt::parser::parse_expr;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+
+use crate::commands::convert;
 
 /// Maximum number of inputs to keep in REPL history.
 const HISTORY_DEPTH: usize = 1000;
 
 /// Context for a REPL session.
-pub struct ReplContext {}
+pub struct ReplContext {
+    pub reader: Option<RecordBatchReaderSource>,
+    pub writer: Option<String>,
+}
 
 /// Runs the datu REPL.
 pub fn run() -> Result<()> {
@@ -21,7 +29,10 @@ pub fn run() -> Result<()> {
         .auto_add_history(true)
         .build();
     let mut rl = DefaultEditor::with_config(config)?;
-    let mut context = ReplContext {};
+    let mut context = ReplContext {
+        reader: None,
+        writer: None,
+    };
     loop {
         let line = match rl.readline("> ") {
             Ok(line) => line,
@@ -100,8 +111,6 @@ fn eval_pipe(context: &mut ReplContext, left: Box<Expr>, right: Box<Expr>) -> da
     match *right {
         Expr::FunctionCall(name, args) => {
             if is_supported_function_call(&name) {
-                println!("name: {name:?}");
-                println!("args: {args:?}");
                 if name == "write" {
                     eval_write(context, args)?;
                 } else {
@@ -122,13 +131,55 @@ fn is_supported_function_call(name: &str) -> bool {
 }
 
 /// Evaluates a read function call.
-fn eval_read(_context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
-    println!("args: {args:?}");
+fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
+    let path = match args.as_slice() {
+        [Expr::Literal(Literal::String(s))] => s.clone(),
+        _ => {
+            return Err(Error::UnsupportedFunctionCall(format!(
+                "read expects a single string argument, got {args:?}"
+            )))
+        }
+    };
+    let file_type: FileType = path.as_str().try_into()?;
+    let convert_args = convert::ConvertArgs {
+        input: path,
+        output: String::new(),
+        select: None,
+        limit: None,
+        sparse: true,
+        json_pretty: false,
+    };
+    let reader = convert::get_reader_step(file_type, &convert_args)
+        .map_err(|e| Error::GenericError(e.to_string()))?;
+    context.reader = Some(reader);
     Ok(())
 }
 
 /// Evaluates a write function call.
-fn eval_write(_context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
-    println!("args: {args:?}");
+fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
+    let output_path = match args.as_slice() {
+        [Expr::Literal(Literal::String(s))] => s.clone(),
+        _ => {
+            return Err(Error::UnsupportedFunctionCall(format!(
+                "write expects a single string argument, got {args:?}"
+            )))
+        }
+    };
+    let reader = context
+        .reader
+        .take()
+        .ok_or_else(|| Error::GenericError("write requires a preceding read in the pipe".to_string()))?;
+    let output_file_type: FileType = output_path.as_str().try_into()?;
+    let convert_args = convert::ConvertArgs {
+        input: String::new(),
+        output: output_path.clone(),
+        select: None,
+        limit: None,
+        sparse: true,
+        json_pretty: false,
+    };
+    convert::get_writer_step(reader, output_file_type, &convert_args, true)
+        .map_err(|e| Error::GenericError(e.to_string()))?;
+    context.writer = Some(output_path);
     Ok(())
 }

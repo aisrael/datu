@@ -105,7 +105,7 @@ impl From<&ConvertArgs> for WriteArgs {
 }
 
 /// Builds a writer step from the reader step for the given output format and executes it.
-fn get_writer_step(
+pub fn get_writer_step(
     reader_step: RecordBatchReaderSource,
     output_file_type: FileType,
     args: &ConvertArgs,

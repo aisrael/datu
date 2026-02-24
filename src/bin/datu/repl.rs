@@ -137,7 +137,7 @@ fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
         _ => {
             return Err(Error::UnsupportedFunctionCall(format!(
                 "read expects a single string argument, got {args:?}"
-            )))
+            )));
         }
     };
     let file_type: FileType = path.as_str().try_into()?;
@@ -162,13 +162,12 @@ fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
         _ => {
             return Err(Error::UnsupportedFunctionCall(format!(
                 "write expects a single string argument, got {args:?}"
-            )))
+            )));
         }
     };
-    let reader = context
-        .reader
-        .take()
-        .ok_or_else(|| Error::GenericError("write requires a preceding read in the pipe".to_string()))?;
+    let reader = context.reader.take().ok_or_else(|| {
+        Error::GenericError("write requires a preceding read in the pipe".to_string())
+    })?;
     let output_file_type: FileType = output_path.as_str().try_into()?;
     let convert_args = convert::ConvertArgs {
         input: String::new(),

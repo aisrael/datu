@@ -23,4 +23,10 @@ pub enum Error {
     XlsxError(#[from] rust_xlsxwriter::XlsxError),
     #[error(transparent)]
     OrcError(#[from] orc_rust::error::OrcError),
+    #[error("Unsupported expression: {0}")]
+    UnsupportedExpression(String),
+    #[error("Unsupported operator: {0}")]
+    UnsupportedOperator(String),
+    #[error("Unsupported function call: {0}")]
+    UnsupportedFunctionCall(String),
 }

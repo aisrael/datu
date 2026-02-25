@@ -7,20 +7,22 @@ use crate::pipeline::WriteArgs;
 /// Pipeline step that writes record batches to a CSV file.
 pub struct WriteCsvStep {
     pub args: WriteArgs,
+    pub source: RecordBatchReaderSource,
 }
 
 /// Result of successfully writing a CSV file.
 pub struct WriteCsvResult {}
 
 impl Step for WriteCsvStep {
-    type Input = RecordBatchReaderSource;
+    type Input = ();
     type Output = WriteCsvResult;
 
-    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let mut writer = arrow::csv::Writer::new(file);
-        let reader = input.get()?;
+        let mut source = self.source;
+        let reader = source.get()?;
         for batch in reader {
             let batch = batch.map_err(Error::ArrowError)?;
             writer.write(&batch).map_err(Error::ArrowError)?;
@@ -66,13 +68,13 @@ mod tests {
             .expect("Failed to convert path to string")
             .to_string();
 
-        let prev: RecordBatchReaderSource = Box::new(TestRecordBatchReader {
+        let source: RecordBatchReaderSource = Box::new(TestRecordBatchReader {
             reader: Some(Box::new(reader)),
         });
 
         let args = WriteArgs { path };
-        let writer = WriteCsvStep { args };
-        let result = writer.execute(prev);
+        let writer = WriteCsvStep { args, source };
+        let result = writer.execute(());
         assert!(result.is_ok());
         assert!(output_path.exists());
     }

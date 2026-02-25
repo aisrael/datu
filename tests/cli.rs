@@ -26,7 +26,7 @@ fn replace_tempdir(s: &str, temp_path: &str) -> String {
 fn run_datu_with_args(world: &mut CliWorld, args: String) {
     let args_str = args;
     let temp_path = if args_str.contains(TEMPDIR_PLACEHOLDER) {
-        if let Some(ref temp_dir) = world.temp_dir {
+        Some(if let Some(ref temp_dir) = world.temp_dir {
             temp_dir
                 .path()
                 .to_str()
@@ -41,15 +41,15 @@ fn run_datu_with_args(world: &mut CliWorld, args: String) {
                 .to_string();
             world.temp_dir = Some(temp_dir);
             path
-        }
+        })
     } else {
-        String::new()
+        None
     };
 
-    let resolved_args = if temp_path.is_empty() {
-        args_str
-    } else {
+    let resolved_args = if let Some(temp_path) = temp_path {
         replace_tempdir(&args_str, &temp_path)
+    } else {
+        args_str
     };
 
     let args: Vec<&str> = resolved_args.split_whitespace().collect();

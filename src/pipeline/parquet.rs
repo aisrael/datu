@@ -41,20 +41,22 @@ pub fn read_parquet(args: &ReadArgs) -> Result<ParquetRecordBatchReader> {
 /// Pipeline step that writes record batches to a Parquet file.
 pub struct WriteParquetStep {
     pub args: WriteArgs,
+    pub source: RecordBatchReaderSource,
 }
 
 /// Result of successfully writing a Parquet file.
 pub struct WriteParquetResult {}
 
 impl Step for WriteParquetStep {
-    type Input = RecordBatchReaderSource;
+    type Input = ();
     type Output = WriteParquetResult;
 
-    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
 
-        let reader = input.get()?;
+        let mut source = self.source;
+        let reader = source.get()?;
         let schema = reader.schema();
 
         let mut writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;

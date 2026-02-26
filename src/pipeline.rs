@@ -2,6 +2,7 @@
 
 pub mod avro;
 pub mod csv;
+pub mod select;
 pub mod display;
 pub mod json;
 pub mod orc;

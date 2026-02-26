@@ -11,6 +11,7 @@ use datu::pipeline::WriteYamlArgs;
 use datu::pipeline::avro::ReadAvroStep;
 use datu::pipeline::avro::WriteAvroStep;
 use datu::pipeline::csv::WriteCsvStep;
+use datu::pipeline::select;
 use datu::pipeline::json::WriteJsonStep;
 use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::orc::WriteOrcStep;
@@ -20,7 +21,6 @@ use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::xlsx::WriteXlsxStep;
 use datu::pipeline::yaml::WriteYamlStep;
 use datu::utils::parse_select_columns;
-
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
 pub struct ConvertArgs {
@@ -47,19 +47,37 @@ pub struct ConvertArgs {
     pub json_pretty: bool,
 }
 
-/// Converts between file formats; reads from input and writes to output.
-pub fn convert(args: ConvertArgs) -> anyhow::Result<()> {
+/// Converts between file formats; reads from input and writes to output, optionally selecting columns.
+pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
     println!("Converting {} to {}", args.input, args.output);
 
-    let mut reader_step: RecordBatchReaderSource = get_reader_step(input_file_type, &args)?;
-    if let Some(select) = &args.select {
+    let reader_step: RecordBatchReaderSource = if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step)?;
-    }
+        if !columns.is_empty() {
+            match input_file_type {
+                FileType::Parquet => {
+                    select::read_parquet_select(&args.input, &columns, args.limit)
+                        .await?
+                }
+                FileType::Avro => {
+                    select::read_avro_select(&args.input, &columns, args.limit).await?
+                }
+                FileType::Orc => {
+                    let base_reader = get_reader_step(input_file_type, &args)?;
+                    let select_step = SelectColumnsStep { columns };
+                    select_step.execute(base_reader)?
+                }
+                _ => bail!("Only Parquet, Avro, and ORC are supported as input file types"),
+            }
+        } else {
+            get_reader_step(input_file_type, &args)?
+        }
+    } else {
+        get_reader_step(input_file_type, &args)?
+    };
     let sparse = args.sparse;
     get_writer_step(reader_step, output_file_type, &args, sparse)
 }
@@ -185,8 +203,8 @@ pub fn get_writer_step(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_convert_parquet_to_avro() {
+    #[tokio::test]
+    async fn test_convert_parquet_to_avro() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.avro");
         let output = output_path
@@ -203,13 +221,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_parquet_to_csv() {
+    #[tokio::test]
+    async fn test_convert_parquet_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.csv");
         let output = output_path
@@ -226,13 +244,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_avro_to_csv() {
+    #[tokio::test]
+    async fn test_convert_avro_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("userdata5.csv");
         let output = output_path
@@ -249,13 +267,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_parquet_to_json() {
+    #[tokio::test]
+    async fn test_convert_parquet_to_json() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.json");
         let output = output_path
@@ -272,13 +290,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_parquet_to_xlsx() {
+    #[tokio::test]
+    async fn test_convert_parquet_to_xlsx() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.xlsx");
         let output = output_path
@@ -295,13 +313,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_avro_to_orc() {
+    #[tokio::test]
+    async fn test_convert_avro_to_orc() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("userdata5.orc");
         let output = output_path
@@ -318,13 +336,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_orc_to_csv() {
+    #[tokio::test]
+    async fn test_convert_orc_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let orc_path = temp_dir.path().join("userdata5.orc");
         let csv_path = temp_dir.path().join("userdata5.csv");
@@ -341,7 +359,7 @@ mod tests {
             sparse: true,
             json_pretty: false,
         };
-        convert(orc_args).expect("Avro to ORC failed");
+        convert(orc_args).await.expect("Avro to ORC failed");
 
         // Then convert ORC to CSV
         let csv_args = ConvertArgs {
@@ -358,13 +376,13 @@ mod tests {
             sparse: true,
             json_pretty: false,
         };
-        let result = convert(csv_args);
+        let result = convert(csv_args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(csv_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_parquet_to_yaml() {
+    #[tokio::test]
+    async fn test_convert_parquet_to_yaml() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.yaml");
         let output = output_path
@@ -381,13 +399,13 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[test]
-    fn test_convert_with_select() {
+    #[tokio::test]
+    async fn test_convert_with_select() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.csv");
         let output = output_path
@@ -404,10 +422,38 @@ mod tests {
             json_pretty: false,
         };
 
-        let result = convert(args);
+        let result = convert(args).await;
         assert!(
             result.is_ok(),
             "Convert with select failed: {:?}",
+            result.err()
+        );
+        assert!(output_path.exists(), "Output file was not created");
+    }
+
+    #[tokio::test]
+    async fn test_convert_parquet_select_one_two_to_avro() {
+        // Equivalent to: read("fixtures/table.parquet") |> select(:one, :two) |> write("${TMP}/table.avro")
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("table.avro");
+        let output = output_path
+            .to_str()
+            .expect("Failed to convert path to string")
+            .to_string();
+
+        let args = ConvertArgs {
+            input: "fixtures/table.parquet".to_string(),
+            output,
+            select: Some(vec!["one".to_string(), "two".to_string()]),
+            limit: None,
+            sparse: true,
+            json_pretty: false,
+        };
+
+        let result = convert(args).await;
+        assert!(
+            result.is_ok(),
+            "Convert parquet select one,two to avro failed: {:?}",
             result.err()
         );
         assert!(output_path.exists(), "Output file was not created");

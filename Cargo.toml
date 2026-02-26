@@ -18,7 +18,7 @@ arrow-avro = "57.2.0"
 arrow-json = "57.2.0"
 clap = { version = "4.5.54", features = ["cargo", "derive"] }
 chrono = "0.4"
-datafusion = "52.1.0"
+datafusion = { version = "52.1.0", features = ["avro"] }
 parquet = "57.2.0"
 orc-rust = "0.7"
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }

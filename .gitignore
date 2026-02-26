@@ -21,3 +21,5 @@ target/
 
 # macOS
 .DS_Store
+
+/tmp/

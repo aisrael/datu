@@ -124,6 +124,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "apache-avro"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36fa98bc79671c7981272d91a8753a928ff6a1cd8e4f20a44c45bd5d313840bf"
+dependencies = [
+ "bigdecimal",
+ "bon",
+ "bzip2",
+ "crc32fast",
+ "digest",
+ "liblzma",
+ "log",
+ "miniz_oxide",
+ "num-bigint",
+ "quad-rand",
+ "rand",
+ "regex-lite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "snap",
+ "strum",
+ "strum_macros",
+ "thiserror 2.0.18",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
 name = "ar_archive_writer"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -451,6 +480,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -489,6 +519,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "bon"
+version = "3.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d13a61f2963b88eef9c1be03df65d42f6996dfeac1054870d950fcf66686f83"
+dependencies = [
+ "bon-macros",
+ "rustversion",
+]
+
+[[package]]
+name = "bon-macros"
+version = "3.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d314cc62af2b6b0c65780555abb4d02a03dd3b799cd42419044f0c38d99738c0"
+dependencies = [
+ "darling",
+ "ident_case",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn",
 ]
 
 [[package]]
@@ -972,6 +1027,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+dependencies = [
+ "darling_core",
+ "darling_macro",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+dependencies = [
+ "darling_core",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1003,6 +1093,7 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-datasource-arrow",
+ "datafusion-datasource-avro",
  "datafusion-datasource-csv",
  "datafusion-datasource-json",
  "datafusion-datasource-parquet",
@@ -1095,6 +1186,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3237a6ff0d2149af4631290074289cae548c9863c885d821315d54c6673a074a"
 dependencies = [
  "ahash",
+ "apache-avro",
  "arrow",
  "arrow-ipc",
  "chrono",
@@ -1180,6 +1272,26 @@ dependencies = [
  "itertools 0.14.0",
  "object_store",
  "tokio",
+]
+
+[[package]]
+name = "datafusion-datasource-avro"
+version = "52.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "828088c2fb681cc0e06fb42f541f76c82a0c10278f9fd6334e22c8d1e3574ee7"
+dependencies = [
+ "apache-avro",
+ "arrow",
+ "async-trait",
+ "bytes",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "datafusion-session",
+ "futures",
+ "num-traits",
+ "object_store",
 ]
 
 [[package]]
@@ -1858,6 +1970,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2259,6 +2377,12 @@ name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
+
+[[package]]
+name = "ident_case"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "idna"
@@ -2682,6 +2806,7 @@ checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -3104,6 +3229,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quad-rand"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
+
+[[package]]
 name = "quote"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3248,6 +3379,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"
@@ -3396,6 +3533,16 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -3581,6 +3728,12 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 
 [[package]]
 name = "strum_macros"
@@ -3941,6 +4094,7 @@ checksum = "b672338555252d43fd2240c714dc444b8c6fb0a5c5335e65a07bba7742735ddb"
 dependencies = [
  "getrandom 0.4.1",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

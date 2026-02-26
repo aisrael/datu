@@ -19,7 +19,7 @@ use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// tail command implementation: print the last N lines of an Avro, Parquet, or ORC file.
-pub fn tail(args: HeadsOrTails) -> Result<()> {
+pub async fn tail(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     match input_file_type {
         FileType::Parquet => tail_parquet(args),

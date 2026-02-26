@@ -5,7 +5,6 @@ use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::LimitingRecordBatchReader;
 use crate::pipeline::ReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
@@ -38,19 +37,7 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
         builder.build()
     };
 
-    if args.offset.is_none() {
-        if let Some(limit) = args.limit {
-            Ok(Box::new(LimitingRecordBatchReader {
-                inner: arrow_reader,
-                limit,
-                records_read: 0,
-            }))
-        } else {
-            Ok(Box::new(arrow_reader))
-        }
-    } else {
-        Ok(Box::new(arrow_reader))
-    }
+    Ok(Box::new(arrow_reader))
 }
 
 /// Pipeline step that writes record batches to an ORC file.

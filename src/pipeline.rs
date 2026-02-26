@@ -62,44 +62,6 @@ pub trait Source<T: ?Sized> {
 /// Type alias for a boxed source of `RecordBatchReader`.
 pub type RecordBatchReaderSource = Box<dyn Source<dyn RecordBatchReader + 'static>>;
 
-/// A RecordBatchReader that limits the number of rows read.
-pub struct LimitingRecordBatchReader<Inner: RecordBatchReader + 'static> {
-    inner: Inner,
-    limit: usize,
-    records_read: usize,
-}
-
-impl<Inner: RecordBatchReader + 'static> Iterator for LimitingRecordBatchReader<Inner> {
-    type Item = arrow::error::Result<arrow::record_batch::RecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.records_read >= self.limit {
-            return None;
-        }
-
-        match self.inner.next() {
-            Some(Ok(batch)) => {
-                let remaining = self.limit - self.records_read;
-                if batch.num_rows() <= remaining {
-                    self.records_read += batch.num_rows();
-                    Some(Ok(batch))
-                } else {
-                    let sliced = batch.slice(0, remaining);
-                    self.records_read += remaining;
-                    Some(Ok(sliced))
-                }
-            }
-            res => res,
-        }
-    }
-}
-
-impl<Inner: RecordBatchReader + 'static> RecordBatchReader for LimitingRecordBatchReader<Inner> {
-    fn schema(&self) -> std::sync::Arc<arrow::datatypes::Schema> {
-        self.inner.schema()
-    }
-}
-
 /// A RecordBatchReader that yields batches from a Vec.
 pub struct VecRecordBatchReader {
     batches: Vec<arrow::record_batch::RecordBatch>,

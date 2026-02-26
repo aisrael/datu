@@ -10,15 +10,14 @@ use saphyr::YamlEmitter;
 use crate::Error;
 use crate::Result;
 use crate::cli::DisplayOutputFormat;
-use crate::pipeline::RecordBatchReaderSource;
-use crate::pipeline::Step;
-
 /// Normalizes string values for YAML emission. Unicode line/paragraph separators (U+2028, U+2029)
 /// are replaced with newlines so that saphyr's emitter will quote and escape them, producing
 /// valid YAML that parses correctly.
 fn normalize_yaml_string_value(s: String) -> String {
     s.replace(['\u{2028}', '\u{2029}'], "\n")
 }
+use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::Step;
 
 /// Converts a record batch into YAML row objects; when `sparse` is true, omits null values.
 fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'static>> {

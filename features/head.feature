@@ -14,17 +14,20 @@ Feature: Head
   Scenario: Head Avro default (10 lines)
     When I run `datu head fixtures/userdata5.avro`
     Then the command should succeed
+    And the output should have a header and 10 lines
     And the first line should contain "id"
     And the first line should contain "first_name"
 
   Scenario: Head Avro with -n 3
     When I run `datu head fixtures/userdata5.avro -n 3`
     Then the command should succeed
+    And the output should have a header and 3 lines
     And the first line should contain "email"
 
   Scenario: Head Parquet with --select
     When I run `datu head fixtures/userdata.parquet -n 2 --select id,last_name`
     Then the command should succeed
+    And the output should have a header and 2 lines
     And the first line should contain "id"
     And the first line should contain "last_name"
 
@@ -40,6 +43,7 @@ Feature: Head
     Then the command should succeed
     When I run `datu head $TEMPDIR/userdata5.orc`
     Then the command should succeed
+    And the output should have a header and 10 lines
     And the first line should contain "id"
     And the first line should contain "first_name"
 
@@ -48,6 +52,7 @@ Feature: Head
     Then the command should succeed
     When I run `datu head $TEMPDIR/userdata5.orc -n 3`
     Then the command should succeed
+    And the output should have a header and 3 lines
     And the first line should contain "id"
 
   Scenario: Head ORC with --select
@@ -64,6 +69,7 @@ Feature: Head
     Then the command should succeed
     When I run `datu head $TEMPDIR/userdata5.orc -n 2 --output csv`
     Then the command should succeed
+    And the output should have a header and 2 lines
     And the first line should contain "id"
     And the first line should contain "first_name"
 
@@ -100,6 +106,7 @@ Feature: Head
   Scenario: Head Avro with --output csv
     When I run `datu head fixtures/userdata5.avro -n 2 --output csv`
     Then the command should succeed
+    And the output should have a header and 2 lines
     And the first line should contain "id"
     And the first line should contain "first_name"
 

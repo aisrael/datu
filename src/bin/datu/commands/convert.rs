@@ -79,7 +79,7 @@ async fn read_to_dataframe(
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?,
         FileType::Orc => {
-            let batches = read_orc_to_batches(input_path, limit)?;
+            let batches = read_orc_to_batches(input_path)?;
             if batches.is_empty() {
                 bail!("ORC file is empty or could not be read");
             }
@@ -99,26 +99,21 @@ async fn read_to_dataframe(
         }
     }
 
-    // For ORC, limit is applied in read_orc; for Parquet/Avro, apply here
-    if input_file_type != FileType::Orc {
-        if let Some(n) = limit {
-            df = df.limit(0, Some(n)).map_err(|e| anyhow::anyhow!("{e}"))?;
-        }
+    if let Some(n) = limit {
+        df = df.limit(0, Some(n)).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     Ok(df)
 }
 
 /// Reads an ORC file into record batches (ORC is not natively supported by DataFusion).
-fn read_orc_to_batches(
-    path: &str,
-    limit: Option<usize>,
-) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+/// Limit is applied via DataFusion in read_to_dataframe.
+fn read_orc_to_batches(path: &str) -> Result<Vec<arrow::record_batch::RecordBatch>> {
     use datu::pipeline::ReadArgs;
 
     let args = ReadArgs {
         path: path.to_string(),
-        limit,
+        limit: None,
         offset: None,
     };
     let reader = orc::read_orc(&args)?;
@@ -217,6 +212,8 @@ pub async fn write_batches(
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::RecordBatchReader;
+
     use super::*;
 
     #[tokio::test]
@@ -445,6 +442,19 @@ mod tests {
             result.err()
         );
         assert!(output_path.exists(), "Output file was not created");
+
+        let mut reader = csv::Reader::from_path(&output_path).expect("Failed to open output CSV");
+        let headers: Vec<String> = reader
+            .headers()
+            .expect("Failed to read CSV headers")
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            headers,
+            vec!["two".to_string(), "four".to_string()],
+            "CSV header columns do not match selected columns"
+        );
     }
 
     #[tokio::test]
@@ -473,5 +483,23 @@ mod tests {
             result.err()
         );
         assert!(output_path.exists(), "Output file was not created");
+
+        let read_args = datu::pipeline::ReadArgs {
+            path: output_path.to_str().expect("path").to_string(),
+            limit: None,
+            offset: None,
+        };
+        let reader = avro::read_avro(&read_args).expect("Failed to read output Avro");
+        let field_names: Vec<String> = reader
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
+        assert_eq!(
+            field_names,
+            vec!["one".to_string(), "two".to_string()],
+            "Avro schema columns do not match selected columns"
+        );
     }
 }

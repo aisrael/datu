@@ -2,12 +2,12 @@
 
 pub mod avro;
 pub mod csv;
-pub mod select;
 pub mod display;
 pub mod json;
 pub mod orc;
 pub mod parquet;
 pub mod record_batch_filter;
+pub mod select;
 pub mod xlsx;
 pub mod yaml;
 
@@ -104,6 +104,12 @@ impl<Inner: RecordBatchReader + 'static> RecordBatchReader for LimitingRecordBat
 pub struct VecRecordBatchReader {
     batches: Vec<arrow::record_batch::RecordBatch>,
     index: usize,
+}
+
+impl VecRecordBatchReader {
+    pub fn new(batches: Vec<arrow::record_batch::RecordBatch>) -> Self {
+        Self { batches, index: 0 }
+    }
 }
 
 impl Iterator for VecRecordBatchReader {

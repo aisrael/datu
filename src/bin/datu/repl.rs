@@ -3,7 +3,6 @@
 use anyhow::Result;
 use datu::Error;
 use datu::FileType;
-use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::select;
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
@@ -19,7 +18,7 @@ const HISTORY_DEPTH: usize = 1000;
 
 /// Context for a REPL session.
 pub struct ReplContext {
-    pub reader: Option<RecordBatchReaderSource>,
+    pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
 }
 
@@ -31,7 +30,7 @@ pub async fn run() -> Result<()> {
         .build();
     let mut rl = DefaultEditor::with_config(config)?;
     let mut context = ReplContext {
-        reader: None,
+        batches: None,
         writer: None,
     };
     loop {
@@ -123,9 +122,9 @@ async fn eval_stage(context: &mut ReplContext, expr: Expr) -> datu::Result<()> {
         Expr::FunctionCall(name, args) => {
             let name_str = name.to_string();
             match name_str.as_str() {
-                "read" => eval_read(context, args)?,
+                "read" => eval_read(context, args).await?,
                 "select" => eval_select(context, args).await?,
-                "write" => eval_write(context, args)?,
+                "write" => eval_write(context, args).await?,
                 _ => return Err(Error::UnsupportedFunctionCall(name_str)),
             }
         }
@@ -135,7 +134,7 @@ async fn eval_stage(context: &mut ReplContext, expr: Expr) -> datu::Result<()> {
 }
 
 /// Evaluates a read function call.
-fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
+async fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
     let path = match args.as_slice() {
         [Expr::Literal(Literal::String(s))] => s.clone(),
         _ => {
@@ -145,17 +144,10 @@ fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
         }
     };
     let file_type: FileType = path.as_str().try_into()?;
-    let convert_args = convert::ConvertArgs {
-        input: path,
-        output: String::new(),
-        select: None,
-        limit: None,
-        sparse: true,
-        json_pretty: false,
-    };
-    let reader = convert::get_reader_step(file_type, &convert_args)
+    let batches = convert::read_to_batches(&path, file_type, &None, None)
+        .await
         .map_err(|e| Error::GenericError(e.to_string()))?;
-    context.reader = Some(reader);
+    context.batches = Some(batches);
     Ok(())
 }
 
@@ -181,25 +173,16 @@ async fn eval_select(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result
             "select expects at least one column name".to_string(),
         ));
     }
-    let reader = context.reader.take().ok_or_else(|| {
+    let batches = context.batches.take().ok_or_else(|| {
         Error::GenericError("select requires a preceding read in the pipe".to_string())
     })?;
-    let mut source = reader;
-    let mut batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    {
-        let r = source.get()?;
-        for batch in r {
-            let b = batch.map_err(|e| Error::GenericError(e.to_string()))?;
-            batches.push(b);
-        }
-    }
-    let selected = select::select_columns_from_batches(batches, &columns).await?;
-    context.reader = Some(selected);
+    let selected = select::select_columns_to_batches(batches, &columns).await?;
+    context.batches = Some(selected);
     Ok(())
 }
 
 /// Evaluates a write function call.
-fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
+async fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
     let output_path = match args.as_slice() {
         [Expr::Literal(Literal::String(s))] => s.clone(),
         _ => {
@@ -208,19 +191,12 @@ fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> datu::Result<()> {
             )));
         }
     };
-    let reader = context.reader.take().ok_or_else(|| {
+    let batches = context.batches.take().ok_or_else(|| {
         Error::GenericError("write requires a preceding read in the pipe".to_string())
     })?;
     let output_file_type: FileType = output_path.as_str().try_into()?;
-    let convert_args = convert::ConvertArgs {
-        input: String::new(),
-        output: output_path.clone(),
-        select: None,
-        limit: None,
-        sparse: true,
-        json_pretty: false,
-    };
-    convert::get_writer_step(reader, output_file_type, &convert_args, true)
+    convert::write_batches(batches, &output_path, output_file_type, true, false)
+        .await
         .map_err(|e| Error::GenericError(e.to_string()))?;
     context.writer = Some(output_path);
     Ok(())
@@ -245,7 +221,7 @@ mod tests {
         assert!(remainder.trim().is_empty(), "unconsumed: {:?}", remainder);
 
         let mut context = ReplContext {
-            reader: None,
+            batches: None,
             writer: None,
         };
         eval(&mut context, expr).await.expect("eval");

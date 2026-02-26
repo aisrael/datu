@@ -2,6 +2,7 @@ use std::io::BufReader;
 
 use arrow::array::RecordBatchReader;
 use arrow_avro::reader::ReaderBuilder;
+use arrow_avro::writer::AvroWriter;
 
 use crate::Error;
 use crate::Result;
@@ -51,29 +52,26 @@ pub struct WriteAvroStep {
 /// Result of successfully writing an Avro file.
 pub struct WriteAvroResult {}
 
+/// Write record batches from a reader to an Avro file.
+pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+    let file = std::fs::File::create(path).map_err(Error::IoError)?;
+    let schema = reader.schema();
+    let mut writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;
+    for batch in reader {
+        let batch = batch.map_err(Error::ArrowError)?;
+        writer.write(&batch).map_err(Error::ArrowError)?;
+    }
+    writer.finish().map_err(Error::ArrowError)?;
+    Ok(())
+}
+
 impl Step for WriteAvroStep {
     type Input = ();
     type Output = WriteAvroResult;
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        use arrow_avro::writer::AvroWriter;
-
-        let path = self.args.path.as_str();
-        let file = std::fs::File::create(path).map_err(Error::IoError)?;
-
-        let mut source = self.source;
-        let reader = source.get()?;
-        let schema = reader.schema();
-
-        let mut writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;
-
-        for batch in reader {
-            let batch = batch.map_err(Error::ArrowError)?;
-            writer.write(&batch).map_err(Error::ArrowError)?;
-        }
-
-        writer.finish().map_err(Error::ArrowError)?;
-
+    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+        let mut reader = self.source.get()?;
+        write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteAvroResult {})
     }
 }

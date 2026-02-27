@@ -277,7 +277,7 @@ For example, the following invocation
 datu convert input.parquet output.csv --select id,name,email
 ```
 
-constructs a pipeline that composed of:
+constructs a pipeline that's composed of:
   - a parquet reader step that reads the `input.parquet` file then chains to
   - a "select column" step that filters for only the `id`, `name`, and `email` columns, then finally
   - a CSV writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`

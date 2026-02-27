@@ -46,5 +46,5 @@ name = "parquet_to_avro"
 harness = false
 
 [[test]]
-name = "cli"
+name = "features"
 harness = false

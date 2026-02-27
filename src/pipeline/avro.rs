@@ -212,9 +212,9 @@ mod tests {
             limit: None,
             offset: Some(1),
         };
-        let mut reader = read_avro(&args).expect("read_avro failed");
+        let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
-        while let Some(batch_result) = reader.next() {
+        for batch_result in reader {
             let batch = batch_result.expect("Failed to read batch");
             total_rows += batch.num_rows();
         }
@@ -229,9 +229,9 @@ mod tests {
             limit: Some(5),
             offset: Some(10),
         };
-        let mut reader = read_avro(&args).expect("read_avro failed");
+        let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
-        while let Some(batch_result) = reader.next() {
+        for batch_result in reader {
             let batch = batch_result.expect("Failed to read batch");
             total_rows += batch.num_rows();
         }

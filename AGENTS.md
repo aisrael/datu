@@ -1,6 +1,6 @@
 # General Guidelines
 
-- After a major change or refactoring, run `cargo +nightly fmt` and `cargo test` to ensure linting and tests pass
+- After a major change or refactoring, run `cargo +nightly fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` to ensure linting and tests pass
 
 # Rust Code Guidelines
 

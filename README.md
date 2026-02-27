@@ -43,13 +43,13 @@ Usage
 
 For example, the command
 
-```
+```sh
 datu convert table.parquet --select id,email table.csv
 ```
 
 And, interactively, using the REPL
 
-```
+```sh
 datu
 > read("table.parquet") |> select(:id, :email) |> write("table.csv")
 ```

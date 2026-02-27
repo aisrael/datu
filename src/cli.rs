@@ -1,5 +1,8 @@
 //! Contains shared types for the `datu` CLI and implementation.
 
+pub mod convert;
+pub mod repl;
+
 use std::str::FromStr;
 
 use clap::Args;

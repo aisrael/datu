@@ -13,6 +13,7 @@ pub mod yaml;
 
 use arrow::array::RecordBatchReader;
 
+use crate::FileType;
 use crate::Result;
 
 /// Arguments for reading a file (Avro, Parquet, ORC).
@@ -96,7 +97,7 @@ impl RecordBatchReader for VecRecordBatchReader {
     }
 }
 
-/// A RecordBatchReaderSource that yields batches from a Vec.
+/// A concrete implementation of Source<dyn RecordBatchReader + 'static> that yiedls a VecRecordBatchReader.
 pub struct VecRecordBatchReaderSource {
     batches: Option<Vec<arrow::record_batch::RecordBatch>>,
 }
@@ -115,4 +116,34 @@ impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
             .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))?;
         Ok(Box::new(VecRecordBatchReader { batches, index: 0 }))
     }
+}
+
+/// Reads input into record batches for use by REPL and other callers that need RecordBatchReaderSource.
+/// Uses DataFusion for Parquet and Avro; uses orc-rust for ORC.
+pub async fn read_to_batches(
+    input_path: &str,
+    input_file_type: FileType,
+    select: &Option<Vec<String>>,
+    limit: Option<usize>,
+) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
+    let df =
+        crate::cli::convert::read_to_dataframe(input_path, input_file_type, select, limit).await?;
+    df.collect().await.map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Writes record batches to output file. Used by REPL.
+pub async fn write_batches(
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    output_path: &str,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+) -> anyhow::Result<()> {
+    let ctx = datafusion::execution::context::SessionContext::new();
+    let df = ctx
+        .read_batches(batches)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    crate::cli::convert::write_dataframe(df, output_path, output_file_type, sparse, json_pretty)
+        .await
 }

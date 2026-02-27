@@ -74,26 +74,15 @@ fn command_should_succeed(world: &mut CliWorld) {
     );
 }
 
-#[then(regex = r#"^the first line should contain "(.+)"$"#)]
-fn first_line_should_contain(world: &mut CliWorld, expected: String) {
+#[then(regex = r#"^the first line should be: (.+)$"#)]
+fn first_line_should_be(world: &mut CliWorld, expected: String) {
     let output = world.output.as_ref().expect("No output captured");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next().unwrap_or("").trim();
-
-    let expected_resolved = if let Some(ref temp_dir) = world.temp_dir {
-        let temp_path = temp_dir
-            .path()
-            .to_str()
-            .expect("Temp path is not valid UTF-8");
-        replace_tempdir(&expected, temp_path)
-    } else {
-        expected
-    };
-
     assert!(
-        first_line.contains(&expected_resolved),
-        "Expected first line to contain '{}', but got: {}",
-        expected_resolved,
+        first_line == expected,
+        "Expected first line to be '{}', but got: {}",
+        expected,
         first_line
     );
 }

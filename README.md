@@ -19,22 +19,6 @@ To install from source:
 cargo install --git https://github.com/aisrael/datu
 ```
 
-## How it Works Internally
-
-Internally, `datu` constructs a pipeline based on the command and arguments.
-
-
-For example, the following invocation
-
-```sh
-datu convert input.parquet output.csv --select id,name,email
-```
-
-constructs a pipeline that composed of:
-  - a parquet reader step that reads the `input.parquet` file then chains to
-  - a "select column" step that filters for only the `id`, `name`, and `email` columns, then finally
-  - a CSV writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`
-
 ## Supported Formats
 
 | Format                        | Read | Write | Display |
@@ -52,7 +36,27 @@ constructs a pipeline that composed of:
 - **Write** — Output file formats for `convert`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
-## Examples
+Usage
+=====
+
+`datu` can be used non-interactively as a typical command-line utility, _or_ it can be ran without specifying a command in interactive mode, providing a REPL-like interface.
+
+For example, the command
+
+```
+datu convert table.parquet --select id,email table.csv
+```
+
+And, interactively, using the REPL
+
+```
+datu
+> read("table.parquet") |> select(:id, :email) |> write("table.csv")
+```
+
+Perform the same conversion and column filtering.
+
+## Commands
 
 ### `schema`
 
@@ -261,3 +265,19 @@ Print the installed `datu` version:
 ```sh
 datu version
 ```
+
+## How it Works Internally
+
+Internally, `datu` constructs a pipeline based on the command and arguments.
+
+
+For example, the following invocation
+
+```sh
+datu convert input.parquet output.csv --select id,name,email
+```
+
+constructs a pipeline that composed of:
+  - a parquet reader step that reads the `input.parquet` file then chains to
+  - a "select column" step that filters for only the `id`, `name`, and `email` columns, then finally
+  - a CSV writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`

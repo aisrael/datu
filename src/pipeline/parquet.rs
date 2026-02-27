@@ -51,25 +51,24 @@ impl Step for WriteParquetStep {
     type Input = ();
     type Output = WriteParquetResult;
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let path = self.args.path.as_str();
-        let file = std::fs::File::create(path).map_err(Error::IoError)?;
-
-        let mut source = self.source;
-        let reader = source.get()?;
-        let schema = reader.schema();
-
-        let mut writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;
-
-        for batch in reader {
-            let batch = batch.map_err(Error::ArrowError)?;
-            writer.write(&batch).map_err(Error::ParquetError)?;
-        }
-
-        writer.close().map_err(Error::ParquetError)?;
-
+    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+        let mut reader = self.source.get()?;
+        write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteParquetResult {})
     }
+}
+
+/// Write record batches from a reader to a Parquet file.
+pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+    let file = std::fs::File::create(path).map_err(Error::IoError)?;
+    let schema = reader.schema();
+    let mut writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;
+    for batch in reader {
+        let batch = batch.map_err(Error::ArrowError)?;
+        writer.write(&batch).map_err(Error::ParquetError)?;
+    }
+    writer.close().map_err(Error::ParquetError)?;
+    Ok(())
 }
 
 #[cfg(test)]

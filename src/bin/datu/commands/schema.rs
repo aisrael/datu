@@ -241,7 +241,7 @@ fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<
 }
 
 /// The `datu schema` command
-pub fn schema(args: SchemaArgs) -> Result<()> {
+pub async fn schema(args: SchemaArgs) -> Result<()> {
     let file_type: FileType = args.file.as_str().try_into()?;
     match file_type {
         FileType::Parquet => schema_parquet(&args.file, args.output, args.sparse),

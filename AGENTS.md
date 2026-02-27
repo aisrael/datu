@@ -1,3 +1,7 @@
+# General Guidelines
+
+- After a major change or refactoring, run `cargo +nightly fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` to ensure linting and tests pass
+
 # Rust Code Guidelines
 
 - When writing imports, use one `use` statement per line. DO NOT use grouped `use` statements

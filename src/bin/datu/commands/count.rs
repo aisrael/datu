@@ -11,7 +11,7 @@ use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
 
 /// The `datu count` command
-pub fn count(args: CountArgs) -> anyhow::Result<()> {
+pub async fn count(args: CountArgs) -> anyhow::Result<()> {
     let file_type: FileType = args.file.as_str().try_into()?;
     let mut reader_step: RecordBatchReaderSource = get_reader_step(file_type, &args)?;
 
@@ -58,21 +58,21 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_count_parquet() {
+    #[tokio::test]
+    async fn test_count_parquet() {
         let args = CountArgs {
             file: "fixtures/table.parquet".to_string(),
         };
-        let result = count(args);
+        let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());
     }
 
-    #[test]
-    fn test_count_avro() {
+    #[tokio::test]
+    async fn test_count_avro() {
         let args = CountArgs {
             file: "fixtures/userdata5.avro".to_string(),
         };
-        let result = count(args);
+        let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());
     }
 }

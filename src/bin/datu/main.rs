@@ -41,15 +41,16 @@ pub enum Command {
 }
 
 /// Application entry point; parses CLI args and dispatches to the appropriate command.
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => repl::run(),
-        Some(Command::Convert(args)) => convert(args),
-        Some(Command::Count(args)) => count(args),
-        Some(Command::Head(args)) => head(args),
-        Some(Command::Schema(args)) => schema(args),
-        Some(Command::Tail(args)) => tail(args),
+        None => repl::run().await,
+        Some(Command::Convert(args)) => convert(args).await,
+        Some(Command::Count(args)) => count(args).await,
+        Some(Command::Head(args)) => head(args).await,
+        Some(Command::Schema(args)) => schema(args).await,
+        Some(Command::Tail(args)) => tail(args).await,
         Some(Command::Version) => {
             println!("datu v{}", datu::VERSION);
             Ok(())

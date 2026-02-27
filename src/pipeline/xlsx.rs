@@ -7,6 +7,7 @@ use arrow::array::Int8Array;
 use arrow::array::Int16Array;
 use arrow::array::Int32Array;
 use arrow::array::Int64Array;
+use arrow::array::RecordBatchReader;
 use arrow::array::StringArray;
 use arrow::array::UInt8Array;
 use arrow::array::UInt16Array;
@@ -31,38 +32,41 @@ pub struct WriteXlsxStep {
 /// Result of successfully writing an XLSX file.
 pub struct WriteXlsxResult {}
 
+/// Write record batches from a reader to an Excel (.xlsx) file.
+pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+    let schema = reader.schema();
+    let column_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+
+    let mut excel_row: u32 = 0;
+    for (col, name) in column_names.iter().enumerate() {
+        worksheet.write_string(excel_row, col as u16, *name)?;
+    }
+    excel_row += 1;
+
+    for batch in reader {
+        let batch = batch.map_err(Error::ArrowError)?;
+        let batch_row_count = batch.num_rows();
+        for batch_row in 0..batch_row_count {
+            for (col, array) in batch.columns().iter().enumerate() {
+                write_arrow_cell(worksheet, excel_row, col as u16, array, batch_row)?;
+            }
+            excel_row += 1;
+        }
+    }
+
+    workbook.save(path)?;
+    Ok(())
+}
+
 impl Step for WriteXlsxStep {
     type Input = ();
     type Output = WriteXlsxResult;
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let path = self.args.path.as_str();
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-
-        let mut source = self.source;
-        let reader = source.get()?;
-        let schema = reader.schema();
-        let column_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-
-        let mut excel_row: u32 = 0;
-        for (col, name) in column_names.iter().enumerate() {
-            worksheet.write_string(excel_row, col as u16, *name)?;
-        }
-        excel_row += 1;
-
-        for batch in reader {
-            let batch = batch.map_err(Error::ArrowError)?;
-            let batch_row_count = batch.num_rows();
-            for batch_row in 0..batch_row_count {
-                for (col, array) in batch.columns().iter().enumerate() {
-                    write_arrow_cell(worksheet, excel_row, col as u16, array, batch_row)?;
-                }
-                excel_row += 1;
-            }
-        }
-
-        workbook.save(path)?;
+    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+        let mut reader = self.source.get()?;
+        write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteXlsxResult {})
     }
 }

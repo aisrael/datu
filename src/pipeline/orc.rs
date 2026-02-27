@@ -5,7 +5,6 @@ use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::LimitingRecordBatchReader;
 use crate::pipeline::ReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
@@ -38,19 +37,7 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
         builder.build()
     };
 
-    if args.offset.is_none() {
-        if let Some(limit) = args.limit {
-            Ok(Box::new(LimitingRecordBatchReader {
-                inner: arrow_reader,
-                limit,
-                records_read: 0,
-            }))
-        } else {
-            Ok(Box::new(arrow_reader))
-        }
-    } else {
-        Ok(Box::new(arrow_reader))
-    }
+    Ok(Box::new(arrow_reader))
 }
 
 /// Pipeline step that writes record batches to an ORC file.
@@ -62,29 +49,28 @@ pub struct WriteOrcStep {
 /// Result of successfully writing an ORC file.
 pub struct WriteOrcResult {}
 
+/// Write record batches from a reader to an ORC file.
+pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+    let file = std::fs::File::create(path).map_err(Error::IoError)?;
+    let schema = reader.schema();
+    let mut writer = ArrowWriterBuilder::new(file, schema)
+        .try_build()
+        .map_err(Error::OrcError)?;
+    for batch in reader {
+        let batch = batch.map_err(Error::ArrowError)?;
+        writer.write(&batch).map_err(Error::OrcError)?;
+    }
+    writer.close().map_err(Error::OrcError)?;
+    Ok(())
+}
+
 impl Step for WriteOrcStep {
     type Input = ();
     type Output = WriteOrcResult;
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let path = self.args.path.as_str();
-        let file = std::fs::File::create(path).map_err(Error::IoError)?;
-
-        let mut source = self.source;
-        let reader = source.get()?;
-        let schema = reader.schema();
-
-        let mut writer = ArrowWriterBuilder::new(file, schema)
-            .try_build()
-            .map_err(Error::OrcError)?;
-
-        for batch in reader {
-            let batch = batch.map_err(Error::ArrowError)?;
-            writer.write(&batch).map_err(Error::OrcError)?;
-        }
-
-        writer.close().map_err(Error::OrcError)?;
-
+    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+        let mut reader = self.source.get()?;
+        write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteOrcResult {})
     }
 }

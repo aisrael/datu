@@ -5,8 +5,10 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - "features/**"
       - "Cargo.*"
       - ".rustfmt.toml"
+      - "README.md"
       - ".github/workflows/ci.yml"
 
 jobs:

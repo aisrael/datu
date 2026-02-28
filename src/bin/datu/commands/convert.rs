@@ -1,7 +1,10 @@
 use clap::Args;
 use datu::FileType;
-use datu::cli::convert::read_to_dataframe;
+use datu::cli::convert::DataFrameReader;
+use datu::cli::convert::DataFrameWriter;
+use datu::cli::convert::read_dataframe;
 use datu::cli::convert::write_dataframe;
+use datu::pipeline::Step;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
@@ -36,16 +39,12 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
 
     println!("Converting {} to {}", args.input, args.output);
 
-    let df = read_to_dataframe(&args.input, input_file_type, &args.select, args.limit).await?;
+    let reader_step = DataFrameReader::new(&args.input, input_file_type, args.select, args.limit);
 
-    write_dataframe(
-        df,
-        &args.output,
-        output_file_type,
-        args.sparse,
-        args.json_pretty,
-    )
-    .await?;
+    let writer_step =
+        DataFrameWriter::new(args.output, output_file_type, args.sparse, args.json_pretty);
+    let source = reader_step.execute(())?;
+    writer_step.execute(source)?;
 
     Ok(())
 }
@@ -57,7 +56,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_to_avro() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.avro");
@@ -80,7 +79,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.csv");
@@ -103,7 +102,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_avro_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("userdata5.csv");
@@ -126,7 +125,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_to_json() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.json");
@@ -149,7 +148,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_to_xlsx() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.xlsx");
@@ -172,7 +171,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_avro_to_orc() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("userdata5.orc");
@@ -195,7 +194,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_orc_to_csv() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let orc_path = temp_dir.path().join("userdata5.orc");
@@ -235,7 +234,7 @@ mod tests {
         assert!(csv_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_to_yaml() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.yaml");
@@ -258,7 +257,7 @@ mod tests {
         assert!(output_path.exists(), "Output file was not created");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_with_select() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.csv");
@@ -298,7 +297,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_convert_parquet_select_one_two_to_avro() {
         // Equivalent to: read("fixtures/table.parquet") |> select(:one, :two) |> write("${TMP}/table.avro")
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");

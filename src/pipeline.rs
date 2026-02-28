@@ -126,8 +126,10 @@ pub async fn read_to_batches(
     select: &Option<Vec<String>>,
     limit: Option<usize>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let df =
-        crate::cli::convert::read_to_dataframe(input_path, input_file_type, select, limit).await?;
+    let mut source =
+        crate::cli::convert::read_dataframe(input_path, input_file_type, select.clone(), limit)
+            .execute(())?;
+    let df = *source.get().map_err(|e| anyhow::anyhow!("{e}"))?;
     df.collect().await.map_err(|e| anyhow::anyhow!("{e}"))
 }
 
@@ -144,6 +146,13 @@ pub async fn write_batches(
         .read_batches(batches)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    crate::cli::convert::write_dataframe(df, output_path, output_file_type, sparse, json_pretty)
-        .await
+    let source = crate::cli::convert::DataFrameSource::new(df);
+    let writer_step = crate::cli::convert::DataFrameWriter::new(
+        output_path,
+        output_file_type,
+        sparse,
+        json_pretty,
+    );
+    writer_step.execute(source)?;
+    Ok(())
 }

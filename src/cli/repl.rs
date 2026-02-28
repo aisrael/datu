@@ -348,7 +348,7 @@ mod tests {
 
     // ── eval: error paths ───────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_unsupported_expression() {
         let mut ctx = new_context();
         let expr = Expr::Literal(Literal::Boolean(true));
@@ -360,7 +360,7 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_unsupported_binary_operator() {
         let mut ctx = new_context();
         let expr = Expr::BinaryExpr(
@@ -375,7 +375,7 @@ mod tests {
 
     // ── eval_stage: error paths ─────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_stage_unsupported_function() {
         let mut ctx = new_context();
         let expr = Expr::FunctionCall(Identifier("unknown".into()), vec![]);
@@ -387,7 +387,7 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_stage_non_function_expr() {
         let mut ctx = new_context();
         let expr = Expr::Ident("x".into());
@@ -401,7 +401,7 @@ mod tests {
 
     // ── eval_read ───────────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_read_success() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::String(
@@ -412,7 +412,7 @@ mod tests {
         assert!(!ctx.batches.as_ref().unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_read_bad_args() {
         let mut ctx = new_context();
         let args = vec![Expr::Ident("not_a_string".into())];
@@ -424,14 +424,14 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_read_no_args() {
         let mut ctx = new_context();
         let result = eval_read(&mut ctx, vec![]).await;
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_read_too_many_args() {
         let mut ctx = new_context();
         let args = vec![
@@ -444,7 +444,7 @@ mod tests {
 
     // ── eval_select ─────────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_select_success() {
         let mut ctx = new_context();
         eval_read(
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(col_names, vec!["one", "two"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_select_no_preceding_read() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::Symbol("one".into()))];
@@ -476,7 +476,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_select_empty_columns() {
         let mut ctx = new_context();
         eval_read(
@@ -498,7 +498,7 @@ mod tests {
 
     // ── eval_write ──────────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_write_success() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("output.parquet");
@@ -521,7 +521,7 @@ mod tests {
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_write_no_preceding_read() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::String("out.csv".into()))];
@@ -530,7 +530,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_write_bad_args() {
         let mut ctx = new_context();
         let args = vec![Expr::Ident("not_a_string".into())];
@@ -544,7 +544,7 @@ mod tests {
 
     // ── eval: full pipeline integration ─────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_write() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("table.avro");
@@ -562,7 +562,7 @@ mod tests {
         assert!(output_path.exists());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_write_without_select() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("table.csv");
@@ -581,7 +581,7 @@ mod tests {
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_with_strings() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("out.parquet");
@@ -603,7 +603,7 @@ mod tests {
 
     // ── eval_pipe ───────────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_pipe_single_read() {
         let expr = parse(r#"read("fixtures/table.parquet")"#);
         if let Expr::FunctionCall(_, _) = &expr {
@@ -651,7 +651,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_head_success() {
         let mut ctx = new_context();
         eval_read(
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(total_rows, 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_head_preserves_schema() {
         let mut ctx = new_context();
         eval_read(
@@ -725,7 +725,7 @@ mod tests {
 
     // ── eval_head: pipeline integration ────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_head_write() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("headed.csv");
@@ -745,7 +745,7 @@ mod tests {
         assert!(ctx.batches.is_none(), "batches consumed by write");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_head_write() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("selected_headed.csv");

@@ -11,63 +11,191 @@ use crate::pipeline::read_to_batches;
 use crate::pipeline::select;
 use crate::pipeline::write_batches;
 
-/// Context for a REPL session.
-pub struct ReplContext {
+/// Builder for a REPL pipeline.
+pub struct ReplPipelineBuilder {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
 }
 
-/// Evaluates a datu expression.
-pub async fn eval(context: &mut ReplContext, expr: Expr) -> crate::Result<()> {
-    match expr {
-        Expr::BinaryExpr(left, op, right) => {
-            eval_binary_expr(context, left, op, right).await?;
+impl Default for ReplPipelineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReplPipelineBuilder {
+    pub fn new() -> Self {
+        Self {
+            batches: None,
+            writer: None,
         }
-        Expr::FunctionCall(name, args) => {
-            let is_head = name == "head";
-            eval_stage(context, Expr::FunctionCall(name, args)).await?;
-            if is_head {
-                print_batches(context)?;
+    }
+
+    /// Evaluates a datu expression.
+    pub async fn eval(&mut self, expr: Expr) -> crate::Result<()> {
+        match expr {
+            Expr::BinaryExpr(left, op, right) => {
+                self.eval_binary_expr(left, op, right).await?;
             }
+            Expr::FunctionCall(name, args) => {
+                let is_head = name == "head";
+                self.eval_stage(Expr::FunctionCall(name, args)).await?;
+                if is_head {
+                    self.print_batches()?;
+                }
+            }
+            _ => return Err(Error::UnsupportedExpression(expr.to_string())),
         }
-        _ => return Err(Error::UnsupportedExpression(expr.to_string())),
+        Ok(())
     }
-    Ok(())
-}
 
-/// Evaluates a binary expression.
-async fn eval_binary_expr(
-    context: &mut ReplContext,
-    left: Box<Expr>,
-    op: BinaryOp,
-    right: Box<Expr>,
-) -> crate::Result<()> {
-    match op {
-        BinaryOp::Pipe => {
-            eval_pipe(context, left, right).await?;
+    /// Evaluates a binary expression.
+    async fn eval_binary_expr(
+        &mut self,
+        left: Box<Expr>,
+        op: BinaryOp,
+        right: Box<Expr>,
+    ) -> crate::Result<()> {
+        match op {
+            BinaryOp::Pipe => {
+                self.eval_pipe(left, right).await?;
+            }
+            _ => return Err(Error::UnsupportedOperator(op.to_string())),
         }
-        _ => return Err(Error::UnsupportedOperator(op.to_string())),
+        Ok(())
     }
-    Ok(())
-}
 
-/// Evaluates a pipe expression.
-async fn eval_pipe(
-    context: &mut ReplContext,
-    left: Box<Expr>,
-    right: Box<Expr>,
-) -> crate::Result<()> {
-    let mut stages = Vec::new();
-    collect_pipe_stages(*left, &mut stages);
-    collect_pipe_stages(*right, &mut stages);
-    let needs_print = is_head_call(stages.last());
-    for stage in stages {
-        eval_stage(context, stage).await?;
+    /// Evaluates a pipe expression.
+    async fn eval_pipe(&mut self, left: Box<Expr>, right: Box<Expr>) -> crate::Result<()> {
+        let mut stages = Vec::new();
+        collect_pipe_stages(*left, &mut stages);
+        collect_pipe_stages(*right, &mut stages);
+        let needs_print = is_head_call(stages.last());
+        for stage in stages {
+            self.eval_stage(stage).await?;
+        }
+        if needs_print {
+            self.print_batches()?;
+        }
+        Ok(())
     }
-    if needs_print {
-        print_batches(context)?;
+
+    /// Evaluates a single pipeline stage (read, select, head, or write).
+    async fn eval_stage(&mut self, expr: Expr) -> crate::Result<()> {
+        match expr {
+            Expr::FunctionCall(name, args) => {
+                let name_str = name.to_string();
+                match name_str.as_str() {
+                    "read" => self.eval_read(args).await?,
+                    "select" => self.eval_select(args).await?,
+                    "head" => self.eval_head(args)?,
+                    "write" => self.eval_write(args).await?,
+                    _ => return Err(Error::UnsupportedFunctionCall(name_str)),
+                }
+            }
+            _ => return Err(Error::UnsupportedExpression(expr.to_string())),
+        }
+        Ok(())
     }
-    Ok(())
+
+    /// Evaluates a read function call.
+    async fn eval_read(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let path = match args.as_slice() {
+            [Expr::Literal(Literal::String(s))] => s.clone(),
+            _ => {
+                return Err(Error::UnsupportedFunctionCall(format!(
+                    "read expects a single string argument, got {args:?}"
+                )));
+            }
+        };
+        let file_type: FileType = path.as_str().try_into()?;
+        let batches = read_to_batches(&path, file_type, &None, None)
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+        self.batches = Some(batches);
+        Ok(())
+    }
+
+    /// Evaluates a select function call using the DataFusion DataFrame API.
+    async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let columns = extract_column_names(&args)?;
+        if columns.is_empty() {
+            return Err(Error::UnsupportedFunctionCall(
+                "select expects at least one column name".to_string(),
+            ));
+        }
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("select requires a preceding read in the pipe".to_string())
+        })?;
+        let selected = select::select_columns_to_batches(batches, &columns).await?;
+        self.batches = Some(selected);
+        Ok(())
+    }
+
+    /// Evaluates a write function call.
+    async fn eval_write(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let output_path = match args.as_slice() {
+            [Expr::Literal(Literal::String(s))] => s.clone(),
+            _ => {
+                return Err(Error::UnsupportedFunctionCall(format!(
+                    "write expects a single string argument, got {args:?}"
+                )));
+            }
+        };
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("write requires a preceding read in the pipe".to_string())
+        })?;
+        let output_file_type: FileType = output_path.as_str().try_into()?;
+        write_batches(batches, &output_path, output_file_type, true, false)
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+        self.writer = Some(output_path);
+        Ok(())
+    }
+
+    /// Evaluates a head function call: takes the first N rows from the batches in context.
+    fn eval_head(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let n = match args.as_slice() {
+            [Expr::Literal(Literal::Number(num))] => {
+                let s = num.to_string();
+                s.parse::<usize>().map_err(|_| {
+                    Error::UnsupportedFunctionCall(format!(
+                        "head expects a positive integer argument, got {s}"
+                    ))
+                })?
+            }
+            _ => {
+                return Err(Error::UnsupportedFunctionCall(format!(
+                    "head expects a single integer argument, got {args:?}"
+                )));
+            }
+        };
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("head requires a preceding read in the pipe".to_string())
+        })?;
+        let mut result = Vec::new();
+        let mut remaining = n;
+        for batch in batches {
+            if remaining == 0 {
+                break;
+            }
+            let rows = batch.num_rows().min(remaining);
+            result.push(batch.slice(0, rows));
+            remaining -= rows;
+        }
+        self.batches = Some(result);
+        Ok(())
+    }
+
+    /// Prints batches from the context as CSV to stdout (implicit `print(:csv)`).
+    fn print_batches(&mut self) -> crate::Result<()> {
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("print requires batches in the context".to_string())
+        })?;
+        let mut source = VecRecordBatchReaderSource::new(batches);
+        let mut reader = source.get()?;
+        write_record_batches_as_csv(&mut *reader, std::io::stdout())
+    }
 }
 
 /// Collects pipeline stages from a pipe expression (e.g. a |> b |> c -> [a, b, c]).
@@ -79,42 +207,6 @@ fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
         }
         other => out.push(other),
     }
-}
-
-/// Evaluates a single pipeline stage (read, select, head, or write).
-async fn eval_stage(context: &mut ReplContext, expr: Expr) -> crate::Result<()> {
-    match expr {
-        Expr::FunctionCall(name, args) => {
-            let name_str = name.to_string();
-            match name_str.as_str() {
-                "read" => eval_read(context, args).await?,
-                "select" => eval_select(context, args).await?,
-                "head" => eval_head(context, args)?,
-                "write" => eval_write(context, args).await?,
-                _ => return Err(Error::UnsupportedFunctionCall(name_str)),
-            }
-        }
-        _ => return Err(Error::UnsupportedExpression(expr.to_string())),
-    }
-    Ok(())
-}
-
-/// Evaluates a read function call.
-async fn eval_read(context: &mut ReplContext, args: Vec<Expr>) -> crate::Result<()> {
-    let path = match args.as_slice() {
-        [Expr::Literal(Literal::String(s))] => s.clone(),
-        _ => {
-            return Err(Error::UnsupportedFunctionCall(format!(
-                "read expects a single string argument, got {args:?}"
-            )));
-        }
-    };
-    let file_type: FileType = path.as_str().try_into()?;
-    let batches = read_to_batches(&path, file_type, &None, None)
-        .await
-        .map_err(|e| Error::GenericError(e.to_string()))?;
-    context.batches = Some(batches);
-    Ok(())
 }
 
 /// Extracts column names from select args (symbols like :one, identifiers, or strings like "one").
@@ -131,43 +223,6 @@ fn extract_column_names(args: &[Expr]) -> crate::Result<Vec<String>> {
         .collect()
 }
 
-/// Evaluates a select function call using the DataFusion DataFrame API.
-async fn eval_select(context: &mut ReplContext, args: Vec<Expr>) -> crate::Result<()> {
-    let columns = extract_column_names(&args)?;
-    if columns.is_empty() {
-        return Err(Error::UnsupportedFunctionCall(
-            "select expects at least one column name".to_string(),
-        ));
-    }
-    let batches = context.batches.take().ok_or_else(|| {
-        Error::GenericError("select requires a preceding read in the pipe".to_string())
-    })?;
-    let selected = select::select_columns_to_batches(batches, &columns).await?;
-    context.batches = Some(selected);
-    Ok(())
-}
-
-/// Evaluates a write function call.
-async fn eval_write(context: &mut ReplContext, args: Vec<Expr>) -> crate::Result<()> {
-    let output_path = match args.as_slice() {
-        [Expr::Literal(Literal::String(s))] => s.clone(),
-        _ => {
-            return Err(Error::UnsupportedFunctionCall(format!(
-                "write expects a single string argument, got {args:?}"
-            )));
-        }
-    };
-    let batches = context.batches.take().ok_or_else(|| {
-        Error::GenericError("write requires a preceding read in the pipe".to_string())
-    })?;
-    let output_file_type: FileType = output_path.as_str().try_into()?;
-    write_batches(batches, &output_path, output_file_type, true, false)
-        .await
-        .map_err(|e| Error::GenericError(e.to_string()))?;
-    context.writer = Some(output_path);
-    Ok(())
-}
-
 /// Returns true if the given expression is a `head(...)` function call.
 fn is_head_call(expr: Option<&Expr>) -> bool {
     if let Some(Expr::FunctionCall(name, _)) = expr {
@@ -177,51 +232,6 @@ fn is_head_call(expr: Option<&Expr>) -> bool {
     }
 }
 
-/// Evaluates a head function call: takes the first N rows from the batches in context.
-fn eval_head(context: &mut ReplContext, args: Vec<Expr>) -> crate::Result<()> {
-    let n = match args.as_slice() {
-        [Expr::Literal(Literal::Number(num))] => {
-            let s = num.to_string();
-            s.parse::<usize>().map_err(|_| {
-                Error::UnsupportedFunctionCall(format!(
-                    "head expects a positive integer argument, got {s}"
-                ))
-            })?
-        }
-        _ => {
-            return Err(Error::UnsupportedFunctionCall(format!(
-                "head expects a single integer argument, got {args:?}"
-            )));
-        }
-    };
-    let batches = context.batches.take().ok_or_else(|| {
-        Error::GenericError("head requires a preceding read in the pipe".to_string())
-    })?;
-    let mut result = Vec::new();
-    let mut remaining = n;
-    for batch in batches {
-        if remaining == 0 {
-            break;
-        }
-        let rows = batch.num_rows().min(remaining);
-        result.push(batch.slice(0, rows));
-        remaining -= rows;
-    }
-    context.batches = Some(result);
-    Ok(())
-}
-
-/// Prints batches from the context as CSV to stdout (implicit `print(:csv)`).
-fn print_batches(context: &mut ReplContext) -> crate::Result<()> {
-    let batches = context
-        .batches
-        .take()
-        .ok_or_else(|| Error::GenericError("print requires batches in the context".to_string()))?;
-    let mut source = VecRecordBatchReaderSource::new(batches);
-    let mut reader = source.get()?;
-    write_record_batches_as_csv(&mut *reader, std::io::stdout())
-}
-
 #[cfg(test)]
 mod tests {
     use flt::ast::Identifier;
@@ -229,11 +239,8 @@ mod tests {
 
     use super::*;
 
-    fn new_context() -> ReplContext {
-        ReplContext {
-            batches: None,
-            writer: None,
-        }
+    fn new_context() -> ReplPipelineBuilder {
+        ReplPipelineBuilder::new()
     }
 
     fn parse(input: &str) -> Expr {
@@ -352,7 +359,7 @@ mod tests {
     async fn test_eval_unsupported_expression() {
         let mut ctx = new_context();
         let expr = Expr::Literal(Literal::Boolean(true));
-        let result = eval(&mut ctx, expr).await;
+        let result = ctx.eval(expr).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -368,7 +375,7 @@ mod tests {
             BinaryOp::Add,
             Box::new(Expr::Ident("b".into())),
         );
-        let result = eval(&mut ctx, expr).await;
+        let result = ctx.eval(expr).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::UnsupportedOperator(_)));
     }
@@ -379,7 +386,7 @@ mod tests {
     async fn test_eval_stage_unsupported_function() {
         let mut ctx = new_context();
         let expr = Expr::FunctionCall(Identifier("unknown".into()), vec![]);
-        let result = eval_stage(&mut ctx, expr).await;
+        let result = ctx.eval_stage(expr).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -391,7 +398,7 @@ mod tests {
     async fn test_eval_stage_non_function_expr() {
         let mut ctx = new_context();
         let expr = Expr::Ident("x".into());
-        let result = eval_stage(&mut ctx, expr).await;
+        let result = ctx.eval_stage(expr).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -407,7 +414,7 @@ mod tests {
         let args = vec![Expr::Literal(Literal::String(
             "fixtures/table.parquet".into(),
         ))];
-        eval_read(&mut ctx, args).await.expect("eval_read");
+        ctx.eval_read(args).await.expect("eval_read");
         assert!(ctx.batches.is_some());
         assert!(!ctx.batches.as_ref().unwrap().is_empty());
     }
@@ -416,7 +423,7 @@ mod tests {
     async fn test_eval_read_bad_args() {
         let mut ctx = new_context();
         let args = vec![Expr::Ident("not_a_string".into())];
-        let result = eval_read(&mut ctx, args).await;
+        let result = ctx.eval_read(args).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -427,7 +434,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_read_no_args() {
         let mut ctx = new_context();
-        let result = eval_read(&mut ctx, vec![]).await;
+        let result = ctx.eval_read(vec![]).await;
         assert!(result.is_err());
     }
 
@@ -438,7 +445,7 @@ mod tests {
             Expr::Literal(Literal::String("a.parquet".into())),
             Expr::Literal(Literal::String("b.parquet".into())),
         ];
-        let result = eval_read(&mut ctx, args).await;
+        let result = ctx.eval_read(args).await;
         assert!(result.is_err());
     }
 
@@ -447,12 +454,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_select_success() {
         let mut ctx = new_context();
-        eval_read(
-            &mut ctx,
-            vec![Expr::Literal(Literal::String(
-                "fixtures/table.parquet".into(),
-            ))],
-        )
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
         .await
         .expect("read");
 
@@ -460,7 +464,7 @@ mod tests {
             Expr::Literal(Literal::Symbol("one".into())),
             Expr::Literal(Literal::Symbol("two".into())),
         ];
-        eval_select(&mut ctx, args).await.expect("select");
+        ctx.eval_select(args).await.expect("select");
         let batches = ctx.batches.as_ref().expect("batches after select");
         let schema = batches[0].schema();
         let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
@@ -471,7 +475,7 @@ mod tests {
     async fn test_eval_select_no_preceding_read() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::Symbol("one".into()))];
-        let result = eval_select(&mut ctx, args).await;
+        let result = ctx.eval_select(args).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
@@ -479,16 +483,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_select_empty_columns() {
         let mut ctx = new_context();
-        eval_read(
-            &mut ctx,
-            vec![Expr::Literal(Literal::String(
-                "fixtures/table.parquet".into(),
-            ))],
-        )
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
         .await
         .expect("read");
 
-        let result = eval_select(&mut ctx, vec![]).await;
+        let result = ctx.eval_select(vec![]).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -505,17 +506,14 @@ mod tests {
         let output_str = output_path.to_str().unwrap().to_string();
 
         let mut ctx = new_context();
-        eval_read(
-            &mut ctx,
-            vec![Expr::Literal(Literal::String(
-                "fixtures/table.parquet".into(),
-            ))],
-        )
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
         .await
         .expect("read");
 
         let args = vec![Expr::Literal(Literal::String(output_str.clone()))];
-        eval_write(&mut ctx, args).await.expect("write");
+        ctx.eval_write(args).await.expect("write");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -525,7 +523,7 @@ mod tests {
     async fn test_eval_write_no_preceding_read() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::String("out.csv".into()))];
-        let result = eval_write(&mut ctx, args).await;
+        let result = ctx.eval_write(args).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
@@ -534,7 +532,7 @@ mod tests {
     async fn test_eval_write_bad_args() {
         let mut ctx = new_context();
         let args = vec![Expr::Ident("not_a_string".into())];
-        let result = eval_write(&mut ctx, args).await;
+        let result = ctx.eval_write(args).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -557,7 +555,7 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        eval(&mut ctx, expr).await.expect("eval");
+        ctx.eval(expr).await.expect("eval");
 
         assert!(output_path.exists());
     }
@@ -575,7 +573,7 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        eval(&mut ctx, expr).await.expect("eval");
+        ctx.eval(expr).await.expect("eval");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -594,7 +592,7 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        eval(&mut ctx, expr).await.expect("eval");
+        ctx.eval(expr).await.expect("eval");
 
         assert!(output_path.exists());
         let batches = ctx.batches.as_ref();
@@ -613,7 +611,7 @@ mod tests {
                 Identifier("select".into()),
                 vec![Expr::Literal(Literal::Symbol("one".into()))],
             ));
-            eval_pipe(&mut ctx, left, right).await.expect("eval_pipe");
+            ctx.eval_pipe(left, right).await.expect("eval_pipe");
             let batches = ctx.batches.as_ref().expect("batches");
             let schema = batches[0].schema();
             assert_eq!(schema.fields().len(), 1);
@@ -654,17 +652,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_head_success() {
         let mut ctx = new_context();
-        eval_read(
-            &mut ctx,
-            vec![Expr::Literal(Literal::String(
-                "fixtures/table.parquet".into(),
-            ))],
-        )
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
         .await
         .expect("read");
 
         let args = parse_fn_args("head(2)");
-        eval_head(&mut ctx, args).expect("head");
+        ctx.eval_head(args).expect("head");
 
         let batches = ctx.batches.as_ref().expect("batches after head");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -674,18 +669,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_head_preserves_schema() {
         let mut ctx = new_context();
-        eval_read(
-            &mut ctx,
-            vec![Expr::Literal(Literal::String(
-                "fixtures/table.parquet".into(),
-            ))],
-        )
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
         .await
         .expect("read");
 
         let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
         let args = parse_fn_args("head(1)");
-        eval_head(&mut ctx, args).expect("head");
+        ctx.eval_head(args).expect("head");
 
         let batches = ctx.batches.as_ref().expect("batches");
         assert_eq!(batches[0].schema(), original_schema);
@@ -695,7 +687,7 @@ mod tests {
     fn test_eval_head_no_preceding_read() {
         let mut ctx = new_context();
         let args = parse_fn_args("head(5)");
-        let result = eval_head(&mut ctx, args);
+        let result = ctx.eval_head(args);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
@@ -704,7 +696,7 @@ mod tests {
     fn test_eval_head_bad_args_string() {
         let mut ctx = new_context();
         let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-        let result = eval_head(&mut ctx, args);
+        let result = ctx.eval_head(args);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -715,7 +707,7 @@ mod tests {
     #[test]
     fn test_eval_head_no_args() {
         let mut ctx = new_context();
-        let result = eval_head(&mut ctx, vec![]);
+        let result = ctx.eval_head(vec![]);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -738,7 +730,7 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        eval(&mut ctx, expr).await.expect("eval");
+        ctx.eval(expr).await.expect("eval");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -758,7 +750,7 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        eval(&mut ctx, expr).await.expect("eval");
+        ctx.eval(expr).await.expect("eval");
 
         assert!(output_path.exists());
     }

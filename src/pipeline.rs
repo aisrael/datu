@@ -13,6 +13,7 @@ pub mod xlsx;
 pub mod yaml;
 
 use arrow::array::RecordBatchReader;
+use futures::StreamExt;
 
 use crate::FileType;
 use crate::Result;
@@ -120,34 +121,32 @@ impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
     }
 }
 
-/// A `RecordBatchReader` that wraps a `DataFrameSource`, eagerly collecting
-/// all batches from the underlying DataFrame on construction.
+/// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming
+/// batches from the underlying DataFrame via `execute_stream()`.
 pub struct DataFrameToBatchReader {
     schema: std::sync::Arc<arrow::datatypes::Schema>,
-    batches: Vec<arrow::record_batch::RecordBatch>,
-    index: usize,
+    stream: datafusion::physical_plan::SendableRecordBatchStream,
+    handle: tokio::runtime::Handle,
 }
 
 impl DataFrameToBatchReader {
     pub async fn try_new(mut source: DataFrameSource) -> Result<Self> {
         let df = *source.get()?;
-        let batches = df
-            .collect()
+        let stream = df
+            .execute_stream()
             .await
             .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-        let schema = batches
-            .first()
-            .map(|b| b.schema())
-            .unwrap_or_else(|| std::sync::Arc::new(arrow::datatypes::Schema::empty()));
+        let schema = stream.schema();
+        let handle = tokio::runtime::Handle::current();
         Ok(Self {
             schema,
-            batches,
-            index: 0,
+            stream,
+            handle,
         })
     }
 
     pub fn into_batches(self) -> Vec<arrow::record_batch::RecordBatch> {
-        self.batches
+        self.filter_map(|r| r.ok()).collect()
     }
 }
 
@@ -155,12 +154,9 @@ impl Iterator for DataFrameToBatchReader {
     type Item = arrow::error::Result<arrow::record_batch::RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.batches.len() {
-            return None;
-        }
-        let batch = self.batches[self.index].clone();
-        self.index += 1;
-        Some(Ok(batch))
+        let handle = self.handle.clone();
+        tokio::task::block_in_place(|| handle.block_on(self.stream.next()))
+            .map(|r| r.map_err(|e| arrow::error::ArrowError::ExternalError(Box::new(e))))
     }
 }
 

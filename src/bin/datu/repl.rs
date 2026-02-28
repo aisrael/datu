@@ -1,8 +1,7 @@
 //! REPL for datu
 
 use anyhow::Result;
-use datu::cli::repl::ReplContext;
-use datu::cli::repl::eval;
+use datu::cli::repl::ReplPipelineBuilder;
 use flt::parser::parse_expr;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
@@ -17,15 +16,12 @@ pub async fn run() -> Result<()> {
         .auto_add_history(true)
         .build();
     let mut rl = DefaultEditor::with_config(config)?;
-    let mut context = ReplContext {
-        batches: None,
-        writer: None,
-    };
+    let mut context = ReplPipelineBuilder::new();
     repl(&mut rl, &mut context).await
 }
 
 /// Reads, evaluates, and prints in a loop until EOF.
-async fn repl(rl: &mut DefaultEditor, context: &mut ReplContext) -> Result<()> {
+async fn repl(rl: &mut DefaultEditor, context: &mut ReplPipelineBuilder) -> Result<()> {
     loop {
         // On success, we get the input line. On EOF, we break the loop.
         // On interrupt, we continue. On any other error, we return.
@@ -43,7 +39,7 @@ async fn repl(rl: &mut DefaultEditor, context: &mut ReplContext) -> Result<()> {
             Ok((remainder, expr)) => {
                 let remainder = remainder.trim();
                 if remainder.is_empty() {
-                    eval(context, expr).await?;
+                    context.eval(expr).await?;
                 } else {
                     eprintln!(
                         "parse error: unexpected input after expression: {:?}",

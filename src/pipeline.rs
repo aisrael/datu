@@ -15,6 +15,7 @@ use arrow::array::RecordBatchReader;
 
 use crate::FileType;
 use crate::Result;
+use crate::cli::convert::DataFrameSource;
 
 /// Arguments for reading a file (Avro, Parquet, ORC).
 pub struct ReadArgs {
@@ -118,6 +119,56 @@ impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
     }
 }
 
+/// A `RecordBatchReader` that wraps a `DataFrameSource`, eagerly collecting
+/// all batches from the underlying DataFrame on construction.
+pub struct DataFrameToBatchReader {
+    schema: std::sync::Arc<arrow::datatypes::Schema>,
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    index: usize,
+}
+
+impl DataFrameToBatchReader {
+    pub async fn try_new(mut source: DataFrameSource) -> Result<Self> {
+        let df = *source.get()?;
+        let batches = df
+            .collect()
+            .await
+            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        let schema = batches
+            .first()
+            .map(|b| b.schema())
+            .unwrap_or_else(|| std::sync::Arc::new(arrow::datatypes::Schema::empty()));
+        Ok(Self {
+            schema,
+            batches,
+            index: 0,
+        })
+    }
+
+    pub fn into_batches(self) -> Vec<arrow::record_batch::RecordBatch> {
+        self.batches
+    }
+}
+
+impl Iterator for DataFrameToBatchReader {
+    type Item = arrow::error::Result<arrow::record_batch::RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.batches.len() {
+            return None;
+        }
+        let batch = self.batches[self.index].clone();
+        self.index += 1;
+        Some(Ok(batch))
+    }
+}
+
+impl RecordBatchReader for DataFrameToBatchReader {
+    fn schema(&self) -> std::sync::Arc<arrow::datatypes::Schema> {
+        self.schema.clone()
+    }
+}
+
 /// Reads input into record batches for use by REPL and other callers that need RecordBatchReaderSource.
 /// Uses DataFusion for Parquet and Avro; uses orc-rust for ORC.
 pub async fn read_to_batches(
@@ -126,11 +177,13 @@ pub async fn read_to_batches(
     select: &Option<Vec<String>>,
     limit: Option<usize>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let mut source =
+    let source =
         crate::cli::convert::read_dataframe(input_path, input_file_type, select.clone(), limit)
             .execute(())?;
-    let df = *source.get().map_err(|e| anyhow::anyhow!("{e}"))?;
-    df.collect().await.map_err(|e| anyhow::anyhow!("{e}"))
+    let reader = DataFrameToBatchReader::try_new(source)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(reader.into_batches())
 }
 
 /// Writes record batches to output file. Used by REPL.

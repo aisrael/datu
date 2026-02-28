@@ -2,6 +2,7 @@
 
 pub mod avro;
 pub mod csv;
+pub mod data_frame_reader;
 pub mod display;
 pub mod json;
 pub mod orc;
@@ -178,7 +179,7 @@ pub async fn read_to_batches(
     limit: Option<usize>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
     let source =
-        crate::cli::convert::read_dataframe(input_path, input_file_type, select.clone(), limit)
+        data_frame_reader::read_dataframe(input_path, input_file_type, select.clone(), limit)
             .execute(())?;
     let reader = DataFrameToBatchReader::try_new(source)
         .await

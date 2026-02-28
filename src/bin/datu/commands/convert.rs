@@ -1,8 +1,8 @@
 use clap::Args;
 use datu::FileType;
-use datu::cli::convert::DataFrameReader;
 use datu::cli::convert::DataFrameWriter;
 use datu::pipeline::Step;
+use datu::pipeline::data_frame_reader::DataFrameReader;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]

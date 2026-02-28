@@ -11,6 +11,16 @@ use crate::pipeline::read_to_batches;
 use crate::pipeline::select;
 use crate::pipeline::write_batches;
 
+/// A planned pipeline stage with validated, extracted arguments.
+#[derive(Debug, PartialEq)]
+enum PipelineStage {
+    Read { path: String },
+    Select { columns: Vec<String> },
+    Head { n: usize },
+    Write { path: String },
+    Print,
+}
+
 /// Builder for a REPL pipeline.
 pub struct ReplPipelineBuilder {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
@@ -31,18 +41,15 @@ impl ReplPipelineBuilder {
         }
     }
 
-    /// Evaluates a datu expression.
+    /// Evaluates a datu REPL expression.
     pub async fn eval(&mut self, expr: Expr) -> crate::Result<()> {
         match expr {
             Expr::BinaryExpr(left, op, right) => {
                 self.eval_binary_expr(left, op, right).await?;
             }
             Expr::FunctionCall(name, args) => {
-                let is_head = name == "head";
-                self.eval_stage(Expr::FunctionCall(name, args)).await?;
-                if is_head {
-                    self.print_batches()?;
-                }
+                let pipeline = plan_pipeline(vec![Expr::FunctionCall(name, args)])?;
+                self.execute_pipeline(pipeline).await?;
             }
             _ => return Err(Error::UnsupportedExpression(expr.to_string())),
         }
@@ -65,111 +72,56 @@ impl ReplPipelineBuilder {
         Ok(())
     }
 
-    /// Evaluates a pipe expression.
+    /// Plans and executes a pipe expression as a pipeline.
     async fn eval_pipe(&mut self, left: Box<Expr>, right: Box<Expr>) -> crate::Result<()> {
-        let mut stages = Vec::new();
-        collect_pipe_stages(*left, &mut stages);
-        collect_pipe_stages(*right, &mut stages);
-        let needs_print = is_head_call(stages.last());
+        let mut exprs = Vec::new();
+        collect_pipe_stages(*left, &mut exprs);
+        collect_pipe_stages(*right, &mut exprs);
+        let pipeline = plan_pipeline(exprs)?;
+        self.execute_pipeline(pipeline).await
+    }
+
+    /// Executes a planned pipeline.
+    async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
         for stage in stages {
-            self.eval_stage(stage).await?;
-        }
-        if needs_print {
-            self.print_batches()?;
+            self.execute_stage(stage).await?;
         }
         Ok(())
     }
 
-    /// Evaluates a single pipeline stage (read, select, head, or write).
-    async fn eval_stage(&mut self, expr: Expr) -> crate::Result<()> {
-        match expr {
-            Expr::FunctionCall(name, args) => {
-                let name_str = name.to_string();
-                match name_str.as_str() {
-                    "read" => self.eval_read(args).await?,
-                    "select" => self.eval_select(args).await?,
-                    "head" => self.eval_head(args)?,
-                    "write" => self.eval_write(args).await?,
-                    _ => return Err(Error::UnsupportedFunctionCall(name_str)),
-                }
-            }
-            _ => return Err(Error::UnsupportedExpression(expr.to_string())),
+    /// Dispatches a single planned stage to the appropriate execution method.
+    async fn execute_stage(&mut self, stage: PipelineStage) -> crate::Result<()> {
+        match stage {
+            PipelineStage::Read { path } => self.exec_read(&path).await,
+            PipelineStage::Select { columns } => self.exec_select(&columns).await,
+            PipelineStage::Head { n } => self.exec_head(n),
+            PipelineStage::Write { path } => self.exec_write(&path).await,
+            PipelineStage::Print => self.print_batches(),
         }
-        Ok(())
     }
 
-    /// Evaluates a read function call.
-    async fn eval_read(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let path = match args.as_slice() {
-            [Expr::Literal(Literal::String(s))] => s.clone(),
-            _ => {
-                return Err(Error::UnsupportedFunctionCall(format!(
-                    "read expects a single string argument, got {args:?}"
-                )));
-            }
-        };
-        let file_type: FileType = path.as_str().try_into()?;
-        let batches = read_to_batches(&path, file_type, &None, None)
+    /// Reads a file into record batches.
+    async fn exec_read(&mut self, path: &str) -> crate::Result<()> {
+        let file_type: FileType = path.try_into()?;
+        let batches = read_to_batches(path, file_type, &None, None)
             .await
             .map_err(|e| Error::GenericError(e.to_string()))?;
         self.batches = Some(batches);
         Ok(())
     }
 
-    /// Evaluates a select function call using the DataFusion DataFrame API.
-    async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let columns = extract_column_names(&args)?;
-        if columns.is_empty() {
-            return Err(Error::UnsupportedFunctionCall(
-                "select expects at least one column name".to_string(),
-            ));
-        }
+    /// Selects columns from the batches in context.
+    async fn exec_select(&mut self, columns: &[String]) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("select requires a preceding read in the pipe".to_string())
         })?;
-        let selected = select::select_columns_to_batches(batches, &columns).await?;
+        let selected = select::select_columns_to_batches(batches, columns).await?;
         self.batches = Some(selected);
         Ok(())
     }
 
-    /// Evaluates a write function call.
-    async fn eval_write(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let output_path = match args.as_slice() {
-            [Expr::Literal(Literal::String(s))] => s.clone(),
-            _ => {
-                return Err(Error::UnsupportedFunctionCall(format!(
-                    "write expects a single string argument, got {args:?}"
-                )));
-            }
-        };
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("write requires a preceding read in the pipe".to_string())
-        })?;
-        let output_file_type: FileType = output_path.as_str().try_into()?;
-        write_batches(batches, &output_path, output_file_type, true, false)
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
-        self.writer = Some(output_path);
-        Ok(())
-    }
-
-    /// Evaluates a head function call: takes the first N rows from the batches in context.
-    fn eval_head(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let n = match args.as_slice() {
-            [Expr::Literal(Literal::Number(num))] => {
-                let s = num.to_string();
-                s.parse::<usize>().map_err(|_| {
-                    Error::UnsupportedFunctionCall(format!(
-                        "head expects a positive integer argument, got {s}"
-                    ))
-                })?
-            }
-            _ => {
-                return Err(Error::UnsupportedFunctionCall(format!(
-                    "head expects a single integer argument, got {args:?}"
-                )));
-            }
-        };
+    /// Takes the first N rows from the batches in context.
+    fn exec_head(&mut self, n: usize) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("head requires a preceding read in the pipe".to_string())
         })?;
@@ -184,6 +136,19 @@ impl ReplPipelineBuilder {
             remaining -= rows;
         }
         self.batches = Some(result);
+        Ok(())
+    }
+
+    /// Writes the batches in context to an output file.
+    async fn exec_write(&mut self, output_path: &str) -> crate::Result<()> {
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("write requires a preceding read in the pipe".to_string())
+        })?;
+        let output_file_type: FileType = output_path.try_into()?;
+        write_batches(batches, output_path, output_file_type, true, false)
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+        self.writer = Some(output_path.to_string());
         Ok(())
     }
 
@@ -209,6 +174,16 @@ fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
     }
 }
 
+/// Extracts a single path string from a function's argument list.
+fn extract_path_from_args(func_name: &str, args: &[Expr]) -> crate::Result<String> {
+    match args {
+        [Expr::Literal(Literal::String(s))] => Ok(s.clone()),
+        _ => Err(Error::UnsupportedFunctionCall(format!(
+            "{func_name} expects a single string argument, got {args:?}"
+        ))),
+    }
+}
+
 /// Extracts column names from select args (symbols like :one, identifiers, or strings like "one").
 fn extract_column_names(args: &[Expr]) -> crate::Result<Vec<String>> {
     args.iter()
@@ -223,12 +198,109 @@ fn extract_column_names(args: &[Expr]) -> crate::Result<Vec<String>> {
         .collect()
 }
 
-/// Returns true if the given expression is a `head(...)` function call.
+#[cfg(test)]
+impl ReplPipelineBuilder {
+    async fn eval_stage(&mut self, expr: Expr) -> crate::Result<()> {
+        let stage = plan_stage(expr)?;
+        self.execute_stage(stage).await
+    }
+
+    async fn eval_read(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let path = extract_path_from_args("read", &args)?;
+        self.exec_read(&path).await
+    }
+
+    async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let columns = extract_column_names(&args)?;
+        if columns.is_empty() {
+            return Err(Error::UnsupportedFunctionCall(
+                "select expects at least one column name".to_string(),
+            ));
+        }
+        self.exec_select(&columns).await
+    }
+
+    fn eval_head(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let n = extract_head_n(&args)?;
+        self.exec_head(n)
+    }
+
+    async fn eval_write(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let path = extract_path_from_args("write", &args)?;
+        self.exec_write(&path).await
+    }
+}
+
+#[cfg(test)]
 fn is_head_call(expr: Option<&Expr>) -> bool {
     if let Some(Expr::FunctionCall(name, _)) = expr {
         *name == "head"
     } else {
         false
+    }
+}
+
+/// Plans a single pipeline stage from an AST expression.
+fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
+    match expr {
+        Expr::FunctionCall(name, args) => {
+            let name_str = name.to_string();
+            match name_str.as_str() {
+                "read" => {
+                    let path = extract_path_from_args("read", &args)?;
+                    Ok(PipelineStage::Read { path })
+                }
+                "select" => {
+                    let columns = extract_column_names(&args)?;
+                    if columns.is_empty() {
+                        return Err(Error::UnsupportedFunctionCall(
+                            "select expects at least one column name".to_string(),
+                        ));
+                    }
+                    Ok(PipelineStage::Select { columns })
+                }
+                "head" => {
+                    let n = extract_head_n(&args)?;
+                    Ok(PipelineStage::Head { n })
+                }
+                "write" => {
+                    let path = extract_path_from_args("write", &args)?;
+                    Ok(PipelineStage::Write { path })
+                }
+                _ => Err(Error::UnsupportedFunctionCall(name_str)),
+            }
+        }
+        _ => Err(Error::UnsupportedExpression(expr.to_string())),
+    }
+}
+
+/// Plans a full pipeline from a list of AST expressions.
+/// Automatically appends a Print stage if the last stage is Head.
+fn plan_pipeline(exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
+    let mut stages: Vec<PipelineStage> = exprs
+        .into_iter()
+        .map(plan_stage)
+        .collect::<crate::Result<Vec<_>>>()?;
+    if matches!(stages.last(), Some(PipelineStage::Head { .. })) {
+        stages.push(PipelineStage::Print);
+    }
+    Ok(stages)
+}
+
+/// Extracts the integer argument N from a head() call's args.
+fn extract_head_n(args: &[Expr]) -> crate::Result<usize> {
+    match args {
+        [Expr::Literal(Literal::Number(num))] => {
+            let s = num.to_string();
+            s.parse::<usize>().map_err(|_| {
+                Error::UnsupportedFunctionCall(format!(
+                    "head expects a positive integer argument, got {s}"
+                ))
+            })
+        }
+        _ => Err(Error::UnsupportedFunctionCall(format!(
+            "head expects a single integer argument, got {args:?}"
+        ))),
     }
 }
 
@@ -247,6 +319,154 @@ mod tests {
         let (remainder, expr) = parse_expr(input).expect("parse");
         assert!(remainder.trim().is_empty(), "unconsumed: {remainder:?}");
         expr
+    }
+
+    // ── plan_stage ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_plan_stage_read() {
+        let expr = parse(r#"read("file.parquet")"#);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            PipelineStage::Read {
+                path: "file.parquet".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_stage_select() {
+        let expr = Expr::FunctionCall(
+            Identifier("select".into()),
+            vec![
+                Expr::Literal(Literal::Symbol("one".into())),
+                Expr::Literal(Literal::Symbol("two".into())),
+            ],
+        );
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            PipelineStage::Select {
+                columns: vec!["one".to_string(), "two".to_string()]
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_stage_head() {
+        let expr = parse("head(5)");
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Head { n: 5 });
+    }
+
+    #[test]
+    fn test_plan_stage_write() {
+        let expr = parse(r#"write("output.csv")"#);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            PipelineStage::Write {
+                path: "output.csv".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_stage_unsupported_function() {
+        let expr = Expr::FunctionCall(Identifier("unknown".into()), vec![]);
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedFunctionCall(_)
+        ));
+    }
+
+    #[test]
+    fn test_plan_stage_non_function_expr() {
+        let expr = Expr::Ident("x".into());
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedExpression(_)
+        ));
+    }
+
+    // ── plan_pipeline ─────────────────────────────────────────────
+
+    #[test]
+    fn test_plan_pipeline_read_select_write() {
+        let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(
+            pipeline[1],
+            PipelineStage::Select {
+                columns: vec!["x".to_string()]
+            }
+        );
+        assert_eq!(
+            pipeline[2],
+            PipelineStage::Write {
+                path: "b.csv".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_pipeline_auto_appends_print_after_head() {
+        let expr = parse(r#"read("a.parquet") |> head(5)"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(pipeline[1], PipelineStage::Head { n: 5 });
+        assert_eq!(pipeline[2], PipelineStage::Print);
+    }
+
+    #[test]
+    fn test_plan_pipeline_no_print_when_write_follows_head() {
+        let expr = parse(r#"read("a.parquet") |> head(5) |> write("b.csv")"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
+        assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
+    }
+
+    // ── extract_head_n ────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_head_n_valid() {
+        let args = parse_fn_args("head(10)");
+        assert_eq!(extract_head_n(&args).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_extract_head_n_bad_args() {
+        let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
+        assert!(extract_head_n(&args).is_err());
+    }
+
+    #[test]
+    fn test_extract_head_n_empty_args() {
+        assert!(extract_head_n(&[]).is_err());
     }
 
     // ── collect_pipe_stages ─────────────────────────────────────────

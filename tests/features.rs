@@ -87,6 +87,17 @@ fn first_line_should_be(world: &mut CliWorld, expected: String) {
     );
 }
 
+#[then(regex = r#"^the first line (?:of the output )?should contain "(.+)"$"#)]
+fn first_line_should_contain(world: &mut CliWorld, expected: String) {
+    let output = world.output.as_ref().expect("No output captured");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout.lines().next().unwrap_or("");
+    assert!(
+        first_line.contains(&expected),
+        "Expected first line to contain '{expected}', but got: {first_line}"
+    );
+}
+
 #[then(regex = r#"^the output should be:$"#)]
 fn output_should_be_docstring(world: &mut CliWorld, step: &Step) {
     let expected = step

@@ -378,5 +378,5 @@ fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
 }
 
 fn main() {
-    futures::executor::block_on(CliWorld::run("features"));
+    futures::executor::block_on(CliWorld::run("features/cli"));
 }

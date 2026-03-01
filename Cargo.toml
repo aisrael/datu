@@ -32,7 +32,7 @@ serde_json = "1.0"
 rust_xlsxwriter = { version = "0.93", features = ["chrono"] }
 rustc-literal-escaper = "0.0.7"
 rustyline = "17.0"
-flt = { git = "https://github.com/aisrael/flt" }
+flt = { version = "0.0.2" }
 
 [dev-dependencies]
 criterion = "0.5"

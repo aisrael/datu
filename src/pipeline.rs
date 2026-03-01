@@ -2,6 +2,7 @@
 
 pub mod avro;
 pub mod csv;
+pub mod data_frame_reader;
 pub mod display;
 pub mod json;
 pub mod orc;
@@ -12,8 +13,11 @@ pub mod xlsx;
 pub mod yaml;
 
 use arrow::array::RecordBatchReader;
+use futures::StreamExt;
 
+use crate::FileType;
 use crate::Result;
+use crate::cli::convert::DataFrameSource;
 
 /// Arguments for reading a file (Avro, Parquet, ORC).
 pub struct ReadArgs {
@@ -96,7 +100,7 @@ impl RecordBatchReader for VecRecordBatchReader {
     }
 }
 
-/// A RecordBatchReaderSource that yields batches from a Vec.
+/// A concrete implementation of Source<dyn RecordBatchReader + 'static> that yiedls a VecRecordBatchReader.
 pub struct VecRecordBatchReaderSource {
     batches: Option<Vec<arrow::record_batch::RecordBatch>>,
 }
@@ -115,4 +119,90 @@ impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
             .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))?;
         Ok(Box::new(VecRecordBatchReader { batches, index: 0 }))
     }
+}
+
+/// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming
+/// batches from the underlying DataFrame via `execute_stream()`.
+pub struct DataFrameToBatchReader {
+    schema: std::sync::Arc<arrow::datatypes::Schema>,
+    stream: datafusion::physical_plan::SendableRecordBatchStream,
+    handle: tokio::runtime::Handle,
+}
+
+impl DataFrameToBatchReader {
+    pub async fn try_new(mut source: DataFrameSource) -> Result<Self> {
+        let df = *source.get()?;
+        let stream = df
+            .execute_stream()
+            .await
+            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        let schema = stream.schema();
+        let handle = tokio::runtime::Handle::current();
+        Ok(Self {
+            schema,
+            stream,
+            handle,
+        })
+    }
+
+    pub fn into_batches(self) -> Vec<arrow::record_batch::RecordBatch> {
+        self.filter_map(|r| r.ok()).collect()
+    }
+}
+
+impl Iterator for DataFrameToBatchReader {
+    type Item = arrow::error::Result<arrow::record_batch::RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let handle = self.handle.clone();
+        tokio::task::block_in_place(|| handle.block_on(self.stream.next()))
+            .map(|r| r.map_err(|e| arrow::error::ArrowError::ExternalError(Box::new(e))))
+    }
+}
+
+impl RecordBatchReader for DataFrameToBatchReader {
+    fn schema(&self) -> std::sync::Arc<arrow::datatypes::Schema> {
+        self.schema.clone()
+    }
+}
+
+/// Reads input into record batches for use by REPL and other callers that need RecordBatchReaderSource.
+/// Uses DataFusion for Parquet and Avro; uses orc-rust for ORC.
+pub async fn read_to_batches(
+    input_path: &str,
+    input_file_type: FileType,
+    select: &Option<Vec<String>>,
+    limit: Option<usize>,
+) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
+    let source =
+        data_frame_reader::read_dataframe(input_path, input_file_type, select.clone(), limit)
+            .execute(())?;
+    let reader = DataFrameToBatchReader::try_new(source)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(reader.into_batches())
+}
+
+/// Writes record batches to output file. Used by REPL.
+pub async fn write_batches(
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    output_path: &str,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+) -> anyhow::Result<()> {
+    let ctx = datafusion::execution::context::SessionContext::new();
+    let df = ctx
+        .read_batches(batches)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let source = crate::cli::convert::DataFrameSource::new(df);
+    let writer_step = crate::cli::convert::DataFrameWriter::new(
+        output_path,
+        output_file_type,
+        sparse,
+        json_pretty,
+    );
+    writer_step.execute(source)?;
+    Ok(())
 }

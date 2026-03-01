@@ -1958,8 +1958,9 @@ dependencies = [
 
 [[package]]
 name = "flt"
-version = "0.0.1"
-source = "git+https://github.com/aisrael/flt#ccc6e6ad1235e120cc8a5535fe3d2bd68479458e"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23c52f2acb3a83749d169922809303a4a1a2c13a286d065905172b5459731dbf"
 dependencies = [
  "bigdecimal",
  "env_logger",

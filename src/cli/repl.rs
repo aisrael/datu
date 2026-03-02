@@ -18,6 +18,7 @@ enum PipelineStage {
     Select { columns: Vec<String> },
     Head { n: usize },
     Tail { n: usize },
+    Count,
     Write { path: String },
     Print,
 }
@@ -97,6 +98,7 @@ impl ReplPipelineBuilder {
             PipelineStage::Select { columns } => self.exec_select(&columns).await,
             PipelineStage::Head { n } => self.exec_head(n),
             PipelineStage::Tail { n } => self.exec_tail(n),
+            PipelineStage::Count => self.exec_count(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
             PipelineStage::Print => self.print_batches(),
         }
@@ -169,6 +171,16 @@ impl ReplPipelineBuilder {
             rows_emitted += take;
         }
         self.batches = Some(result);
+        Ok(())
+    }
+
+    /// Counts the total number of rows across all batches and prints the result.
+    fn exec_count(&mut self) -> crate::Result<()> {
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("count requires a preceding read in the pipe".to_string())
+        })?;
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        println!("{total}");
         Ok(())
     }
 
@@ -267,6 +279,10 @@ impl ReplPipelineBuilder {
         let path = extract_path_from_args("write", &args)?;
         self.exec_write(&path).await
     }
+
+    fn eval_count(&mut self) -> crate::Result<()> {
+        self.exec_count()
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +320,14 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                 "tail" => {
                     let n = extract_tail_n(&args)?;
                     Ok(PipelineStage::Tail { n })
+                }
+                "count" => {
+                    if !args.is_empty() {
+                        return Err(Error::UnsupportedFunctionCall(
+                            "count takes no arguments".to_string(),
+                        ));
+                    }
+                    Ok(PipelineStage::Count)
                 }
                 "write" => {
                     let path = extract_path_from_args("write", &args)?;
@@ -1175,6 +1199,96 @@ mod tests {
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
         assert!(ctx.batches.is_none(), "batches consumed by write");
+    }
+
+    // ── plan_stage: count ────────────────────────────────────────
+
+    #[test]
+    fn test_plan_stage_count() {
+        let expr = parse("count()");
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Count);
+    }
+
+    #[test]
+    fn test_plan_stage_count_rejects_args() {
+        let expr = Expr::FunctionCall(
+            Identifier("count".into()),
+            vec![Expr::Literal(Literal::String("extra".into()))],
+        );
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedFunctionCall(_)
+        ));
+    }
+
+    // ── plan_pipeline: count does not auto-append print ─────────
+
+    #[test]
+    fn test_plan_pipeline_count_no_auto_print() {
+        let expr = parse(r#"read("a.parquet") |> count()"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 2);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(pipeline[1], PipelineStage::Count);
+    }
+
+    // ── eval_count ─────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_eval_count_success() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        ctx.eval_count().expect("count");
+        assert!(ctx.batches.is_none(), "batches consumed by count");
+    }
+
+    #[test]
+    fn test_eval_count_no_preceding_read() {
+        let mut ctx = new_context();
+        let result = ctx.eval_count();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
+    }
+
+    // ── eval_count: pipeline integration ────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_count() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
+        let mut ctx = new_context();
+        ctx.eval(expr).await.expect("eval");
+        assert!(ctx.batches.is_none(), "batches consumed by count");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_select_count() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> count()"#);
+        let mut ctx = new_context();
+        ctx.eval(expr).await.expect("eval");
+        assert!(ctx.batches.is_none(), "batches consumed by count");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_head_count() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> head(2) |> count()"#);
+        let mut ctx = new_context();
+        ctx.eval(expr).await.expect("eval");
+        assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
     #[tokio::test(flavor = "multi_thread")]

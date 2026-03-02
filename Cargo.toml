@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.2.4"
+version = "0.3.0-alpha"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -37,6 +37,7 @@ flt = { version = "0.0.2" }
 [dev-dependencies]
 criterion = "0.5"
 cucumber = "0.22.1"
+expectrl = "0.8"
 serde_yaml = "0.9"
 gherkin = "0.15"
 tempfile = "3"
@@ -47,4 +48,8 @@ harness = false
 
 [[test]]
 name = "features"
+harness = false
+
+[[test]]
+name = "repl"
 harness = false

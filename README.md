@@ -266,6 +266,81 @@ Print the installed `datu` version:
 datu version
 ```
 
+## Interactive Mode (REPL)
+
+Running `datu` without any command starts an interactive REPL (Read-Eval-Print Loop):
+
+```sh
+datu
+>
+```
+
+In the REPL, you compose data pipelines using the `|>` (pipe) operator to chain functions together. The general pattern is:
+
+```
+read("input") |> ... |> write("output")
+```
+
+### Functions
+
+#### `read(path)`
+
+Read a data file. Supported formats: Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
+
+```
+> read("data.parquet") |> write("data.csv")
+```
+
+#### `write(path)`
+
+Write data to a file. The output format is inferred from the file extension. Supported formats: CSV (`.csv`), JSON (`.json`), YAML (`.yaml`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
+
+```
+> read("data.parquet") |> write("output.json")
+```
+
+#### `select(columns...)`
+
+Select and reorder columns. Columns can be specified using symbol syntax (`:name`) or string syntax (`"name"`).
+
+```
+> read("data.parquet") |> select(:id, :email) |> write("subset.csv")
+> read("data.parquet") |> select("id", "email") |> write("subset.csv")
+```
+
+Columns appear in the output in the order they are listed, so `select` can also be used to reorder columns:
+
+```
+> read("data.parquet") |> select(:email, :id) |> write("reordered.csv")
+```
+
+#### `head(n)`
+
+Take the first _n_ rows.
+
+```
+> read("data.parquet") |> head(10) |> write("first10.csv")
+```
+
+#### `tail(n)`
+
+Take the last _n_ rows.
+
+```
+> read("data.parquet") |> tail(10) |> write("last10.csv")
+```
+
+### Composing Pipelines
+
+Functions can be chained in any order to build more complex pipelines:
+
+```
+> read("users.avro") |> select(:id, :first_name, :email) |> head(5) |> write("top5.json")
+> read("data.parquet") |> select(:two, :one) |> tail(1) |> write("last_row.csv")
+```
+
+---
+
 ## How it Works Internally
 
 Internally, `datu` constructs a pipeline based on the command and arguments.

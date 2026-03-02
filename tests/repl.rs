@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
@@ -10,6 +11,7 @@ use cucumber::when;
 use expectrl::Expect;
 use expectrl::session::OsSession;
 use gherkin::Step;
+use parquet::file::reader::FileReader;
 
 const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
 
@@ -182,6 +184,68 @@ fn that_file_should_be_valid_yaml(world: &mut ReplWorld) {
     let content = std::fs::read_to_string(path).expect("Failed to read file");
     serde_yaml::from_str::<serde_yaml::Value>(content.trim())
         .expect("Expected file to contain valid YAML, but parsing failed");
+}
+
+#[then(regex = r#"^that file should be valid Avro$"#)]
+fn that_file_should_be_valid_avro(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let reader = arrow_avro::reader::ReaderBuilder::new()
+        .build(BufReader::new(file))
+        .expect("Expected file to be valid Avro, but reading failed");
+    let schema = reader.schema();
+    assert!(
+        !schema.fields().is_empty(),
+        "Expected Avro file to have at least one field"
+    );
+}
+
+#[then(regex = r#"^that file should be valid Parquet$"#)]
+fn that_file_should_be_valid_parquet(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let reader = parquet::file::reader::SerializedFileReader::new(file)
+        .expect("Expected file to be valid Parquet, but reading failed");
+    let metadata = reader.metadata();
+    assert!(
+        !metadata.file_metadata().schema().get_fields().is_empty(),
+        "Expected Parquet file to have at least one column"
+    );
+}
+
+#[then(regex = r#"^that file should be valid ORC$"#)]
+fn that_file_should_be_valid_orc(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let builder = orc_rust::arrow_reader::ArrowReaderBuilder::try_new(file)
+        .expect("Expected file to be valid ORC, but reading failed");
+    let schema = builder.schema();
+    assert!(
+        !schema.fields().is_empty(),
+        "Expected ORC file to have at least one column"
+    );
+}
+
+#[then(regex = r#"^that file should be valid XLSX$"#)]
+fn that_file_should_be_valid_xlsx(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let bytes = std::fs::read(path).expect("Failed to read file");
+    assert!(
+        bytes.len() >= 4 && bytes[..4] == [0x50, 0x4B, 0x03, 0x04],
+        "Expected file to be a valid XLSX (ZIP archive), but magic bytes did not match"
+    );
 }
 
 #[then(regex = r#"^that file should contain "(.+)"$"#)]

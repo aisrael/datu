@@ -35,6 +35,7 @@ Feature: Conversion
       read("fixtures/table.parquet") |> write("$TEMPDIR/table.avro")
       ```
     Then the file "$TEMPDIR/table.avro" should exist
+    And that file should be valid Avro
 
   Scenario: Parquet to XLSX
     When the REPL is ran and the user types:
@@ -42,6 +43,7 @@ Feature: Conversion
       read("fixtures/table.parquet") |> write("$TEMPDIR/table.xlsx")
       ```
     Then the file "$TEMPDIR/table.xlsx" should exist
+    And that file should be valid XLSX
 
   Scenario: Avro to CSV
     When the REPL is ran and the user types:
@@ -77,6 +79,7 @@ Feature: Conversion
       read("fixtures/userdata5.avro") |> write("$TEMPDIR/userdata5.parquet")
       ```
     Then the file "$TEMPDIR/userdata5.parquet" should exist
+    And that file should be valid Parquet
 
   Scenario: Avro to ORC
     When the REPL is ran and the user types:
@@ -84,6 +87,7 @@ Feature: Conversion
       read("fixtures/userdata5.avro") |> write("$TEMPDIR/userdata5.orc")
       ```
     Then the file "$TEMPDIR/userdata5.orc" should exist
+    And that file should be valid ORC
 
   Scenario: Avro to XLSX
     When the REPL is ran and the user types:
@@ -91,6 +95,7 @@ Feature: Conversion
       read("fixtures/userdata5.avro") |> write("$TEMPDIR/userdata5.xlsx")
       ```
     Then the file "$TEMPDIR/userdata5.xlsx" should exist
+    And that file should be valid XLSX
 
   Scenario: ORC to CSV
     When the REPL is ran and the user types:
@@ -122,6 +127,7 @@ Feature: Conversion
       read("fixtures/userdata.orc") |> write("$TEMPDIR/userdata_orc.parquet")
       ```
     Then the file "$TEMPDIR/userdata_orc.parquet" should exist
+    And that file should be valid Parquet
 
   Scenario: ORC to Avro
     When the REPL is ran and the user types:
@@ -129,6 +135,7 @@ Feature: Conversion
       read("fixtures/userdata.orc") |> write("$TEMPDIR/userdata_orc.avro")
       ```
     Then the file "$TEMPDIR/userdata_orc.avro" should exist
+    And that file should be valid Avro
 
   Scenario: ORC to XLSX
     When the REPL is ran and the user types:
@@ -136,6 +143,7 @@ Feature: Conversion
       read("fixtures/userdata.orc") |> write("$TEMPDIR/userdata_orc.xlsx")
       ```
     Then the file "$TEMPDIR/userdata_orc.xlsx" should exist
+    And that file should be valid XLSX
 
   Scenario: Parquet to CSV with select
     When the REPL is ran and the user types:

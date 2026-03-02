@@ -101,7 +101,7 @@ Feature: Head
     When I run `datu head fixtures/userdata5.avro -n 2 --output csv`
     Then the command should succeed
     And the output should have a header and 2 lines
-    And the first line should be: registration_dttm,id,first_name,last_name,email,gender,ip_address,cc,country,birthdate,salary,title,comments
+    And the first line of the output should be: registration_dttm,id,first_name,last_name,email,gender,ip_address,cc,country,birthdate,salary,title,comments
 
   Scenario: Head Avro with --output json
     When I run `datu head fixtures/userdata5.avro -n 2 --output json`

@@ -74,7 +74,7 @@ fn command_should_succeed(world: &mut CliWorld) {
     );
 }
 
-#[then(regex = r#"^the first line should be: (.+)$"#)]
+#[then(regex = r#"^the first line of the output should be: (.+)$"#)]
 fn first_line_should_be(world: &mut CliWorld, expected: String) {
     let output = world.output.as_ref().expect("No output captured");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -87,7 +87,7 @@ fn first_line_should_be(world: &mut CliWorld, expected: String) {
     );
 }
 
-#[then(regex = r#"^the first line (?:of the output )?should contain "(.+)"$"#)]
+#[then(regex = r#"^the first line of the output should contain "(.+)"$"#)]
 fn first_line_should_contain(world: &mut CliWorld, expected: String) {
     let output = world.output.as_ref().expect("No output captured");
     let stdout = String::from_utf8_lossy(&output.stdout);

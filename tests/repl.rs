@@ -144,6 +144,76 @@ fn first_line_of_file_should_be(world: &mut ReplWorld, expected: String) {
     );
 }
 
+#[then(regex = r#"^the first line of that file should contain "(.+)"$"#)]
+fn first_line_of_file_should_contain(world: &mut ReplWorld, expected: String) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let first_line = std::io::BufReader::new(file)
+        .lines()
+        .next()
+        .expect("File is empty")
+        .expect("Failed to read line");
+    assert!(
+        first_line.contains(&expected),
+        "Expected first line to contain '{expected}', but got: {first_line}"
+    );
+}
+
+#[then(regex = r#"^that file should be valid JSON$"#)]
+fn that_file_should_be_valid_json(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path).expect("Failed to read file");
+    serde_json::from_str::<serde_json::Value>(content.trim())
+        .expect("Expected file to contain valid JSON, but parsing failed");
+}
+
+#[then(regex = r#"^that file should be valid YAML$"#)]
+fn that_file_should_be_valid_yaml(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path).expect("Failed to read file");
+    serde_yaml::from_str::<serde_yaml::Value>(content.trim())
+        .expect("Expected file to contain valid YAML, but parsing failed");
+}
+
+#[then(regex = r#"^that file should contain "(.+)"$"#)]
+fn that_file_should_contain(world: &mut ReplWorld, expected: String) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let content = std::fs::read_to_string(path).expect("Failed to read file");
+    assert!(
+        content.contains(&expected),
+        "Expected file {path} to contain '{expected}', but it did not"
+    );
+}
+
+#[then(regex = r#"^that file should have (\d+) lines$"#)]
+fn that_file_should_have_n_lines(world: &mut ReplWorld, n: usize) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let line_count = std::io::BufReader::new(file)
+        .lines()
+        .filter(|r| r.as_ref().is_ok_and(|s| !s.trim().is_empty()))
+        .count();
+    assert!(
+        line_count == n,
+        "Expected file {path} to have {n} lines, but got {line_count}"
+    );
+}
+
 fn main() {
     futures::executor::block_on(ReplWorld::run("features/repl"));
 }

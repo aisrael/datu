@@ -85,6 +85,7 @@ mod tests {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
             offset: None,
+            csv_has_header: None,
         };
         let parquet_step = ReadParquetStep { args };
 

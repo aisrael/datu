@@ -13,19 +13,21 @@ use datu::pipeline::avro::ReadAvroStep;
 use datu::pipeline::display::DisplayWriterStep;
 use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
+use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
-/// tail command implementation: print the last N lines of an Avro, Parquet, or ORC file.
+/// tail command implementation: print the last N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     match input_file_type {
         FileType::Parquet => tail_parquet(args),
         FileType::Avro => tail_avro(args),
+        FileType::Csv => tail_csv(args).await,
         FileType::Orc => tail_orc(args),
-        _ => bail!("Only Parquet, Avro, and ORC are supported for tail"),
+        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for tail"),
     }
 }
 
@@ -44,6 +46,7 @@ fn tail_parquet(args: HeadsOrTails) -> Result<()> {
             path: args.input.clone(),
             limit: Some(number),
             offset: Some(offset),
+            csv_has_header: None,
         },
     });
     if let Some(select) = &args.select {
@@ -103,6 +106,20 @@ fn tail_from_reader(
     display_step.execute(reader_step).map_err(Into::into)
 }
 
+/// Prints the last N lines of a CSV file.
+async fn tail_csv(args: HeadsOrTails) -> Result<()> {
+    let batches = read_to_batches(
+        &args.input,
+        FileType::Csv,
+        &args.select,
+        None,
+        args.has_headers,
+    )
+    .await?;
+    let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
+    tail_from_reader(reader_step, args.number, args.output, args.sparse)
+}
+
 /// Prints the last N lines of an Avro file.
 fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
@@ -110,6 +127,7 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
             path: args.input.clone(),
             limit: None,
             offset: None,
+            csv_has_header: None,
         },
     });
     if let Some(select) = &args.select {
@@ -134,6 +152,7 @@ fn tail_orc(args: HeadsOrTails) -> Result<()> {
             path: args.input.clone(),
             limit: Some(number),
             offset: Some(offset),
+            csv_has_header: None,
         },
     });
     if let Some(select) = &args.select {

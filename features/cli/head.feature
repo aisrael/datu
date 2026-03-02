@@ -1,5 +1,5 @@
 Feature: Head
-  Print the first N rows of a Parquet, Avro, or ORC file as CSV.
+  Print the first N rows of a Parquet, Avro, CSV, or ORC file as CSV.
 
   Scenario: Head Parquet default (10 lines)
     When I run `datu head fixtures/userdata.parquet`
@@ -34,6 +34,25 @@ Feature: Head
     Then the command should succeed
     And the output should have a header and 2 lines
     And the first line of the output should be: id,email
+
+  Scenario: Head CSV default (10 lines)
+    When I run `datu head fixtures/table.csv`
+    Then the command should succeed
+    And the output should have a header and 3 lines
+    And the first line of the output should contain "one"
+    And the first line of the output should contain "two"
+
+  Scenario: Head CSV with -n 2
+    When I run `datu head fixtures/table.csv -n 2`
+    Then the command should succeed
+    And the output should have a header and 2 lines
+    And the first line of the output should contain "one,two"
+
+  Scenario: Head CSV with --select
+    When I run `datu head fixtures/table.csv -n 2 --select two,four`
+    Then the command should succeed
+    And the output should have a header and 2 lines
+    And the first line of the output should be: two,four
 
   Scenario: Head ORC default (10 lines)
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`

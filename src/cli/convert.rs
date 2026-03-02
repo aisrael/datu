@@ -158,22 +158,34 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe() {
-        let df = *read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap()
-            .get()
-            .unwrap();
+        let df = *read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap()
+        .get()
+        .unwrap();
         assert_eq!(count_rows(df).await, 3);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_with_select() {
         let select = Some(vec!["one".to_string(), "two".to_string()]);
-        let df = *read_dataframe("fixtures/table.parquet", FileType::Parquet, select, None)
-            .execute(())
-            .unwrap()
-            .get()
-            .unwrap();
+        let df = *read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            select,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap()
+        .get()
+        .unwrap();
         let schema = df.schema();
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(field_names, vec!["one", "two"]);
@@ -182,22 +194,34 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_with_limit() {
-        let df = *read_dataframe("fixtures/table.parquet", FileType::Parquet, None, Some(2))
-            .execute(())
-            .unwrap()
-            .get()
-            .unwrap();
+        let df = *read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            Some(2),
+            None,
+        )
+        .execute(())
+        .unwrap()
+        .get()
+        .unwrap();
         assert_eq!(count_rows(df).await, 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_with_select_and_limit() {
         let select = Some(vec!["two".to_string()]);
-        let df = *read_dataframe("fixtures/table.parquet", FileType::Parquet, select, Some(1))
-            .execute(())
-            .unwrap()
-            .get()
-            .unwrap();
+        let df = *read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            select,
+            Some(1),
+            None,
+        )
+        .execute(())
+        .unwrap()
+        .get()
+        .unwrap();
         let schema = df.schema();
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(field_names, vec!["two"]);
@@ -206,17 +230,23 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_avro() {
-        let df = *read_dataframe("fixtures/userdata5.avro", FileType::Avro, None, Some(5))
-            .execute(())
-            .unwrap()
-            .get()
-            .unwrap();
+        let df = *read_dataframe(
+            "fixtures/userdata5.avro",
+            FileType::Avro,
+            None,
+            Some(5),
+            None,
+        )
+        .execute(())
+        .unwrap()
+        .get()
+        .unwrap();
         assert_eq!(count_rows(df).await, 5);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_orc() {
-        let df = *read_dataframe("fixtures/userdata.orc", FileType::Orc, None, Some(5))
+        let df = *read_dataframe("fixtures/userdata.orc", FileType::Orc, None, Some(5), None)
             .execute(())
             .unwrap()
             .get()
@@ -225,14 +255,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_dataframe_csv() {
+        let df = *read_dataframe("fixtures/table.csv", FileType::Csv, None, Some(2), None)
+            .execute(())
+            .unwrap()
+            .get()
+            .unwrap();
+        assert_eq!(count_rows(df).await, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_unsupported_type() {
-        let result = read_dataframe("fixtures/table.csv", FileType::Csv, None, None).execute(());
+        let result =
+            read_dataframe("fixtures/data.json", FileType::Json, None, None, None).execute(());
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Only Parquet, Avro, and ORC")
+                .contains("Only Parquet, Avro, CSV, and ORC")
         );
     }
 
@@ -240,9 +281,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_parquet() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.parquet");
         DataFrameWriter::new(&output, FileType::Parquet, true, false)
@@ -250,7 +297,7 @@ mod tests {
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
-        let df2 = *read_dataframe(&output, FileType::Parquet, None, None)
+        let df2 = *read_dataframe(&output, FileType::Parquet, None, None, None)
             .execute(())
             .unwrap()
             .get()
@@ -260,9 +307,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_csv() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.csv");
         write_dataframe(&output, FileType::Csv, true, false)
@@ -273,9 +326,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_json() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.json");
         write_dataframe(&output, FileType::Json, true, false)
@@ -287,9 +346,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_json_pretty() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.json");
         write_dataframe(&output, FileType::Json, true, true)
@@ -302,9 +367,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_yaml() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.yaml");
         write_dataframe(&output, FileType::Yaml, true, false)
@@ -317,9 +388,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_avro() {
         let select = Some(vec!["two".to_string(), "three".to_string()]);
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, select, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            select,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.avro");
         write_dataframe(&output, FileType::Avro, true, false)
@@ -327,7 +404,7 @@ mod tests {
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
-        let df2 = *read_dataframe(&output, FileType::Avro, None, None)
+        let df2 = *read_dataframe(&output, FileType::Avro, None, None, None)
             .execute(())
             .unwrap()
             .get()
@@ -338,9 +415,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_orc() {
         let select = Some(vec!["id".to_string(), "first_name".to_string()]);
-        let source = read_dataframe("fixtures/userdata5.avro", FileType::Avro, select, Some(5))
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/userdata5.avro",
+            FileType::Avro,
+            select,
+            Some(5),
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.orc");
         write_dataframe(&output, FileType::Orc, true, false)
@@ -348,7 +431,7 @@ mod tests {
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
-        let df2 = *read_dataframe(&output, FileType::Orc, None, None)
+        let df2 = *read_dataframe(&output, FileType::Orc, None, None, None)
             .execute(())
             .unwrap()
             .get()
@@ -358,9 +441,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_xlsx() {
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, None, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            None,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.xlsx");
         write_dataframe(&output, FileType::Xlsx, true, false)
@@ -373,9 +462,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_to_batches_parquet() {
-        let batches = read_to_batches("fixtures/table.parquet", FileType::Parquet, &None, None)
-            .await
-            .unwrap();
+        let batches = read_to_batches(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            &None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
     }
@@ -388,6 +483,7 @@ mod tests {
             FileType::Parquet,
             &select,
             Some(2),
+            None,
         )
         .await
         .unwrap();
@@ -399,16 +495,22 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_to_batches_avro() {
-        let batches = read_to_batches("fixtures/userdata5.avro", FileType::Avro, &None, Some(3))
-            .await
-            .unwrap();
+        let batches = read_to_batches(
+            "fixtures/userdata5.avro",
+            FileType::Avro,
+            &None,
+            Some(3),
+            None,
+        )
+        .await
+        .unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_to_batches_orc() {
-        let batches = read_to_batches("fixtures/userdata.orc", FileType::Orc, &None, Some(3))
+        let batches = read_to_batches("fixtures/userdata.orc", FileType::Orc, &None, Some(3), None)
             .await
             .unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -419,9 +521,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_batches_to_csv() {
-        let batches = read_to_batches("fixtures/table.parquet", FileType::Parquet, &None, None)
-            .await
-            .unwrap();
+        let batches = read_to_batches(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            &None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.csv");
         write_batches(batches, &output, FileType::Csv, true, false)
@@ -432,9 +540,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_batches_to_json() {
-        let batches = read_to_batches("fixtures/table.parquet", FileType::Parquet, &None, None)
-            .await
-            .unwrap();
+        let batches = read_to_batches(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            &None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.json");
         write_batches(batches, &output, FileType::Json, true, false)
@@ -446,9 +560,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_batches_to_parquet() {
-        let batches = read_to_batches("fixtures/table.parquet", FileType::Parquet, &None, None)
-            .await
-            .unwrap();
+        let batches = read_to_batches(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            &None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.parquet");
         write_batches(batches, &output, FileType::Parquet, true, false)
@@ -456,7 +576,7 @@ mod tests {
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
-        let roundtrip = read_to_batches(&output, FileType::Parquet, &None, None)
+        let roundtrip = read_to_batches(&output, FileType::Parquet, &None, None, None)
             .await
             .unwrap();
         let total_rows: usize = roundtrip.iter().map(|b| b.num_rows()).sum();
@@ -470,15 +590,21 @@ mod tests {
         let select = Some(vec!["two".to_string(), "three".to_string()]);
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let source = read_dataframe("fixtures/table.parquet", FileType::Parquet, select, None)
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/table.parquet",
+            FileType::Parquet,
+            select,
+            None,
+            None,
+        )
+        .execute(())
+        .unwrap();
         let avro_path = temp_path(&temp_dir, "roundtrip.avro");
         write_dataframe(&avro_path, FileType::Avro, true, false)
             .execute(source)
             .unwrap();
 
-        let source2 = read_dataframe(&avro_path, FileType::Avro, None, None)
+        let source2 = read_dataframe(&avro_path, FileType::Avro, None, None, None)
             .execute(())
             .unwrap();
         let parquet_path = temp_path(&temp_dir, "roundtrip.parquet");
@@ -486,7 +612,7 @@ mod tests {
             .execute(source2)
             .unwrap();
 
-        let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None)
+        let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None, None)
             .execute(())
             .unwrap()
             .get()
@@ -499,15 +625,21 @@ mod tests {
         let select = Some(vec!["id".to_string(), "first_name".to_string()]);
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let source = read_dataframe("fixtures/userdata5.avro", FileType::Avro, select, Some(5))
-            .execute(())
-            .unwrap();
+        let source = read_dataframe(
+            "fixtures/userdata5.avro",
+            FileType::Avro,
+            select,
+            Some(5),
+            None,
+        )
+        .execute(())
+        .unwrap();
         let orc_path = temp_path(&temp_dir, "roundtrip.orc");
         write_dataframe(&orc_path, FileType::Orc, true, false)
             .execute(source)
             .unwrap();
 
-        let source2 = read_dataframe(&orc_path, FileType::Orc, None, None)
+        let source2 = read_dataframe(&orc_path, FileType::Orc, None, None, None)
             .execute(())
             .unwrap();
         let parquet_path = temp_path(&temp_dir, "roundtrip.parquet");
@@ -515,7 +647,7 @@ mod tests {
             .execute(source2)
             .unwrap();
 
-        let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None)
+        let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None, None)
             .execute(())
             .unwrap()
             .get()

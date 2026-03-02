@@ -1,5 +1,5 @@
 Feature: Tail
-  Print the last N rows of a Parquet, Avro, or ORC file as CSV.
+  Print the last N rows of a Parquet, Avro, CSV, or ORC file as CSV.
 
   Scenario: Tail Parquet default (10 lines)
     When I run `datu tail fixtures/table.parquet`
@@ -11,6 +11,18 @@ Feature: Tail
     Then the command should succeed
     And the first line of the output should contain "one"
     And the first line of the output should contain "two"
+
+  Scenario: Tail CSV default
+    When I run `datu tail fixtures/table.csv`
+    Then the command should succeed
+    And the first line of the output should contain "one"
+    And the first line of the output should contain "two"
+
+  Scenario: Tail CSV with -n 2
+    When I run `datu tail fixtures/table.csv -n 2`
+    Then the command should succeed
+    And the first line of the output should contain "one"
+    And the output should contain "baz"
 
   Scenario: Tail Avro default (10 lines)
     When I run `datu tail fixtures/userdata5.avro`

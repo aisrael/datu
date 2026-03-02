@@ -7,7 +7,7 @@ use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::display::DisplayWriterStep;
 use datu::pipeline::read_to_batches;
 
-/// head command implementation: print the first N lines of an Avro, Parquet, or ORC file.
+/// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let batches = read_to_batches(
@@ -15,6 +15,7 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
         input_file_type,
         &args.select,
         Some(args.number),
+        args.has_headers,
     )
     .await?;
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));

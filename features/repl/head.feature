@@ -42,6 +42,18 @@ Feature: Head
     And the first line of that file should contain "first_name"
     And that file should have 6 lines
 
+  Scenario: Head from CSV
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.csv") |> head(3) |> write("$TEMPDIR/head_csv.csv")
+      ```
+    Then the file "$TEMPDIR/head_csv.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "one,two,three,four,five,__index_level_0__"
+    And that file should have 4 lines
+    And that file should contain "foo"
+    And that file should contain "bar"
+
   Scenario: Head from ORC
     When the REPL is ran and the user types:
       ```

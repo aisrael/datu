@@ -9,6 +9,8 @@ use anyhow::Result;
 use anyhow::bail;
 use arrow::array::RecordBatchReader;
 use arrow_avro::reader::ReaderBuilder;
+use datafusion::execution::context::SessionContext;
+use datafusion::prelude::CsvReadOptions;
 use datu::FileType;
 use datu::cli::DisplayOutputFormat;
 use datu::cli::SchemaArgs;
@@ -246,9 +248,42 @@ pub async fn schema(args: SchemaArgs) -> Result<()> {
     match file_type {
         FileType::Parquet => schema_parquet(&args.file, args.output, args.sparse),
         FileType::Avro => schema_avro(&args.file, args.output, args.sparse),
+        FileType::Csv => schema_csv(
+            &args.file,
+            args.output,
+            args.sparse,
+            args.has_headers.unwrap_or(true),
+        ),
         FileType::Orc => schema_orc(&args.file, args.output, args.sparse),
-        _ => bail!("schema is only supported for Parquet, Avro, and ORC files"),
+        _ => bail!("schema is only supported for Parquet, Avro, CSV, and ORC files"),
     }
+}
+
+/// Extracts and prints the schema of a CSV file using DataFusion for type inference.
+fn schema_csv(
+    path: &str,
+    output: DisplayOutputFormat,
+    sparse: bool,
+    has_header: bool,
+) -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = tokio::task::block_in_place(|| {
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(ctx.read_csv(path, CsvReadOptions::new().has_header(has_header)))
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let schema = df.schema();
+    let fields: Vec<SchemaField> = schema
+        .fields()
+        .iter()
+        .map(|f| SchemaField {
+            name: f.name().to_string(),
+            data_type: format!("{:?}", f.data_type()),
+            converted_type: None,
+            nullable: f.is_nullable(),
+        })
+        .collect();
+    print_schema(&fields, output, sparse)
 }
 
 /// Extracts and prints the schema of an ORC file.

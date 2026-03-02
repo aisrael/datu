@@ -82,6 +82,7 @@ mod tests {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
             offset: None,
+            csv_has_header: None,
         };
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
@@ -99,6 +100,7 @@ mod tests {
             path: "fixtures/table.parquet".to_string(),
             limit: Some(1),
             offset: None,
+            csv_has_header: None,
         };
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");

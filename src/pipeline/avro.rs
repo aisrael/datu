@@ -177,6 +177,7 @@ mod tests {
             path: "fixtures/userdata5.avro".to_string(),
             limit: None,
             offset: None,
+            csv_has_header: None,
         };
         let mut reader = read_avro(&args).expect("read_avro failed");
         let schema = reader.schema();
@@ -195,6 +196,7 @@ mod tests {
             path: "fixtures/userdata5.avro".to_string(),
             limit: Some(1),
             offset: None,
+            csv_has_header: None,
         };
         let mut reader = read_avro(&args).expect("read_avro failed");
         let batch = reader
@@ -211,6 +213,7 @@ mod tests {
             path: "fixtures/userdata5.avro".to_string(),
             limit: None,
             offset: Some(1),
+            csv_has_header: None,
         };
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
@@ -228,6 +231,7 @@ mod tests {
             path: "fixtures/userdata5.avro".to_string(),
             limit: Some(5),
             offset: Some(10),
+            csv_has_header: None,
         };
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;

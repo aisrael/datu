@@ -42,6 +42,18 @@ Feature: Tail
     And the first line of that file should contain "first_name"
     And that file should have 6 lines
 
+  Scenario: Tail from CSV
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.csv") |> tail(2) |> write("$TEMPDIR/tail_csv.csv")
+      ```
+    Then the file "$TEMPDIR/tail_csv.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "one,two,three,four,five,__index_level_0__"
+    And that file should have 3 lines
+    And that file should contain "bar"
+    And that file should contain "baz"
+
   Scenario: Tail from ORC
     When the REPL is ran and the user types:
       ```

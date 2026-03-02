@@ -28,6 +28,14 @@ pub struct ConvertArgs {
         help = "When converting to JSON, format output with indentation and newlines. Ignored for other output formats."
     )]
     pub json_pretty: bool,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+    )]
+    pub has_headers: Option<bool>,
 }
 
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
@@ -37,7 +45,13 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
 
     println!("Converting {} to {}", args.input, args.output);
 
-    let reader_step = DataFrameReader::new(&args.input, input_file_type, args.select, args.limit);
+    let reader_step = DataFrameReader::new(
+        &args.input,
+        input_file_type,
+        args.select,
+        args.limit,
+        args.has_headers,
+    );
 
     let writer_step =
         DataFrameWriter::new(args.output, output_file_type, args.sparse, args.json_pretty);
@@ -70,6 +84,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -93,6 +108,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -116,6 +132,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -139,6 +156,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -162,6 +180,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -185,6 +204,7 @@ mod tests {
             limit: Some(10),
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -209,6 +229,7 @@ mod tests {
             limit: Some(10),
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
         convert(orc_args).await.expect("Avro to ORC failed");
 
@@ -226,6 +247,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
         let result = convert(csv_args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
@@ -248,6 +270,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -271,6 +294,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -312,6 +336,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
+            has_headers: None,
         };
 
         let result = convert(args).await;
@@ -326,6 +351,7 @@ mod tests {
             path: output_path.to_str().expect("path").to_string(),
             limit: None,
             offset: None,
+            csv_has_header: None,
         };
         let reader = avro::read_avro(&read_args).expect("Failed to read output Avro");
         let field_names: Vec<String> = reader

@@ -97,6 +97,34 @@ Feature: Conversion
     Then the file "$TEMPDIR/userdata5.xlsx" should exist
     And that file should be valid XLSX
 
+  Scenario: CSV to Parquet
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.csv") |> write("$TEMPDIR/table_from_csv.parquet")
+      ```
+    Then the file "$TEMPDIR/table_from_csv.parquet" should exist
+    And that file should be valid Parquet
+
+  Scenario: CSV to JSON
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.csv") |> write("$TEMPDIR/table_from_csv.json")
+      ```
+    Then the file "$TEMPDIR/table_from_csv.json" should exist
+    And that file should be valid JSON
+    And that file should contain "one"
+    And that file should contain "two"
+
+  Scenario: CSV to CSV with select
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.csv") |> select(:two, :four) |> write("$TEMPDIR/table_csv_select.csv")
+      ```
+    Then the file "$TEMPDIR/table_csv_select.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "two,four"
+    And that file should have 4 lines
+
   Scenario: ORC to CSV
     When the REPL is ran and the user types:
       ```

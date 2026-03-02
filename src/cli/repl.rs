@@ -107,7 +107,7 @@ impl ReplPipelineBuilder {
     /// Reads a file into record batches.
     async fn exec_read(&mut self, path: &str) -> crate::Result<()> {
         let file_type: FileType = path.try_into()?;
-        let batches = read_to_batches(path, file_type, &None, None)
+        let batches = read_to_batches(path, file_type, &None, None, None)
             .await
             .map_err(|e| Error::GenericError(e.to_string()))?;
         self.batches = Some(batches);

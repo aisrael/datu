@@ -19,11 +19,13 @@ use crate::FileType;
 use crate::Result;
 use crate::cli::convert::DataFrameSource;
 
-/// Arguments for reading a file (Avro, Parquet, ORC).
+/// Arguments for reading a file (Avro, CSV, Parquet, ORC).
 pub struct ReadArgs {
     pub path: String,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
+    pub csv_has_header: Option<bool>,
 }
 
 /// Arguments for writing a file (CSV, Avro, Parquet, ORC, XLSX).
@@ -167,16 +169,22 @@ impl RecordBatchReader for DataFrameToBatchReader {
 }
 
 /// Reads input into record batches for use by REPL and other callers that need RecordBatchReaderSource.
-/// Uses DataFusion for Parquet and Avro; uses orc-rust for ORC.
+/// Uses DataFusion for Parquet, Avro, and CSV; uses orc-rust for ORC.
 pub async fn read_to_batches(
     input_path: &str,
     input_file_type: FileType,
     select: &Option<Vec<String>>,
     limit: Option<usize>,
+    csv_has_header: Option<bool>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let source =
-        data_frame_reader::read_dataframe(input_path, input_file_type, select.clone(), limit)
-            .execute(())?;
+    let source = data_frame_reader::read_dataframe(
+        input_path,
+        input_file_type,
+        select.clone(),
+        limit,
+        csv_has_header,
+    )
+    .execute(())?;
     let reader = DataFrameToBatchReader::try_new(source)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;

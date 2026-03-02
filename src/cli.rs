@@ -55,7 +55,7 @@ impl FromStr for DisplayOutputFormat {
 /// Arguments for the `datu schema` command.
 #[derive(Args)]
 pub struct SchemaArgs {
-    /// Path to the Parquet or Avro file
+    /// Path to the Parquet, Avro, ORC, or CSV file
     pub file: String,
     #[arg(
         long,
@@ -71,13 +71,29 @@ pub struct SchemaArgs {
         help = "For JSON/YAML: omit keys with null/missing values. Default: true. Use --sparse=false to include default values."
     )]
     pub sparse: bool,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+    )]
+    pub has_headers: Option<bool>,
 }
 
 /// Arguments for the `datu count` command.
 #[derive(Args)]
 pub struct CountArgs {
-    /// Path to the Parquet, Avro, or ORC file
+    /// Path to the Parquet, Avro, ORC, or CSV file
     pub file: String,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+    )]
+    pub has_headers: Option<bool>,
 }
 
 /// Arguments for the `datu head` and `datu tail` commands.
@@ -111,4 +127,12 @@ pub struct HeadsOrTails {
         help = "Columns to select. If not specified, all columns will be printed."
     )]
     pub select: Option<Vec<String>>,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+    )]
+    pub has_headers: Option<bool>,
 }

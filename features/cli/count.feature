@@ -1,5 +1,5 @@
 Feature: Count
-  Return the number of rows in a Parquet, Avro, or ORC file.
+  Return the number of rows in a Parquet, Avro, CSV, or ORC file.
 
   Scenario: Count Parquet
     When I run `datu count fixtures/table.parquet`
@@ -17,3 +17,8 @@ Feature: Count
     When I run `datu count $TEMPDIR/userdata5.orc`
     Then the command should succeed
     And the output should contain "10"
+
+  Scenario: Count CSV
+    When I run `datu count fixtures/table.csv`
+    Then the command should succeed
+    And the output should contain "3"

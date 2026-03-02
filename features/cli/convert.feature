@@ -41,6 +41,27 @@ Feature: Convert
     And the first line of that file should contain "one,two"
     And that file should have 4 lines
 
+  Scenario: CSV to Parquet
+    When I run `datu convert fixtures/table.csv $TEMPDIR/table_from_csv.parquet`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.csv to $TEMPDIR/table_from_csv.parquet"
+    And the file "$TEMPDIR/table_from_csv.parquet" should exist
+
+  Scenario: CSV to JSON
+    When I run `datu convert fixtures/table.csv $TEMPDIR/table_from_csv.json`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/table.csv to $TEMPDIR/table_from_csv.json"
+    And the file "$TEMPDIR/table_from_csv.json" should exist
+    And the file "$TEMPDIR/table_from_csv.json" should be valid JSON
+    And the file "$TEMPDIR/table_from_csv.json" should contain "one"
+    And the file "$TEMPDIR/table_from_csv.json" should contain "two"
+
+  Scenario: CSV to Parquet with --has-headers=false
+    When I run `datu convert fixtures/no_header.csv $TEMPDIR/no_header.parquet --has-headers=false`
+    Then the command should succeed
+    And the output should contain "Converting fixtures/no_header.csv to $TEMPDIR/no_header.parquet"
+    And the file "$TEMPDIR/no_header.parquet" should exist
+
   Scenario: Avro to CSV
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.csv`
     Then the command should succeed

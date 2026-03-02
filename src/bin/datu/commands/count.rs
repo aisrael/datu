@@ -7,6 +7,7 @@ use datu::cli::CountArgs;
 use datu::pipeline::ReadArgs;
 use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::avro::ReadAvroStep;
+use datu::pipeline::csv::ReadCsvStep;
 use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
 
@@ -33,6 +34,7 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
                 path: args.file.clone(),
                 limit: None,
                 offset: None,
+                csv_has_header: None,
             },
         }),
         FileType::Avro => Box::new(ReadAvroStep {
@@ -40,16 +42,22 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
                 path: args.file.clone(),
                 limit: None,
                 offset: None,
+                csv_has_header: None,
             },
+        }),
+        FileType::Csv => Box::new(ReadCsvStep {
+            path: args.file.clone(),
+            has_header: args.has_headers,
         }),
         FileType::Orc => Box::new(ReadOrcStep {
             args: ReadArgs {
                 path: args.file.clone(),
                 limit: None,
                 offset: None,
+                csv_has_header: None,
             },
         }),
-        _ => bail!("Only Parquet, Avro, and ORC are supported for count"),
+        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for count"),
     };
     Ok(reader)
 }
@@ -62,6 +70,7 @@ mod tests {
     async fn test_count_parquet() {
         let args = CountArgs {
             file: "fixtures/table.parquet".to_string(),
+            has_headers: None,
         };
         let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());
@@ -71,6 +80,7 @@ mod tests {
     async fn test_count_avro() {
         let args = CountArgs {
             file: "fixtures/userdata5.avro".to_string(),
+            has_headers: None,
         };
         let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());

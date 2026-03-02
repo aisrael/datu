@@ -1,5 +1,6 @@
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
+use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 
 use crate::Error;
@@ -15,6 +16,8 @@ pub struct DataFrameReader {
     input_file_type: FileType,
     select: Option<Vec<String>>,
     limit: Option<usize>,
+    /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
+    csv_has_header: Option<bool>,
 }
 
 impl DataFrameReader {
@@ -23,12 +26,14 @@ impl DataFrameReader {
         input_file_type: FileType,
         select: Option<Vec<String>>,
         limit: Option<usize>,
+        csv_has_header: Option<bool>,
     ) -> Self {
         Self {
             input_path: input_path.to_string(),
             input_file_type,
             select,
             limit,
+            csv_has_header,
         }
     }
 
@@ -44,6 +49,15 @@ impl DataFrameReader {
                 .read_avro(&self.input_path, AvroReadOptions::default())
                 .await
                 .map_err(|e| Error::GenericError(e.to_string()))?,
+            FileType::Csv => {
+                let has_header = self.csv_has_header.unwrap_or(true);
+                ctx.read_csv(
+                    &self.input_path,
+                    CsvReadOptions::new().has_header(has_header),
+                )
+                .await
+                .map_err(|e| Error::GenericError(e.to_string()))?
+            }
             FileType::Orc => {
                 let batches = read_orc_to_batches(&self.input_path)?;
                 if batches.is_empty() {
@@ -56,7 +70,8 @@ impl DataFrameReader {
             }
             _ => {
                 return Err(Error::GenericError(
-                    "Only Parquet, Avro, and ORC are supported as input file types".to_string(),
+                    "Only Parquet, Avro, CSV, and ORC are supported as input file types"
+                        .to_string(),
                 ));
             }
         };
@@ -97,8 +112,9 @@ pub fn read_dataframe(
     input_file_type: FileType,
     select: Option<Vec<String>>,
     limit: Option<usize>,
+    csv_has_header: Option<bool>,
 ) -> DataFrameReader {
-    DataFrameReader::new(input_path, input_file_type, select, limit)
+    DataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
 }
 
 /// Reads an ORC file into record batches (ORC is not natively supported by DataFusion).
@@ -110,6 +126,7 @@ fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::Rec
         path: path.to_string(),
         limit: None,
         offset: None,
+        csv_has_header: None,
     };
     let reader = orc::read_orc(&args)?;
     let batches: Vec<arrow::record_batch::RecordBatch> =

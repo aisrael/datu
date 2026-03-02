@@ -1,5 +1,5 @@
 Feature: Schema
-  Display the schema of a Parquet, Avro, or ORC file.
+  Display the schema of a Parquet, Avro, CSV, or ORC file.
 
   Scenario: Schema Parquet default (csv output)
     When I run `datu schema fixtures/table.parquet`
@@ -64,3 +64,9 @@ Feature: Schema
     Then the command should succeed
     And the output should contain "id"
     And the output should contain "first_name"
+
+  Scenario: Schema CSV default (csv output)
+    When I run `datu schema fixtures/table.csv`
+    Then the command should succeed
+    And the output should contain "one"
+    And the output should contain "two"

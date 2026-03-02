@@ -277,7 +277,7 @@ datu
 
 In the REPL, you compose data pipelines using the `|>` (pipe) operator to chain functions together. The general pattern is:
 
-```
+```text
 read("input") |> ... |> write("output")
 ```
 
@@ -287,7 +287,7 @@ read("input") |> ... |> write("output")
 
 Read a data file. Supported formats: Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`).
 
-```
+```text
 > read("data.parquet") |> write("data.csv")
 ```
 
@@ -295,7 +295,7 @@ Read a data file. Supported formats: Parquet (`.parquet`, `.parq`), Avro (`.avro
 
 Write data to a file. The output format is inferred from the file extension. Supported formats: CSV (`.csv`), JSON (`.json`), YAML (`.yaml`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
-```
+```text
 > read("data.parquet") |> write("output.json")
 ```
 
@@ -303,14 +303,14 @@ Write data to a file. The output format is inferred from the file extension. Sup
 
 Select and reorder columns. Columns can be specified using symbol syntax (`:name`) or string syntax (`"name"`).
 
-```
+```text
 > read("data.parquet") |> select(:id, :email) |> write("subset.csv")
 > read("data.parquet") |> select("id", "email") |> write("subset.csv")
 ```
 
 Columns appear in the output in the order they are listed, so `select` can also be used to reorder columns:
 
-```
+```text
 > read("data.parquet") |> select(:email, :id) |> write("reordered.csv")
 ```
 
@@ -318,7 +318,7 @@ Columns appear in the output in the order they are listed, so `select` can also 
 
 Take the first _n_ rows.
 
-```
+```text
 > read("data.parquet") |> head(10) |> write("first10.csv")
 ```
 
@@ -326,7 +326,7 @@ Take the first _n_ rows.
 
 Take the last _n_ rows.
 
-```
+```text
 > read("data.parquet") |> tail(10) |> write("last10.csv")
 ```
 
@@ -334,7 +334,7 @@ Take the last _n_ rows.
 
 Functions can be chained in any order to build more complex pipelines:
 
-```
+```text
 > read("users.avro") |> select(:id, :first_name, :email) |> head(5) |> write("top5.json")
 > read("data.parquet") |> select(:two, :one) |> tail(1) |> write("last_row.csv")
 ```

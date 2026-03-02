@@ -278,6 +278,63 @@ fn that_file_should_have_n_lines(world: &mut ReplWorld, n: usize) {
     );
 }
 
+#[then(regex = r#"^that file should have (\d+) records$"#)]
+fn that_file_should_have_n_records(world: &mut ReplWorld, n: usize) {
+    use datu::utils::FileType;
+
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file_type = FileType::try_from(path.as_str())
+        .unwrap_or_else(|e| panic!("Cannot determine file type for {path}: {e}"));
+    let row_count = match file_type {
+        FileType::Json => {
+            let content = std::fs::read_to_string(path).expect("Failed to read file");
+            let value: serde_json::Value =
+                serde_json::from_str(content.trim()).expect("Failed to parse JSON");
+            value
+                .as_array()
+                .expect("Expected JSON to be an array")
+                .len()
+        }
+        FileType::Parquet => {
+            let file = std::fs::File::open(path).expect("Failed to open file");
+            let reader = parquet::file::reader::SerializedFileReader::new(file)
+                .expect("Failed to read Parquet file");
+            reader
+                .metadata()
+                .row_groups()
+                .iter()
+                .map(|rg| rg.num_rows())
+                .sum::<i64>() as usize
+        }
+        FileType::Avro => {
+            let file = std::fs::File::open(path).expect("Failed to open file");
+            let reader = arrow_avro::reader::ReaderBuilder::new()
+                .build(BufReader::new(file))
+                .expect("Failed to read Avro file");
+            reader
+                .map(|batch| batch.expect("Failed to read Avro batch").num_rows())
+                .sum()
+        }
+        FileType::Orc => {
+            let file = std::fs::File::open(path).expect("Failed to open file");
+            let builder = orc_rust::arrow_reader::ArrowReaderBuilder::try_new(file)
+                .expect("Failed to read ORC file");
+            let reader = builder.build();
+            reader
+                .map(|batch| batch.expect("Failed to read ORC batch").num_rows())
+                .sum()
+        }
+        other => panic!("Unsupported format for record counting: {other:?}"),
+    };
+    assert!(
+        row_count == n,
+        "Expected file {path} to have {n} records, but got {row_count}"
+    );
+}
+
 fn main() {
     futures::executor::block_on(ReplWorld::run("features/repl"));
 }

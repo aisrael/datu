@@ -70,6 +70,7 @@ Feature: Head
     And that file should be valid JSON
     And that file should contain "foo"
     And that file should contain "bar"
+    And that file should have 2 records
 
   Scenario: Head to YAML
     When the REPL is ran and the user types:
@@ -88,6 +89,7 @@ Feature: Head
       ```
     Then the file "$TEMPDIR/head.parquet" should exist
     And that file should be valid Parquet
+    And that file should have 10 records
 
   Scenario: Head to Avro
     When the REPL is ran and the user types:
@@ -96,6 +98,7 @@ Feature: Head
       ```
     Then the file "$TEMPDIR/head.avro" should exist
     And that file should be valid Avro
+    And that file should have 2 records
 
   Scenario: Head with select from Avro
     When the REPL is ran and the user types:
@@ -116,3 +119,4 @@ Feature: Head
     And that file should be valid JSON
     And that file should contain "id"
     And that file should contain "first_name"
+    And that file should have 2 records

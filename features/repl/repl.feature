@@ -1,7 +1,7 @@
 Feature: REPL
 
   Scenario:
-    When I run the REPL
+    When datu is ran without a command
     Then the output should be:
       ```
       >

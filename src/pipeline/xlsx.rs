@@ -14,6 +14,7 @@ use arrow::array::UInt16Array;
 use arrow::array::UInt32Array;
 use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
+use async_trait::async_trait;
 use rust_xlsxwriter::Workbook;
 use rust_xlsxwriter::Worksheet;
 
@@ -60,11 +61,12 @@ pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> R
     Ok(())
 }
 
+#[async_trait(?Send)]
 impl Step for WriteXlsxStep {
     type Input = ();
     type Output = WriteXlsxResult;
 
-    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get()?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteXlsxResult {})

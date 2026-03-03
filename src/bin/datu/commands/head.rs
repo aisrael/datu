@@ -23,5 +23,5 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
         output_format: args.output,
         sparse: args.sparse,
     };
-    display_step.execute(reader_step).map_err(Into::into)
+    display_step.execute(reader_step).await.map_err(Into::into)
 }

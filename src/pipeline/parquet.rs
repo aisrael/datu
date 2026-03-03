@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -47,11 +48,12 @@ pub struct WriteParquetStep {
 /// Result of successfully writing a Parquet file.
 pub struct WriteParquetResult {}
 
+#[async_trait(?Send)]
 impl Step for WriteParquetStep {
     type Input = ();
     type Output = WriteParquetResult;
 
-    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get()?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteParquetResult {})

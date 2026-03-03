@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
@@ -21,11 +22,12 @@ pub struct SelectColumnsStep {
     pub columns: Vec<String>,
 }
 
+#[async_trait(?Send)]
 impl Step for SelectColumnsStep {
     type Input = RecordBatchReaderSource;
     type Output = RecordBatchReaderSource;
 
-    fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
+    async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         let reader = input.get()?;
         let indices: Vec<usize> = self
             .columns
@@ -78,8 +80,8 @@ mod tests {
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::parquet::ReadParquetStep;
 
-    #[test]
-    fn test_select_columns() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_select_columns() {
         // Use the parquet reader to inspect the file and verify column selection
         let args = ReadArgs {
             path: "fixtures/table.parquet".to_string(),
@@ -95,6 +97,7 @@ mod tests {
         };
         let mut projected_source = select_step
             .execute(source)
+            .await
             .expect("Failed to execute select columns");
         let mut projected_reader = projected_source
             .get()

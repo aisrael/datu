@@ -13,6 +13,7 @@ pub mod xlsx;
 pub mod yaml;
 
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::FileType;
@@ -51,12 +52,13 @@ pub struct WriteYamlArgs {
 
 /// A `Step` defines a step in the pipeline that can be executed
 /// and has an input and output type.
+#[async_trait(?Send)]
 pub trait Step {
     type Input;
     type Output;
 
     /// Execute the step
-    fn execute(self, input: Self::Input) -> Result<Self::Output>;
+    async fn execute(self, input: Self::Input) -> Result<Self::Output>;
 }
 
 /// A source that yields a value of type `T`.
@@ -184,7 +186,8 @@ pub async fn read_to_batches(
         limit,
         csv_has_header,
     )
-    .execute(())?;
+    .execute(())
+    .await?;
     let reader = DataFrameToBatchReader::try_new(source)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -211,6 +214,6 @@ pub async fn write_batches(
         sparse,
         json_pretty,
     );
-    writer_step.execute(source)?;
+    writer_step.execute(source).await?;
     Ok(())
 }

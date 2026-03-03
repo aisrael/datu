@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
@@ -96,13 +97,13 @@ impl DataFrameReader {
     }
 }
 
+#[async_trait(?Send)]
 impl Step for DataFrameReader {
     type Input = ();
     type Output = DataFrameSource;
 
-    fn execute(self, _input: Self::Input) -> crate::Result<Self::Output> {
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::block_in_place(|| handle.block_on(self.read()))
+    async fn execute(self, _input: Self::Input) -> crate::Result<Self::Output> {
+        self.read().await
     }
 }
 

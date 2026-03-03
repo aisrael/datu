@@ -4,6 +4,7 @@ use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use arrow_json::writer::JsonArray;
 use arrow_json::writer::WriterBuilder;
+use async_trait::async_trait;
 use saphyr::Yaml;
 use saphyr::YamlEmitter;
 
@@ -132,11 +133,12 @@ pub struct DisplayWriterStep {
     pub sparse: bool,
 }
 
+#[async_trait(?Send)]
 impl Step for DisplayWriterStep {
     type Input = RecordBatchReaderSource;
     type Output = ();
 
-    fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+    async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let mut reader = input.get()?;
         match self.output_format {
             DisplayOutputFormat::Csv => {

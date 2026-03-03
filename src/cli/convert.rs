@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use crate::Error;
 use crate::FileType;
 use crate::pipeline::Source;
@@ -55,11 +57,12 @@ impl DataFrameWriter {
     }
 }
 
+#[async_trait(?Send)]
 impl Step for DataFrameWriter {
     type Input = DataFrameSource;
     type Output = ();
 
-    fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
+    async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         if self.output_file_type != FileType::Json && self.json_pretty {
             eprintln!("Warning: --json-pretty is only supported when converting to JSON");
         }
@@ -166,6 +169,7 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap()
         .get()
         .unwrap();
@@ -183,6 +187,7 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap()
         .get()
         .unwrap();
@@ -202,6 +207,7 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap()
         .get()
         .unwrap();
@@ -219,6 +225,7 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap()
         .get()
         .unwrap();
@@ -238,6 +245,7 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap()
         .get()
         .unwrap();
@@ -248,6 +256,7 @@ mod tests {
     async fn test_read_dataframe_orc() {
         let df = *read_dataframe("fixtures/userdata.orc", FileType::Orc, None, Some(5), None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -258,6 +267,7 @@ mod tests {
     async fn test_read_dataframe_csv() {
         let df = *read_dataframe("fixtures/table.csv", FileType::Csv, None, Some(2), None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -266,8 +276,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_unsupported_type() {
-        let result =
-            read_dataframe("fixtures/data.json", FileType::Json, None, None, None).execute(());
+        let result = read_dataframe("fixtures/data.json", FileType::Json, None, None, None)
+            .execute(())
+            .await;
         assert!(result.is_err());
         assert!(
             result
@@ -289,16 +300,19 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.parquet");
         DataFrameWriter::new(&output, FileType::Parquet, true, false)
             .execute(source)
+            .await
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
         let df2 = *read_dataframe(&output, FileType::Parquet, None, None, None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -315,11 +329,13 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.csv");
         write_dataframe(&output, FileType::Csv, true, false)
             .execute(source)
+            .await
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
     }
@@ -334,11 +350,13 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.json");
         write_dataframe(&output, FileType::Json, true, false)
             .execute(source)
+            .await
             .unwrap();
         let contents = std::fs::read_to_string(&output).unwrap();
         assert!(contents.contains("one"));
@@ -354,11 +372,13 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.json");
         write_dataframe(&output, FileType::Json, true, true)
             .execute(source)
+            .await
             .unwrap();
         let contents = std::fs::read_to_string(&output).unwrap();
         assert!(contents.contains('\n'));
@@ -375,11 +395,13 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.yaml");
         write_dataframe(&output, FileType::Yaml, true, false)
             .execute(source)
+            .await
             .unwrap();
         let contents = std::fs::read_to_string(&output).unwrap();
         assert!(contents.contains("one"));
@@ -396,16 +418,19 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.avro");
         write_dataframe(&output, FileType::Avro, true, false)
             .execute(source)
+            .await
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
         let df2 = *read_dataframe(&output, FileType::Avro, None, None, None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -423,16 +448,19 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.orc");
         write_dataframe(&output, FileType::Orc, true, false)
             .execute(source)
+            .await
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
 
         let df2 = *read_dataframe(&output, FileType::Orc, None, None, None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -449,11 +477,13 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let output = temp_path(&temp_dir, "out.xlsx");
         write_dataframe(&output, FileType::Xlsx, true, false)
             .execute(source)
+            .await
             .unwrap();
         assert!(std::path::Path::new(&output).exists());
     }
@@ -598,22 +628,27 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let avro_path = temp_path(&temp_dir, "roundtrip.avro");
         write_dataframe(&avro_path, FileType::Avro, true, false)
             .execute(source)
+            .await
             .unwrap();
 
         let source2 = read_dataframe(&avro_path, FileType::Avro, None, None, None)
             .execute(())
+            .await
             .unwrap();
         let parquet_path = temp_path(&temp_dir, "roundtrip.parquet");
         write_dataframe(&parquet_path, FileType::Parquet, true, false)
             .execute(source2)
+            .await
             .unwrap();
 
         let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None, None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();
@@ -633,22 +668,27 @@ mod tests {
             None,
         )
         .execute(())
+        .await
         .unwrap();
         let orc_path = temp_path(&temp_dir, "roundtrip.orc");
         write_dataframe(&orc_path, FileType::Orc, true, false)
             .execute(source)
+            .await
             .unwrap();
 
         let source2 = read_dataframe(&orc_path, FileType::Orc, None, None, None)
             .execute(())
+            .await
             .unwrap();
         let parquet_path = temp_path(&temp_dir, "roundtrip.parquet");
         write_dataframe(&parquet_path, FileType::Parquet, true, false)
             .execute(source2)
+            .await
             .unwrap();
 
         let df3 = *read_dataframe(&parquet_path, FileType::Parquet, None, None, None)
             .execute(())
+            .await
             .unwrap()
             .get()
             .unwrap();

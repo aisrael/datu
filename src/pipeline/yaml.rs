@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use crate::Result;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
@@ -10,11 +12,12 @@ pub struct WriteYamlStep {
     pub source: RecordBatchReaderSource,
 }
 
+#[async_trait(?Send)]
 impl Step for WriteYamlStep {
     type Input = ();
     type Output = ();
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path)?;
         let mut source = self.source;

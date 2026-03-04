@@ -1,3 +1,5 @@
+use std::fmt;
+
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
 use flt::ast::Literal;
@@ -9,18 +11,42 @@ use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
 use crate::pipeline::select;
+use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::write_batches;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
-enum PipelineStage {
+pub enum PipelineStage {
     Read { path: String },
-    Select { columns: Vec<String> },
+    Select { columns: Vec<ColumnSpec> },
     Head { n: usize },
     Tail { n: usize },
     Count,
     Write { path: String },
     Print,
+}
+
+impl fmt::Display for PipelineStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            PipelineStage::Select { columns } => {
+                let cols: Vec<String> = columns
+                    .iter()
+                    .map(|c| match c {
+                        ColumnSpec::Exact(s) => format!(r#""{s}""#),
+                        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+                    })
+                    .collect::<Vec<_>>();
+                write!(f, "select({})", cols.join(", "))
+            }
+            PipelineStage::Head { n } => write!(f, "head({n})"),
+            PipelineStage::Tail { n } => write!(f, "tail({n})"),
+            PipelineStage::Count => write!(f, "count()"),
+            PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
+            PipelineStage::Print => write!(f, "print"),
+        }
+    }
 }
 
 /// Builder for a REPL pipeline.
@@ -43,48 +69,36 @@ impl ReplPipelineBuilder {
         }
     }
 
-    /// Evaluates a datu REPL expression.
-    pub async fn eval(&mut self, expr: Expr) -> crate::Result<()> {
+    /// Constructs a pipeline from a datu REPL expression. Does not execute it.
+    pub fn eval(&self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
         match expr {
-            Expr::BinaryExpr(left, op, right) => {
-                self.eval_binary_expr(left, op, right).await?;
-            }
-            Expr::FunctionCall(name, args) => {
-                let pipeline = plan_pipeline(vec![Expr::FunctionCall(name, args)])?;
-                self.execute_pipeline(pipeline).await?;
-            }
-            _ => return Err(Error::UnsupportedExpression(expr.to_string())),
+            Expr::BinaryExpr(left, op, right) => self.eval_binary_expr(left, op, right),
+            Expr::FunctionCall(name, args) => plan_pipeline(vec![Expr::FunctionCall(name, args)]),
+            _ => Err(Error::UnsupportedExpression(expr.to_string())),
         }
-        Ok(())
     }
 
-    /// Evaluates a binary expression.
-    async fn eval_binary_expr(
-        &mut self,
+    /// Evaluates a binary expression to a pipeline.
+    #[allow(clippy::boxed_local)]
+    fn eval_binary_expr(
+        &self,
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<Vec<PipelineStage>> {
         match op {
             BinaryOp::Pipe => {
-                self.eval_pipe(left, right).await?;
+                let mut exprs = Vec::new();
+                collect_pipe_stages(*left, &mut exprs);
+                collect_pipe_stages(*right, &mut exprs);
+                plan_pipeline(exprs)
             }
-            _ => return Err(Error::UnsupportedOperator(op.to_string())),
+            _ => Err(Error::UnsupportedOperator(op.to_string())),
         }
-        Ok(())
-    }
-
-    /// Plans and executes a pipe expression as a pipeline.
-    async fn eval_pipe(&mut self, left: Box<Expr>, right: Box<Expr>) -> crate::Result<()> {
-        let mut exprs = Vec::new();
-        collect_pipe_stages(*left, &mut exprs);
-        collect_pipe_stages(*right, &mut exprs);
-        let pipeline = plan_pipeline(exprs)?;
-        self.execute_pipeline(pipeline).await
     }
 
     /// Executes a planned pipeline.
-    async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
+    pub async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
         for stage in stages {
             self.execute_stage(stage).await?;
         }
@@ -115,7 +129,7 @@ impl ReplPipelineBuilder {
     }
 
     /// Selects columns from the batches in context.
-    async fn exec_select(&mut self, columns: &[String]) -> crate::Result<()> {
+    async fn exec_select(&mut self, columns: &[ColumnSpec]) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("select requires a preceding read in the pipe".to_string())
         })?;
@@ -229,13 +243,14 @@ fn extract_path_from_args(func_name: &str, args: &[Expr]) -> crate::Result<Strin
     }
 }
 
-/// Extracts column names from select args (symbols like :one, identifiers, or strings like "one").
-fn extract_column_names(args: &[Expr]) -> crate::Result<Vec<String>> {
+/// Extracts column specs from select args. Symbols (:one) and identifiers use case-insensitive
+/// match; strings ("one") use exact match.
+fn extract_column_specs(args: &[Expr]) -> crate::Result<Vec<ColumnSpec>> {
     args.iter()
         .map(|expr| match expr {
-            Expr::Literal(Literal::Symbol(s)) => Ok(s.clone()),
-            Expr::Literal(Literal::String(s)) => Ok(s.clone()),
-            Expr::Ident(s) => Ok(s.clone()),
+            Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
+            Expr::Literal(Literal::String(s)) => Ok(ColumnSpec::Exact(s.clone())),
+            Expr::Ident(s) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
             _ => Err(Error::UnsupportedFunctionCall(format!(
                 "select expects symbol or string column names, got {expr:?}"
             ))),
@@ -256,7 +271,7 @@ impl ReplPipelineBuilder {
     }
 
     async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let columns = extract_column_names(&args)?;
+        let columns = extract_column_specs(&args)?;
         if columns.is_empty() {
             return Err(Error::UnsupportedFunctionCall(
                 "select expects at least one column name".to_string(),
@@ -305,7 +320,7 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                     Ok(PipelineStage::Read { path })
                 }
                 "select" => {
-                    let columns = extract_column_names(&args)?;
+                    let columns = extract_column_specs(&args)?;
                     if columns.is_empty() {
                         return Err(Error::UnsupportedFunctionCall(
                             "select expects at least one column name".to_string(),
@@ -427,7 +442,10 @@ mod tests {
         assert_eq!(
             stage,
             PipelineStage::Select {
-                columns: vec!["one".to_string(), "two".to_string()]
+                columns: vec![
+                    ColumnSpec::CaseInsensitive("one".into()),
+                    ColumnSpec::CaseInsensitive("two".into())
+                ]
             }
         );
     }
@@ -491,7 +509,7 @@ mod tests {
         assert_eq!(
             pipeline[1],
             PipelineStage::Select {
-                columns: vec!["x".to_string()]
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())]
             }
         );
         assert_eq!(
@@ -594,56 +612,81 @@ mod tests {
         assert!(matches!(&stages[0], Expr::BinaryExpr(_, BinaryOp::Add, _)));
     }
 
-    // ── extract_column_names ────────────────────────────────────────
+    // ── extract_column_specs ────────────────────────────────────────
 
     #[test]
-    fn test_extract_column_names_symbols() {
+    fn test_extract_column_specs_symbols() {
         let args = vec![
             Expr::Literal(Literal::Symbol("one".into())),
             Expr::Literal(Literal::Symbol("two".into())),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["one", "two"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("one".into()),
+                ColumnSpec::CaseInsensitive("two".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_strings() {
+    fn test_extract_column_specs_strings() {
         let args = vec![
             Expr::Literal(Literal::String("col_a".into())),
             Expr::Literal(Literal::String("col_b".into())),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["col_a", "col_b"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::Exact("col_a".into()),
+                ColumnSpec::Exact("col_b".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_idents() {
+    fn test_extract_column_specs_idents() {
         let args = vec![Expr::Ident("foo".into()), Expr::Ident("bar".into())];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["foo", "bar"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("foo".into()),
+                ColumnSpec::CaseInsensitive("bar".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_mixed() {
+    fn test_extract_column_specs_mixed() {
         let args = vec![
             Expr::Literal(Literal::Symbol("sym".into())),
             Expr::Literal(Literal::String("str".into())),
             Expr::Ident("ident".into()),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["sym", "str", "ident"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("sym".into()),
+                ColumnSpec::Exact("str".into()),
+                ColumnSpec::CaseInsensitive("ident".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_empty() {
-        let result = extract_column_names(&[]).unwrap();
+    fn test_extract_column_specs_empty() {
+        let result = extract_column_specs(&[]).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn test_extract_column_names_unsupported_expr() {
+    fn test_extract_column_specs_unsupported_expr() {
         let args = vec![Expr::Literal(Literal::Boolean(true))];
-        let result = extract_column_names(&args);
+        let result = extract_column_specs(&args);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -654,11 +697,11 @@ mod tests {
 
     // ── eval: error paths ───────────────────────────────────────────
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_unsupported_expression() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_eval_unsupported_expression() {
+        let ctx = new_context();
         let expr = Expr::Literal(Literal::Boolean(true));
-        let result = ctx.eval(expr).await;
+        let result = ctx.eval(expr);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -666,15 +709,15 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_unsupported_binary_operator() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_eval_unsupported_binary_operator() {
+        let ctx = new_context();
         let expr = Expr::BinaryExpr(
             Box::new(Expr::Ident("a".into())),
             BinaryOp::Add,
             Box::new(Expr::Ident("b".into())),
         );
-        let result = ctx.eval(expr).await;
+        let result = ctx.eval(expr);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::UnsupportedOperator(_)));
     }
@@ -854,7 +897,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }
@@ -872,7 +918,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -891,33 +940,64 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         let batches = ctx.batches.as_ref();
         assert!(batches.is_none(), "batches consumed by write");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_select_symbol_case_insensitive() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let args = vec![
+            Expr::Literal(Literal::Symbol("ONE".into())),
+            Expr::Literal(Literal::Symbol("TWO".into())),
+        ];
+        ctx.eval_select(args).await.expect("select");
+        let batches = ctx.batches.as_ref().expect("batches after select");
+        let schema = batches[0].schema();
+        let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(col_names, vec!["one", "two"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_select_string_exact_match_fails_on_wrong_case() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let args = vec![Expr::Literal(Literal::String("ONE".into()))];
+        let result = ctx.eval_select(args).await;
+        assert!(result.is_err());
+    }
+
     // ── eval_pipe ───────────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_pipe_single_read() {
-        let expr = parse(r#"read("fixtures/table.parquet")"#);
-        if let Expr::FunctionCall(_, _) = &expr {
-            let mut ctx = new_context();
-            let left = Box::new(expr);
-            let right = Box::new(Expr::FunctionCall(
-                Identifier("select".into()),
-                vec![Expr::Literal(Literal::Symbol("one".into()))],
-            ));
-            ctx.eval_pipe(left, right).await.expect("eval_pipe");
-            let batches = ctx.batches.as_ref().expect("batches");
-            let schema = batches[0].schema();
-            assert_eq!(schema.fields().len(), 1);
-            assert_eq!(schema.field(0).name(), "one");
-        } else {
-            panic!("expected FunctionCall");
-        }
+        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one)"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+        let batches = ctx.batches.as_ref().expect("batches");
+        let schema = batches[0].schema();
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(schema.field(0).name(), "one");
     }
 
     // ── is_head_call ───────────────────────────────────────────────
@@ -1029,7 +1109,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -1049,7 +1132,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }
@@ -1194,7 +1280,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -1271,7 +1360,10 @@ mod tests {
     async fn test_repl_pipeline_read_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1279,7 +1371,10 @@ mod tests {
     async fn test_repl_pipeline_read_select_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1287,7 +1382,10 @@ mod tests {
     async fn test_repl_pipeline_read_head_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> head(2) |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1304,7 +1402,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }

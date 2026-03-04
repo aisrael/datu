@@ -4,6 +4,7 @@ use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
+use async_trait::async_trait;
 
 use crate::Error;
 use crate::Result;
@@ -154,11 +155,12 @@ pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> R
     Ok(())
 }
 
+#[async_trait(?Send)]
 impl Step for WriteAvroStep {
     type Input = ();
     type Output = WriteAvroResult;
 
-    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get()?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteAvroResult {})

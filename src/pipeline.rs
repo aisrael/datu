@@ -2,7 +2,7 @@
 
 pub mod avro;
 pub mod csv;
-pub mod data_frame_reader;
+pub mod dataframe;
 pub mod display;
 pub mod json;
 pub mod orc;
@@ -13,11 +13,12 @@ pub mod xlsx;
 pub mod yaml;
 
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::FileType;
 use crate::Result;
-use crate::cli::convert::DataFrameSource;
+use crate::pipeline::dataframe::DataFrameSource;
 
 /// Arguments for reading a file (Avro, CSV, Parquet, ORC).
 pub struct ReadArgs {
@@ -51,12 +52,13 @@ pub struct WriteYamlArgs {
 
 /// A `Step` defines a step in the pipeline that can be executed
 /// and has an input and output type.
+#[async_trait(?Send)]
 pub trait Step {
     type Input;
     type Output;
 
     /// Execute the step
-    fn execute(self, input: Self::Input) -> Result<Self::Output>;
+    async fn execute(self, input: Self::Input) -> Result<Self::Output>;
 }
 
 /// A source that yields a value of type `T`.
@@ -177,14 +179,15 @@ pub async fn read_to_batches(
     limit: Option<usize>,
     csv_has_header: Option<bool>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let source = data_frame_reader::read_dataframe(
+    let source = dataframe::read_dataframe(
         input_path,
         input_file_type,
         select.clone(),
         limit,
         csv_has_header,
     )
-    .execute(())?;
+    .execute(())
+    .await?;
     let reader = DataFrameToBatchReader::try_new(source)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -204,13 +207,13 @@ pub async fn write_batches(
         .read_batches(batches)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let source = crate::cli::convert::DataFrameSource::new(df);
-    let writer_step = crate::cli::convert::DataFrameWriter::new(
+    let source = crate::pipeline::dataframe::DataFrameSource::new(df);
+    let writer_step = crate::pipeline::dataframe::DataFrameWriter::new(
         output_path,
         output_file_type,
         sparse,
         json_pretty,
     );
-    writer_step.execute(source)?;
+    writer_step.execute(source).await?;
     Ok(())
 }

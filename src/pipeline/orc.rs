@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use orc_rust::arrow_writer::ArrowWriterBuilder;
 use orc_rust::row_selection::RowSelector;
@@ -64,11 +65,12 @@ pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> R
     Ok(())
 }
 
+#[async_trait(?Send)]
 impl Step for WriteOrcStep {
     type Input = ();
     type Output = WriteOrcResult;
 
-    fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get()?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteOrcResult {})

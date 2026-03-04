@@ -1,6 +1,7 @@
 use arrow::record_batch::RecordBatch;
 use arrow_json::writer::JsonArray;
 use arrow_json::writer::WriterBuilder;
+use async_trait::async_trait;
 
 use crate::Error;
 use crate::Result;
@@ -14,11 +15,12 @@ pub struct WriteJsonStep {
     pub source: RecordBatchReaderSource,
 }
 
+#[async_trait(?Send)]
 impl Step for WriteJsonStep {
     type Input = ();
     type Output = ();
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let mut source = self.source;
         let reader = source.get()?;

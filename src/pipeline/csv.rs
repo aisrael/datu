@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 
@@ -46,11 +47,12 @@ pub struct WriteCsvStep {
 /// Result of successfully writing a CSV file.
 pub struct WriteCsvResult {}
 
+#[async_trait(?Send)]
 impl Step for WriteCsvStep {
     type Input = ();
     type Output = WriteCsvResult;
 
-    fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let mut writer = arrow::csv::Writer::new(file);
@@ -84,8 +86,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_csv_writer() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_csv_writer() {
         let args = ReadArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
@@ -108,7 +110,7 @@ mod tests {
 
         let args = WriteArgs { path };
         let writer = WriteCsvStep { args, source };
-        let result = writer.execute(());
+        let result = writer.execute(()).await;
         assert!(result.is_ok());
         assert!(output_path.exists());
     }

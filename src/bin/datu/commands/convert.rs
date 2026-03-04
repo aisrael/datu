@@ -1,8 +1,8 @@
 use clap::Args;
 use datu::FileType;
-use datu::cli::convert::DataFrameWriter;
 use datu::pipeline::Step;
-use datu::pipeline::data_frame_reader::DataFrameReader;
+use datu::pipeline::dataframe::DataFrameReader;
+use datu::pipeline::dataframe::DataFrameWriter;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
@@ -55,8 +55,8 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
 
     let writer_step =
         DataFrameWriter::new(args.output, output_file_type, args.sparse, args.json_pretty);
-    let source = reader_step.execute(())?;
-    writer_step.execute(source)?;
+    let source = reader_step.execute(()).await?;
+    writer_step.execute(source).await?;
 
     Ok(())
 }

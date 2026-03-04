@@ -23,16 +23,16 @@ use parquet::file::metadata::ParquetMetaDataReader;
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     match input_file_type {
-        FileType::Parquet => tail_parquet(args),
-        FileType::Avro => tail_avro(args),
+        FileType::Parquet => tail_parquet(args).await,
+        FileType::Avro => tail_avro(args).await,
         FileType::Csv => tail_csv(args).await,
-        FileType::Orc => tail_orc(args),
+        FileType::Orc => tail_orc(args).await,
         _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for tail"),
     }
 }
 
 /// Prints the last N lines of a Parquet file.
-fn tail_parquet(args: HeadsOrTails) -> Result<()> {
+async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let meta_file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
@@ -52,18 +52,18 @@ fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step)?;
+        reader_step = select_step.execute(reader_step).await?;
     }
     let sparse = args.sparse;
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
     };
-    display_step.execute(reader_step).map_err(Into::into)
+    display_step.execute(reader_step).await.map_err(Into::into)
 }
 
 /// Prints the last N rows from a generic record batch reader (used for Avro).
-fn tail_from_reader(
+async fn tail_from_reader(
     mut reader_step: RecordBatchReaderSource,
     number: usize,
     output: datu::cli::DisplayOutputFormat,
@@ -103,7 +103,7 @@ fn tail_from_reader(
         output_format: output,
         sparse,
     };
-    display_step.execute(reader_step).map_err(Into::into)
+    display_step.execute(reader_step).await.map_err(Into::into)
 }
 
 /// Prints the last N lines of a CSV file.
@@ -117,11 +117,11 @@ async fn tail_csv(args: HeadsOrTails) -> Result<()> {
     )
     .await?;
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
-    tail_from_reader(reader_step, args.number, args.output, args.sparse)
+    tail_from_reader(reader_step, args.number, args.output, args.sparse).await
 }
 
 /// Prints the last N lines of an Avro file.
-fn tail_avro(args: HeadsOrTails) -> Result<()> {
+async fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
         args: ReadArgs {
             path: args.input.clone(),
@@ -133,14 +133,14 @@ fn tail_avro(args: HeadsOrTails) -> Result<()> {
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step)?;
+        reader_step = select_step.execute(reader_step).await?;
     }
     let sparse = args.sparse;
-    tail_from_reader(reader_step, args.number, args.output, sparse)
+    tail_from_reader(reader_step, args.number, args.output, sparse).await
 }
 
 /// Prints the last N lines of an ORC file.
-fn tail_orc(args: HeadsOrTails) -> Result<()> {
+async fn tail_orc(args: HeadsOrTails) -> Result<()> {
     let mut file = File::open(&args.input).map_err(Error::IoError)?;
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
     let total_rows = metadata.number_of_rows() as usize;
@@ -158,12 +158,12 @@ fn tail_orc(args: HeadsOrTails) -> Result<()> {
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step)?;
+        reader_step = select_step.execute(reader_step).await?;
     }
     let sparse = args.sparse;
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
     };
-    display_step.execute(reader_step).map_err(Into::into)
+    display_step.execute(reader_step).await.map_err(Into::into)
 }

@@ -11,13 +11,14 @@ use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
 use crate::pipeline::select;
+use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::write_batches;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum PipelineStage {
     Read { path: String },
-    Select { columns: Vec<String> },
+    Select { columns: Vec<ColumnSpec> },
     Head { n: usize },
     Tail { n: usize },
     Count,
@@ -30,7 +31,13 @@ impl fmt::Display for PipelineStage {
         match self {
             PipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
             PipelineStage::Select { columns } => {
-                let cols: Vec<String> = columns.iter().map(|c| format!(":{c}")).collect::<Vec<_>>();
+                let cols: Vec<String> = columns
+                    .iter()
+                    .map(|c| match c {
+                        ColumnSpec::Exact(s) => format!(r#""{s}""#),
+                        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+                    })
+                    .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))
             }
             PipelineStage::Head { n } => write!(f, "head({n})"),
@@ -72,6 +79,7 @@ impl ReplPipelineBuilder {
     }
 
     /// Evaluates a binary expression to a pipeline.
+    #[allow(clippy::boxed_local)]
     fn eval_binary_expr(
         &self,
         left: Box<Expr>,
@@ -121,7 +129,7 @@ impl ReplPipelineBuilder {
     }
 
     /// Selects columns from the batches in context.
-    async fn exec_select(&mut self, columns: &[String]) -> crate::Result<()> {
+    async fn exec_select(&mut self, columns: &[ColumnSpec]) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("select requires a preceding read in the pipe".to_string())
         })?;
@@ -235,13 +243,14 @@ fn extract_path_from_args(func_name: &str, args: &[Expr]) -> crate::Result<Strin
     }
 }
 
-/// Extracts column names from select args (symbols like :one, identifiers, or strings like "one").
-fn extract_column_names(args: &[Expr]) -> crate::Result<Vec<String>> {
+/// Extracts column specs from select args. Symbols (:one) and identifiers use case-insensitive
+/// match; strings ("one") use exact match.
+fn extract_column_specs(args: &[Expr]) -> crate::Result<Vec<ColumnSpec>> {
     args.iter()
         .map(|expr| match expr {
-            Expr::Literal(Literal::Symbol(s)) => Ok(s.clone()),
-            Expr::Literal(Literal::String(s)) => Ok(s.clone()),
-            Expr::Ident(s) => Ok(s.clone()),
+            Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
+            Expr::Literal(Literal::String(s)) => Ok(ColumnSpec::Exact(s.clone())),
+            Expr::Ident(s) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
             _ => Err(Error::UnsupportedFunctionCall(format!(
                 "select expects symbol or string column names, got {expr:?}"
             ))),
@@ -262,7 +271,7 @@ impl ReplPipelineBuilder {
     }
 
     async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let columns = extract_column_names(&args)?;
+        let columns = extract_column_specs(&args)?;
         if columns.is_empty() {
             return Err(Error::UnsupportedFunctionCall(
                 "select expects at least one column name".to_string(),
@@ -311,7 +320,7 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                     Ok(PipelineStage::Read { path })
                 }
                 "select" => {
-                    let columns = extract_column_names(&args)?;
+                    let columns = extract_column_specs(&args)?;
                     if columns.is_empty() {
                         return Err(Error::UnsupportedFunctionCall(
                             "select expects at least one column name".to_string(),
@@ -433,7 +442,10 @@ mod tests {
         assert_eq!(
             stage,
             PipelineStage::Select {
-                columns: vec!["one".to_string(), "two".to_string()]
+                columns: vec![
+                    ColumnSpec::CaseInsensitive("one".into()),
+                    ColumnSpec::CaseInsensitive("two".into())
+                ]
             }
         );
     }
@@ -497,7 +509,7 @@ mod tests {
         assert_eq!(
             pipeline[1],
             PipelineStage::Select {
-                columns: vec!["x".to_string()]
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())]
             }
         );
         assert_eq!(
@@ -600,56 +612,81 @@ mod tests {
         assert!(matches!(&stages[0], Expr::BinaryExpr(_, BinaryOp::Add, _)));
     }
 
-    // ── extract_column_names ────────────────────────────────────────
+    // ── extract_column_specs ────────────────────────────────────────
 
     #[test]
-    fn test_extract_column_names_symbols() {
+    fn test_extract_column_specs_symbols() {
         let args = vec![
             Expr::Literal(Literal::Symbol("one".into())),
             Expr::Literal(Literal::Symbol("two".into())),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["one", "two"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("one".into()),
+                ColumnSpec::CaseInsensitive("two".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_strings() {
+    fn test_extract_column_specs_strings() {
         let args = vec![
             Expr::Literal(Literal::String("col_a".into())),
             Expr::Literal(Literal::String("col_b".into())),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["col_a", "col_b"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::Exact("col_a".into()),
+                ColumnSpec::Exact("col_b".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_idents() {
+    fn test_extract_column_specs_idents() {
         let args = vec![Expr::Ident("foo".into()), Expr::Ident("bar".into())];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["foo", "bar"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("foo".into()),
+                ColumnSpec::CaseInsensitive("bar".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_mixed() {
+    fn test_extract_column_specs_mixed() {
         let args = vec![
             Expr::Literal(Literal::Symbol("sym".into())),
             Expr::Literal(Literal::String("str".into())),
             Expr::Ident("ident".into()),
         ];
-        let result = extract_column_names(&args).unwrap();
-        assert_eq!(result, vec!["sym", "str", "ident"]);
+        let result = extract_column_specs(&args).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                ColumnSpec::CaseInsensitive("sym".into()),
+                ColumnSpec::Exact("str".into()),
+                ColumnSpec::CaseInsensitive("ident".into())
+            ]
+        );
     }
 
     #[test]
-    fn test_extract_column_names_empty() {
-        let result = extract_column_names(&[]).unwrap();
+    fn test_extract_column_specs_empty() {
+        let result = extract_column_specs(&[]).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn test_extract_column_names_unsupported_expr() {
+    fn test_extract_column_specs_unsupported_expr() {
         let args = vec![Expr::Literal(Literal::Boolean(true))];
-        let result = extract_column_names(&args);
+        let result = extract_column_specs(&args);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -911,6 +948,40 @@ mod tests {
         assert!(output_path.exists());
         let batches = ctx.batches.as_ref();
         assert!(batches.is_none(), "batches consumed by write");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_select_symbol_case_insensitive() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let args = vec![
+            Expr::Literal(Literal::Symbol("ONE".into())),
+            Expr::Literal(Literal::Symbol("TWO".into())),
+        ];
+        ctx.eval_select(args).await.expect("select");
+        let batches = ctx.batches.as_ref().expect("batches after select");
+        let schema = batches[0].schema();
+        let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(col_names, vec!["one", "two"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_select_string_exact_match_fails_on_wrong_case() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let args = vec![Expr::Literal(Literal::String("ONE".into()))];
+        let result = ctx.eval_select(args).await;
+        assert!(result.is_err());
     }
 
     // ── eval_pipe ───────────────────────────────────────────────────

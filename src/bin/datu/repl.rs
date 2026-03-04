@@ -39,7 +39,10 @@ async fn repl(rl: &mut DefaultEditor, context: &mut ReplPipelineBuilder) -> Resu
             Ok((remainder, expr)) => {
                 let remainder = remainder.trim();
                 if remainder.is_empty() {
-                    context.eval(expr).await?;
+                    let pipeline = context.eval(expr)?;
+                    let stages: Vec<String> = pipeline.iter().map(|s| s.to_string()).collect();
+                    println!("Pipeline: {}", stages.join(" |> "));
+                    context.execute_pipeline(pipeline).await?;
                 } else {
                     eprintln!(
                         "parse error: unexpected input after expression: {:?}",

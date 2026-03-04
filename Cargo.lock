@@ -1773,6 +1773,7 @@ dependencies = [
  "arrow",
  "arrow-avro",
  "arrow-json",
+ "async-trait",
  "chrono",
  "clap",
  "criterion",

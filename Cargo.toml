@@ -12,6 +12,7 @@ exclude = [
 
 [dependencies]
 anyhow = "1.0.100"
+async-trait = "0.1"
 arrow = "57.2.0"
 log = "0.4"
 arrow-avro = "57.2.0"

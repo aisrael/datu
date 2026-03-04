@@ -1,3 +1,5 @@
+use std::fmt;
+
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
 use flt::ast::Literal;
@@ -13,7 +15,7 @@ use crate::pipeline::write_batches;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
-enum PipelineStage {
+pub enum PipelineStage {
     Read { path: String },
     Select { columns: Vec<String> },
     Head { n: usize },
@@ -21,6 +23,23 @@ enum PipelineStage {
     Count,
     Write { path: String },
     Print,
+}
+
+impl fmt::Display for PipelineStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            PipelineStage::Select { columns } => {
+                let cols: Vec<String> = columns.iter().map(|c| format!(":{c}")).collect::<Vec<_>>();
+                write!(f, "select({})", cols.join(", "))
+            }
+            PipelineStage::Head { n } => write!(f, "head({n})"),
+            PipelineStage::Tail { n } => write!(f, "tail({n})"),
+            PipelineStage::Count => write!(f, "count()"),
+            PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
+            PipelineStage::Print => write!(f, "print"),
+        }
+    }
 }
 
 /// Builder for a REPL pipeline.
@@ -43,48 +62,35 @@ impl ReplPipelineBuilder {
         }
     }
 
-    /// Evaluates a datu REPL expression.
-    pub async fn eval(&mut self, expr: Expr) -> crate::Result<()> {
+    /// Constructs a pipeline from a datu REPL expression. Does not execute it.
+    pub fn eval(&self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
         match expr {
-            Expr::BinaryExpr(left, op, right) => {
-                self.eval_binary_expr(left, op, right).await?;
-            }
-            Expr::FunctionCall(name, args) => {
-                let pipeline = plan_pipeline(vec![Expr::FunctionCall(name, args)])?;
-                self.execute_pipeline(pipeline).await?;
-            }
-            _ => return Err(Error::UnsupportedExpression(expr.to_string())),
+            Expr::BinaryExpr(left, op, right) => self.eval_binary_expr(left, op, right),
+            Expr::FunctionCall(name, args) => plan_pipeline(vec![Expr::FunctionCall(name, args)]),
+            _ => Err(Error::UnsupportedExpression(expr.to_string())),
         }
-        Ok(())
     }
 
-    /// Evaluates a binary expression.
-    async fn eval_binary_expr(
-        &mut self,
+    /// Evaluates a binary expression to a pipeline.
+    fn eval_binary_expr(
+        &self,
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<Vec<PipelineStage>> {
         match op {
             BinaryOp::Pipe => {
-                self.eval_pipe(left, right).await?;
+                let mut exprs = Vec::new();
+                collect_pipe_stages(*left, &mut exprs);
+                collect_pipe_stages(*right, &mut exprs);
+                plan_pipeline(exprs)
             }
-            _ => return Err(Error::UnsupportedOperator(op.to_string())),
+            _ => Err(Error::UnsupportedOperator(op.to_string())),
         }
-        Ok(())
-    }
-
-    /// Plans and executes a pipe expression as a pipeline.
-    async fn eval_pipe(&mut self, left: Box<Expr>, right: Box<Expr>) -> crate::Result<()> {
-        let mut exprs = Vec::new();
-        collect_pipe_stages(*left, &mut exprs);
-        collect_pipe_stages(*right, &mut exprs);
-        let pipeline = plan_pipeline(exprs)?;
-        self.execute_pipeline(pipeline).await
     }
 
     /// Executes a planned pipeline.
-    async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
+    pub async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
         for stage in stages {
             self.execute_stage(stage).await?;
         }
@@ -654,11 +660,11 @@ mod tests {
 
     // ── eval: error paths ───────────────────────────────────────────
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_unsupported_expression() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_eval_unsupported_expression() {
+        let ctx = new_context();
         let expr = Expr::Literal(Literal::Boolean(true));
-        let result = ctx.eval(expr).await;
+        let result = ctx.eval(expr);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -666,15 +672,15 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_unsupported_binary_operator() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_eval_unsupported_binary_operator() {
+        let ctx = new_context();
         let expr = Expr::BinaryExpr(
             Box::new(Expr::Ident("a".into())),
             BinaryOp::Add,
             Box::new(Expr::Ident("b".into())),
         );
-        let result = ctx.eval(expr).await;
+        let result = ctx.eval(expr);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::UnsupportedOperator(_)));
     }
@@ -854,7 +860,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }
@@ -872,7 +881,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -891,7 +903,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         let batches = ctx.batches.as_ref();
@@ -902,22 +917,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_eval_pipe_single_read() {
-        let expr = parse(r#"read("fixtures/table.parquet")"#);
-        if let Expr::FunctionCall(_, _) = &expr {
-            let mut ctx = new_context();
-            let left = Box::new(expr);
-            let right = Box::new(Expr::FunctionCall(
-                Identifier("select".into()),
-                vec![Expr::Literal(Literal::Symbol("one".into()))],
-            ));
-            ctx.eval_pipe(left, right).await.expect("eval_pipe");
-            let batches = ctx.batches.as_ref().expect("batches");
-            let schema = batches[0].schema();
-            assert_eq!(schema.fields().len(), 1);
-            assert_eq!(schema.field(0).name(), "one");
-        } else {
-            panic!("expected FunctionCall");
-        }
+        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one)"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+        let batches = ctx.batches.as_ref().expect("batches");
+        let schema = batches[0].schema();
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(schema.field(0).name(), "one");
     }
 
     // ── is_head_call ───────────────────────────────────────────────
@@ -1029,7 +1038,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -1049,7 +1061,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }
@@ -1194,7 +1209,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
@@ -1271,7 +1289,10 @@ mod tests {
     async fn test_repl_pipeline_read_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1279,7 +1300,10 @@ mod tests {
     async fn test_repl_pipeline_read_select_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1287,7 +1311,10 @@ mod tests {
     async fn test_repl_pipeline_read_head_count() {
         let expr = parse(r#"read("fixtures/table.parquet") |> head(2) |> count()"#);
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
@@ -1304,7 +1331,10 @@ mod tests {
         let expr = parse(&pipeline);
 
         let mut ctx = new_context();
-        ctx.eval(expr).await.expect("eval");
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
 
         assert!(output_path.exists());
     }

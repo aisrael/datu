@@ -6,10 +6,119 @@ use datafusion::prelude::ParquetReadOptions;
 
 use crate::Error;
 use crate::FileType;
-use crate::cli::convert::DataFrameSource;
+use crate::pipeline::Source;
 use crate::pipeline::Step;
+use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::avro;
+use crate::pipeline::display;
 use crate::pipeline::orc;
+use crate::pipeline::parquet;
+use crate::pipeline::xlsx;
 use crate::utils::parse_select_columns;
+
+/// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
+#[derive(Debug)]
+pub struct DataFrameSource {
+    df: Option<datafusion::dataframe::DataFrame>,
+}
+
+impl DataFrameSource {
+    pub fn new(df: datafusion::dataframe::DataFrame) -> Self {
+        Self { df: Some(df) }
+    }
+}
+
+impl Source<datafusion::dataframe::DataFrame> for DataFrameSource {
+    fn get(&mut self) -> crate::Result<Box<datafusion::dataframe::DataFrame>> {
+        let df = self
+            .df
+            .take()
+            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+        Ok(Box::new(df))
+    }
+}
+
+/// A step that writes a DataFusion DataFrame to an output file.
+pub struct DataFrameWriter {
+    output_path: String,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+}
+
+impl DataFrameWriter {
+    pub fn new<S: Into<String>>(
+        output_path: S,
+        output_file_type: FileType,
+        sparse: bool,
+        json_pretty: bool,
+    ) -> Self {
+        Self {
+            output_path: output_path.into(),
+            output_file_type,
+            sparse,
+            json_pretty,
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl Step for DataFrameWriter {
+    type Input = DataFrameSource;
+    type Output = ();
+
+    async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
+        if self.output_file_type != FileType::Json && self.json_pretty {
+            eprintln!("Warning: --json-pretty is only supported when converting to JSON");
+        }
+
+        let df = input.get()?;
+
+        let handle = tokio::runtime::Handle::current();
+        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+
+        let mut reader = VecRecordBatchReader::new(batches);
+        let output_path = &self.output_path;
+
+        match self.output_file_type {
+            FileType::Parquet => {
+                parquet::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Csv => {
+                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+                let mut writer = arrow::csv::Writer::new(file);
+                for batch in &mut reader {
+                    let batch = batch.map_err(Error::ArrowError)?;
+                    writer.write(&batch).map_err(Error::ArrowError)?;
+                }
+            }
+            FileType::Json => {
+                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+                if self.json_pretty {
+                    display::write_record_batches_as_json_pretty(&mut reader, file, self.sparse)?;
+                } else {
+                    display::write_record_batches_as_json(&mut reader, file, self.sparse)?;
+                }
+            }
+            FileType::Yaml => {
+                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+                display::write_record_batches_as_yaml(&mut reader, file, self.sparse)?;
+            }
+            FileType::Avro => {
+                avro::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Orc => {
+                orc::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Xlsx => {
+                xlsx::write_record_batches(output_path, &mut reader)?;
+            }
+        }
+
+        Ok(())
+    }
+}
 
 /// A step that reads an input file into a DataFusion DataFrame with optional column selection and limit.
 pub struct DataFrameReader {

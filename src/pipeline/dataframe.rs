@@ -216,17 +216,6 @@ impl Step for DataFrameReader {
     }
 }
 
-/// Creates a `DataFrameReader` that reads an input file into a DataFusion DataFrame.
-pub fn read_dataframe(
-    input_path: &str,
-    input_file_type: FileType,
-    select: Option<Vec<String>>,
-    limit: Option<usize>,
-    csv_has_header: Option<bool>,
-) -> DataFrameReader {
-    DataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
-}
-
 /// Reads an ORC file into record batches (ORC is not natively supported by DataFusion).
 /// Limit is applied via DataFusion after reading.
 fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::RecordBatch>> {

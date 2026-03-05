@@ -3,12 +3,15 @@
 pub mod avro;
 pub mod csv;
 pub mod dataframe;
+pub mod datasource;
 pub mod display;
 pub mod json;
 pub mod orc;
 pub mod parquet;
+pub mod read;
 pub mod record_batch_filter;
 pub mod select;
+pub mod write;
 pub mod xlsx;
 pub mod yaml;
 
@@ -18,37 +21,12 @@ use futures::StreamExt;
 
 use crate::FileType;
 use crate::Result;
+use crate::pipeline::dataframe::DataFrameReader;
 use crate::pipeline::dataframe::DataFrameSource;
-
-/// Arguments for reading a file (Avro, CSV, Parquet, ORC).
-pub struct ReadArgs {
-    pub path: String,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-    /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
-    pub csv_has_header: Option<bool>,
-}
-
-/// Arguments for writing a file (CSV, Avro, Parquet, ORC, XLSX).
-pub struct WriteArgs {
-    pub path: String,
-}
-
-/// Arguments for writing a JSON file.
-pub struct WriteJsonArgs {
-    pub path: String,
-    /// When true, omit keys with null/missing values. When false, output default values.
-    pub sparse: bool,
-    /// When true, format output with indentation and newlines.
-    pub pretty: bool,
-}
-
-/// Arguments for writing a YAML file.
-pub struct WriteYamlArgs {
-    pub path: String,
-    /// When true, omit keys with null/missing values. When false, output default values.
-    pub sparse: bool,
-}
+pub use crate::pipeline::read::ReadArgs;
+pub use crate::pipeline::write::WriteArgs;
+pub use crate::pipeline::write::WriteJsonArgs;
+pub use crate::pipeline::write::WriteYamlArgs;
 
 /// A `Step` defines a step in the pipeline that can be executed
 /// and has an input and output type.
@@ -179,13 +157,10 @@ pub async fn read_to_batches(
     limit: Option<usize>,
     csv_has_header: Option<bool>,
 ) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let source = dataframe::read_dataframe(
-        input_path,
-        input_file_type,
-        select.clone(),
-        limit,
-        csv_has_header,
-    )
+    let source = {
+        let select = select.clone();
+        DataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
+    }
     .execute(())
     .await?;
     let reader = DataFrameToBatchReader::try_new(source)

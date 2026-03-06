@@ -13,6 +13,8 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::WriteArgs;
+use crate::pipeline::batch_write::BatchWriteSink;
+use crate::pipeline::batch_write::write_record_batches_with_sink;
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
 pub struct ReadAvroStep {
@@ -144,15 +146,30 @@ pub struct WriteAvroResult {}
 
 /// Write record batches from a reader to an Avro file.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
-    let file = std::fs::File::create(path).map_err(Error::IoError)?;
-    let schema = reader.schema();
-    let mut writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;
-    for batch in reader {
-        let batch = batch.map_err(Error::ArrowError)?;
-        writer.write(&batch).map_err(Error::ArrowError)?;
+    write_record_batches_with_sink(path, reader, AvroSink::new)
+}
+
+struct AvroSink {
+    writer: AvroWriter<std::fs::File>,
+}
+
+impl AvroSink {
+    fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+        let file = std::fs::File::create(path).map_err(Error::IoError)?;
+        let writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;
+        Ok(Self { writer })
     }
-    writer.finish().map_err(Error::ArrowError)?;
-    Ok(())
+}
+
+impl BatchWriteSink for AvroSink {
+    fn write_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.writer.write(batch).map_err(Error::ArrowError)
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.writer.finish().map_err(Error::ArrowError)?;
+        Ok(())
+    }
 }
 
 #[async_trait(?Send)]

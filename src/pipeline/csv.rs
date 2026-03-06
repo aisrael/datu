@@ -10,6 +10,8 @@ use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::WriteArgs;
+use crate::pipeline::batch_write::BatchWriteSink;
+use crate::pipeline::batch_write::write_record_batches_with_sink;
 
 /// Pipeline step that reads a CSV file and produces a record batch reader.
 /// Uses DataFusion for schema inference and type detection.
@@ -47,21 +49,43 @@ pub struct WriteCsvStep {
 /// Result of successfully writing a CSV file.
 pub struct WriteCsvResult {}
 
+/// Write record batches from a reader to a CSV file.
+pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+    write_record_batches_with_sink(path, reader, CsvSink::new)
+}
+
+struct CsvSink {
+    writer: arrow::csv::Writer<std::fs::File>,
+}
+
+impl CsvSink {
+    fn new(path: &str, _schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+        let file = std::fs::File::create(path).map_err(Error::IoError)?;
+        Ok(Self {
+            writer: arrow::csv::Writer::new(file),
+        })
+    }
+}
+
+impl BatchWriteSink for CsvSink {
+    fn write_batch(&mut self, batch: &arrow::record_batch::RecordBatch) -> Result<()> {
+        self.writer.write(batch).map_err(Error::ArrowError)
+    }
+
+    fn finish(self) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[async_trait(?Send)]
 impl Step for WriteCsvStep {
     type Input = ();
     type Output = WriteCsvResult;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let path = self.args.path.as_str();
-        let file = std::fs::File::create(path).map_err(Error::IoError)?;
-        let mut writer = arrow::csv::Writer::new(file);
         let mut source = self.source;
-        let reader = source.get()?;
-        for batch in reader {
-            let batch = batch.map_err(Error::ArrowError)?;
-            writer.write(&batch).map_err(Error::ArrowError)?;
-        }
+        let mut reader = source.get()?;
+        write_record_batches(self.args.path.as_str(), &mut *reader)?;
         Ok(WriteCsvResult {})
     }
 }

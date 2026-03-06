@@ -86,12 +86,7 @@ impl Step for DataFrameWriter {
                 parquet::write_record_batches(output_path, &mut reader)?;
             }
             FileType::Csv => {
-                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-                let mut writer = arrow::csv::Writer::new(file);
-                for batch in &mut reader {
-                    let batch = batch.map_err(Error::ArrowError)?;
-                    writer.write(&batch).map_err(Error::ArrowError)?;
-                }
+                crate::pipeline::csv::write_record_batches(output_path, &mut reader)?;
             }
             FileType::Json => {
                 let file = std::fs::File::create(output_path).map_err(Error::IoError)?;

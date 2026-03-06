@@ -11,6 +11,8 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::WriteArgs;
+use crate::pipeline::batch_write::BatchWriteSink;
+use crate::pipeline::batch_write::write_record_batches_with_sink;
 
 /// Pipeline step that reads an ORC file and produces a record batch reader.
 pub struct ReadOrcStep {
@@ -52,17 +54,32 @@ pub struct WriteOrcResult {}
 
 /// Write record batches from a reader to an ORC file.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
-    let file = std::fs::File::create(path).map_err(Error::IoError)?;
-    let schema = reader.schema();
-    let mut writer = ArrowWriterBuilder::new(file, schema)
-        .try_build()
-        .map_err(Error::OrcError)?;
-    for batch in reader {
-        let batch = batch.map_err(Error::ArrowError)?;
-        writer.write(&batch).map_err(Error::OrcError)?;
+    write_record_batches_with_sink(path, reader, OrcSink::new)
+}
+
+struct OrcSink {
+    writer: orc_rust::arrow_writer::ArrowWriter<std::fs::File>,
+}
+
+impl OrcSink {
+    fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+        let file = std::fs::File::create(path).map_err(Error::IoError)?;
+        let writer = ArrowWriterBuilder::new(file, schema)
+            .try_build()
+            .map_err(Error::OrcError)?;
+        Ok(Self { writer })
     }
-    writer.close().map_err(Error::OrcError)?;
-    Ok(())
+}
+
+impl BatchWriteSink for OrcSink {
+    fn write_batch(&mut self, batch: &arrow::record_batch::RecordBatch) -> Result<()> {
+        self.writer.write(batch).map_err(Error::OrcError)
+    }
+
+    fn finish(self) -> Result<()> {
+        self.writer.close().map_err(Error::OrcError)?;
+        Ok(())
+    }
 }
 
 #[async_trait(?Send)]

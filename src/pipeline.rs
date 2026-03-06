@@ -1,6 +1,7 @@
 //! The `pipeline` module is the core of the datu crate.
 
 pub mod avro;
+pub mod batch_write;
 pub mod csv;
 pub mod dataframe;
 pub mod datasource;

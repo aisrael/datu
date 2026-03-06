@@ -169,6 +169,37 @@ pub async fn read_to_batches(
     Ok(reader.into_batches())
 }
 
+/// Takes the last `n` rows from a sequence of record batches.
+pub fn tail_batches(
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    n: usize,
+) -> Vec<arrow::record_batch::RecordBatch> {
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let number = n.min(total_rows);
+    let skip = total_rows.saturating_sub(number);
+
+    let mut result = Vec::new();
+    let mut rows_emitted = 0usize;
+    let mut rows_skipped = 0usize;
+    for batch in batches {
+        let batch_rows = batch.num_rows();
+        if rows_skipped + batch_rows <= skip {
+            rows_skipped += batch_rows;
+            continue;
+        }
+        let start_in_batch = skip.saturating_sub(rows_skipped);
+        rows_skipped += start_in_batch;
+        let take = (number - rows_emitted).min(batch_rows - start_in_batch);
+        if take == 0 {
+            break;
+        }
+        result.push(batch.slice(start_in_batch, take));
+        rows_emitted += take;
+    }
+
+    result
+}
+
 /// Writes record batches to output file. Used by REPL.
 pub async fn write_batches(
     batches: Vec<arrow::record_batch::RecordBatch>,

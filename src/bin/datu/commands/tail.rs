@@ -15,6 +15,7 @@ use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
 use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
+use datu::pipeline::tail_batches;
 use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -73,29 +74,7 @@ async fn tail_from_reader(
     let batches: Vec<arrow::record_batch::RecordBatch> = reader
         .map(|b| b.map_err(Error::ArrowError).map_err(Into::into))
         .collect::<Result<Vec<_>>>()?;
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    let number = number.min(total_rows);
-    let skip = total_rows.saturating_sub(number);
-
-    let mut tail_batches = Vec::new();
-    let mut rows_emitted = 0usize;
-    let mut rows_skipped = 0usize;
-    for batch in batches {
-        let batch_rows = batch.num_rows();
-        if rows_skipped + batch_rows <= skip {
-            rows_skipped += batch_rows;
-            continue;
-        }
-        let start_in_batch = skip.saturating_sub(rows_skipped);
-        rows_skipped += start_in_batch;
-        let take = (number - rows_emitted).min(batch_rows - start_in_batch);
-        if take == 0 {
-            break;
-        }
-        let slice = batch.slice(start_in_batch, take);
-        tail_batches.push(slice);
-        rows_emitted += take;
-    }
+    let tail_batches = tail_batches(batches, number);
 
     let reader_step: RecordBatchReaderSource =
         Box::new(VecRecordBatchReaderSource::new(tail_batches));

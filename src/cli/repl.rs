@@ -12,6 +12,7 @@ use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
 use crate::pipeline::select;
 use crate::pipeline::select::ColumnSpec;
+use crate::pipeline::tail_batches;
 use crate::pipeline::write_batches;
 
 /// A planned pipeline stage with validated, extracted arguments.
@@ -162,28 +163,7 @@ impl ReplPipelineBuilder {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("tail requires a preceding read in the pipe".to_string())
         })?;
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let number = n.min(total_rows);
-        let skip = total_rows.saturating_sub(number);
-
-        let mut result = Vec::new();
-        let mut rows_emitted = 0usize;
-        let mut rows_skipped = 0usize;
-        for batch in batches {
-            let batch_rows = batch.num_rows();
-            if rows_skipped + batch_rows <= skip {
-                rows_skipped += batch_rows;
-                continue;
-            }
-            let start_in_batch = skip.saturating_sub(rows_skipped);
-            rows_skipped += start_in_batch;
-            let take = (number - rows_emitted).min(batch_rows - start_in_batch);
-            if take == 0 {
-                break;
-            }
-            result.push(batch.slice(start_in_batch, take));
-            rows_emitted += take;
-        }
+        let result = tail_batches(batches, n);
         self.batches = Some(result);
         Ok(())
     }

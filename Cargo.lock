@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "datu"
-version = "0.3.0-alpha"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arrow",

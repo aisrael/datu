@@ -27,6 +27,29 @@ pub enum PipelineStage {
     Print,
 }
 
+impl PipelineStage {
+    /// Returns true when a stage closes a REPL statement.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Write { .. }
+        )
+    }
+
+    /// Returns true for stages that can continue to another explicit stage.
+    pub fn is_non_terminal(&self) -> bool {
+        !self.is_terminal()
+    }
+
+    /// Returns any implicit stage that should be appended after this stage.
+    pub fn implicit_followup_stage(&self) -> Option<PipelineStage> {
+        match self {
+            PipelineStage::Head { .. } | PipelineStage::Tail { .. } => Some(PipelineStage::Print),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for PipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -45,7 +68,7 @@ impl fmt::Display for PipelineStage {
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
             PipelineStage::Count => write!(f, "count()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
-            PipelineStage::Print => write!(f, "print"),
+            PipelineStage::Print => write!(f, "print()"),
         }
     }
 }
@@ -54,6 +77,8 @@ impl fmt::Display for PipelineStage {
 pub struct ReplPipelineBuilder {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
+    pub statement_incomplete: bool,
+    pending_exprs: Vec<Expr>,
 }
 
 impl Default for ReplPipelineBuilder {
@@ -67,14 +92,16 @@ impl ReplPipelineBuilder {
         Self {
             batches: None,
             writer: None,
+            statement_incomplete: false,
+            pending_exprs: Vec::new(),
         }
     }
 
     /// Constructs a pipeline from a datu REPL expression. Does not execute it.
-    pub fn eval(&self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
+    pub fn eval(&mut self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
         match expr {
             Expr::BinaryExpr(left, op, right) => self.eval_binary_expr(left, op, right),
-            Expr::FunctionCall(name, args) => plan_pipeline(vec![Expr::FunctionCall(name, args)]),
+            Expr::FunctionCall(name, args) => self.eval_exprs(vec![Expr::FunctionCall(name, args)]),
             _ => Err(Error::UnsupportedExpression(expr.to_string())),
         }
     }
@@ -82,7 +109,7 @@ impl ReplPipelineBuilder {
     /// Evaluates a binary expression to a pipeline.
     #[allow(clippy::boxed_local)]
     fn eval_binary_expr(
-        &self,
+        &mut self,
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
@@ -92,10 +119,34 @@ impl ReplPipelineBuilder {
                 let mut exprs = Vec::new();
                 collect_pipe_stages(*left, &mut exprs);
                 collect_pipe_stages(*right, &mut exprs);
-                plan_pipeline(exprs)
+                self.eval_exprs(exprs)
             }
             _ => Err(Error::UnsupportedOperator(op.to_string())),
         }
+    }
+
+    fn eval_exprs(&mut self, exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
+        let (stages, statement_incomplete) = plan_pipeline_with_state(exprs)?;
+        self.statement_incomplete = statement_incomplete;
+        Ok(stages)
+    }
+
+    /// Accumulates REPL input expressions until a terminal stage is reached.
+    /// Returns a planned pipeline only when the accumulated statement is complete.
+    pub fn eval_incremental(&mut self, expr: Expr) -> crate::Result<Option<Vec<PipelineStage>>> {
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        self.pending_exprs.extend(exprs);
+
+        let statement_complete = self.pending_exprs.last().is_some_and(is_terminal_expr);
+        self.statement_incomplete = !statement_complete;
+        if !statement_complete {
+            return Ok(None);
+        }
+
+        let planned = plan_pipeline_with_state(std::mem::take(&mut self.pending_exprs))?;
+        self.statement_incomplete = planned.1;
+        Ok(Some(planned.0))
     }
 
     /// Executes a planned pipeline.
@@ -210,6 +261,14 @@ fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
             collect_pipe_stages(*r, out);
         }
         other => out.push(other),
+    }
+}
+
+fn is_terminal_expr(expr: &Expr) -> bool {
+    if let Expr::FunctionCall(name, _) = expr {
+        matches!(name.to_string().as_str(), "head" | "tail" | "write")
+    } else {
+        false
     }
 }
 
@@ -336,19 +395,27 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
 }
 
 /// Plans a full pipeline from a list of AST expressions.
-/// Automatically appends a Print stage if the last stage is `head()` or `tail()`
+/// Automatically appends an implicit stage for terminal stages (head/tail).
+#[cfg(test)]
 fn plan_pipeline(exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
+    plan_pipeline_with_state(exprs).map(|(stages, _)| stages)
+}
+
+/// Plans a full pipeline and returns whether the statement is incomplete
+/// (the final explicit stage is non-terminal).
+fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStage>, bool)> {
     let mut stages: Vec<PipelineStage> = exprs
         .into_iter()
         .map(plan_stage)
         .collect::<crate::Result<Vec<_>>>()?;
-    if matches!(
-        stages.last(),
-        Some(PipelineStage::Head { .. } | PipelineStage::Tail { .. })
-    ) {
-        stages.push(PipelineStage::Print);
+    let statement_incomplete = stages.last().is_some_and(PipelineStage::is_non_terminal);
+    if let Some(implicit_stage) = stages
+        .last()
+        .and_then(PipelineStage::implicit_followup_stage)
+    {
+        stages.push(implicit_stage);
     }
-    Ok(stages)
+    Ok((stages, statement_incomplete))
 }
 
 /// Extracts a single positive integer argument from a function call's args.
@@ -679,7 +746,7 @@ mod tests {
 
     #[test]
     fn test_eval_unsupported_expression() {
-        let ctx = new_context();
+        let mut ctx = new_context();
         let expr = Expr::Literal(Literal::Boolean(true));
         let result = ctx.eval(expr);
         assert!(result.is_err());
@@ -691,7 +758,7 @@ mod tests {
 
     #[test]
     fn test_eval_unsupported_binary_operator() {
-        let ctx = new_context();
+        let mut ctx = new_context();
         let expr = Expr::BinaryExpr(
             Box::new(Expr::Ident("a".into())),
             BinaryOp::Add,
@@ -700,6 +767,77 @@ mod tests {
         let result = ctx.eval(expr);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::UnsupportedOperator(_)));
+    }
+
+    #[test]
+    fn test_eval_sets_statement_incomplete_for_non_terminal_final_stage() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet")"#);
+        let _ = ctx.eval(expr).expect("eval");
+        assert!(ctx.statement_incomplete);
+    }
+
+    #[test]
+    fn test_eval_clears_statement_incomplete_for_terminal_final_stage() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet") |> head(1)"#);
+        let _ = ctx.eval(expr).expect("eval");
+        assert!(!ctx.statement_incomplete);
+    }
+
+    #[test]
+    fn test_eval_clears_statement_incomplete_for_write_final_stage() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
+        let _ = ctx.eval(expr).expect("eval");
+        assert!(!ctx.statement_incomplete);
+    }
+
+    #[test]
+    fn test_eval_incremental_non_terminal_accumulates_state() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet")"#);
+        let pipeline = ctx.eval_incremental(expr).expect("eval_incremental");
+        assert!(pipeline.is_none());
+        assert!(ctx.statement_incomplete);
+        assert_eq!(ctx.pending_exprs.len(), 1);
+    }
+
+    #[test]
+    fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
+        let mut ctx = new_context();
+        let first = parse(r#"read("fixtures/table.parquet")"#);
+        let second = parse(r#"head(2)"#);
+
+        let first_pipeline = ctx.eval_incremental(first).expect("first eval_incremental");
+        assert!(first_pipeline.is_none());
+        assert!(ctx.statement_incomplete);
+
+        let second_pipeline = ctx
+            .eval_incremental(second)
+            .expect("second eval_incremental")
+            .expect("pipeline should be complete");
+        assert_eq!(second_pipeline.len(), 3);
+        assert!(matches!(second_pipeline[0], PipelineStage::Read { .. }));
+        assert_eq!(second_pipeline[1], PipelineStage::Head { n: 2 });
+        assert_eq!(second_pipeline[2], PipelineStage::Print);
+        assert!(!ctx.statement_incomplete);
+        assert!(ctx.pending_exprs.is_empty());
+    }
+
+    #[test]
+    fn test_eval_incremental_terminal_single_input_executes_immediately() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
+        let pipeline = ctx
+            .eval_incremental(expr)
+            .expect("eval_incremental")
+            .expect("pipeline should be complete");
+        assert_eq!(pipeline.len(), 2);
+        assert!(matches!(pipeline[0], PipelineStage::Read { .. }));
+        assert!(matches!(pipeline[1], PipelineStage::Write { .. }));
+        assert!(!ctx.statement_incomplete);
+        assert!(ctx.pending_exprs.is_empty());
     }
 
     // ── eval_stage: error paths ─────────────────────────────────────
@@ -1127,6 +1265,55 @@ mod tests {
         let expr = parse("tail(5)");
         let stage = plan_stage(expr).unwrap();
         assert_eq!(stage, PipelineStage::Tail { n: 5 });
+    }
+
+    #[test]
+    fn test_terminal_stage_classification() {
+        assert!(PipelineStage::Head { n: 1 }.is_terminal());
+        assert!(PipelineStage::Tail { n: 1 }.is_terminal());
+        assert!(
+            PipelineStage::Write {
+                path: "out.csv".into()
+            }
+            .is_terminal()
+        );
+        assert!(
+            !PipelineStage::Select {
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            }
+            .is_terminal()
+        );
+        assert!(
+            PipelineStage::Select {
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            }
+            .is_non_terminal()
+        );
+    }
+
+    #[test]
+    fn test_terminal_stage_implicit_followup() {
+        assert_eq!(
+            PipelineStage::Head { n: 5 }.implicit_followup_stage(),
+            Some(PipelineStage::Print)
+        );
+        assert_eq!(
+            PipelineStage::Tail { n: 5 }.implicit_followup_stage(),
+            Some(PipelineStage::Print)
+        );
+        assert_eq!(
+            PipelineStage::Write {
+                path: "out.csv".into()
+            }
+            .implicit_followup_stage(),
+            None
+        );
+        assert_eq!(PipelineStage::Count.implicit_followup_stage(), None);
+    }
+
+    #[test]
+    fn test_display_print_stage() {
+        assert_eq!(PipelineStage::Print.to_string(), "print()");
     }
 
     // ── plan_pipeline: tail auto-print ──────────────────────────

@@ -11,36 +11,8 @@ use rustyline::error::ReadlineError;
 /// Maximum number of inputs to keep in REPL history.
 const HISTORY_DEPTH: usize = 1000;
 
-#[cfg(any(
-    target_os = "android",
-    target_os = "dragonfly",
-    target_os = "freebsd",
-    target_os = "linux",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "redox",
-))]
-fn platform_state_dir() -> Option<PathBuf> {
-    dirs::state_dir()
-}
-
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "dragonfly",
-    target_os = "freebsd",
-    target_os = "linux",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "redox",
-)))]
-fn platform_state_dir() -> Option<PathBuf> {
-    None
-}
-
 fn repl_history_path() -> Option<PathBuf> {
-    platform_state_dir()
-        .or_else(dirs::data_local_dir)
-        .map(|dir| dir.join("datu").join("history"))
+    dirs::data_local_dir().map(|dir| dir.join("datu").join("history"))
 }
 
 fn load_repl_history(rl: &mut DefaultEditor) -> Result<()> {

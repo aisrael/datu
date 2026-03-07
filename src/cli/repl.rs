@@ -78,6 +78,7 @@ pub struct ReplPipelineBuilder {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
     pub statement_incomplete: bool,
+    pending_exprs: Vec<Expr>,
 }
 
 impl Default for ReplPipelineBuilder {
@@ -92,6 +93,7 @@ impl ReplPipelineBuilder {
             batches: None,
             writer: None,
             statement_incomplete: false,
+            pending_exprs: Vec::new(),
         }
     }
 
@@ -127,6 +129,24 @@ impl ReplPipelineBuilder {
         let (stages, statement_incomplete) = plan_pipeline_with_state(exprs)?;
         self.statement_incomplete = statement_incomplete;
         Ok(stages)
+    }
+
+    /// Accumulates REPL input expressions until a terminal stage is reached.
+    /// Returns a planned pipeline only when the accumulated statement is complete.
+    pub fn eval_incremental(&mut self, expr: Expr) -> crate::Result<Option<Vec<PipelineStage>>> {
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        self.pending_exprs.extend(exprs);
+
+        let statement_complete = self.pending_exprs.last().is_some_and(is_terminal_expr);
+        self.statement_incomplete = !statement_complete;
+        if !statement_complete {
+            return Ok(None);
+        }
+
+        let planned = plan_pipeline_with_state(std::mem::take(&mut self.pending_exprs))?;
+        self.statement_incomplete = planned.1;
+        Ok(Some(planned.0))
     }
 
     /// Executes a planned pipeline.
@@ -241,6 +261,14 @@ fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
             collect_pipe_stages(*r, out);
         }
         other => out.push(other),
+    }
+}
+
+fn is_terminal_expr(expr: &Expr) -> bool {
+    if let Expr::FunctionCall(name, _) = expr {
+        matches!(name.to_string().as_str(), "head" | "tail" | "write")
+    } else {
+        false
     }
 }
 
@@ -763,6 +791,53 @@ mod tests {
         let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
         let _ = ctx.eval(expr).expect("eval");
         assert!(!ctx.statement_incomplete);
+    }
+
+    #[test]
+    fn test_eval_incremental_non_terminal_accumulates_state() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet")"#);
+        let pipeline = ctx.eval_incremental(expr).expect("eval_incremental");
+        assert!(pipeline.is_none());
+        assert!(ctx.statement_incomplete);
+        assert_eq!(ctx.pending_exprs.len(), 1);
+    }
+
+    #[test]
+    fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
+        let mut ctx = new_context();
+        let first = parse(r#"read("fixtures/table.parquet")"#);
+        let second = parse(r#"head(2)"#);
+
+        let first_pipeline = ctx.eval_incremental(first).expect("first eval_incremental");
+        assert!(first_pipeline.is_none());
+        assert!(ctx.statement_incomplete);
+
+        let second_pipeline = ctx
+            .eval_incremental(second)
+            .expect("second eval_incremental")
+            .expect("pipeline should be complete");
+        assert_eq!(second_pipeline.len(), 3);
+        assert!(matches!(second_pipeline[0], PipelineStage::Read { .. }));
+        assert_eq!(second_pipeline[1], PipelineStage::Head { n: 2 });
+        assert_eq!(second_pipeline[2], PipelineStage::Print);
+        assert!(!ctx.statement_incomplete);
+        assert!(ctx.pending_exprs.is_empty());
+    }
+
+    #[test]
+    fn test_eval_incremental_terminal_single_input_executes_immediately() {
+        let mut ctx = new_context();
+        let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
+        let pipeline = ctx
+            .eval_incremental(expr)
+            .expect("eval_incremental")
+            .expect("pipeline should be complete");
+        assert_eq!(pipeline.len(), 2);
+        assert!(matches!(pipeline[0], PipelineStage::Read { .. }));
+        assert!(matches!(pipeline[1], PipelineStage::Write { .. }));
+        assert!(!ctx.statement_incomplete);
+        assert!(ctx.pending_exprs.is_empty());
     }
 
     // ── eval_stage: error paths ─────────────────────────────────────

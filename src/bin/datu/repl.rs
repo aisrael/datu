@@ -1,5 +1,7 @@
 //! REPL for datu
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use datu::cli::repl::ReplPipelineBuilder;
 use flt::parser::parse_expr;
@@ -9,6 +11,60 @@ use rustyline::error::ReadlineError;
 /// Maximum number of inputs to keep in REPL history.
 const HISTORY_DEPTH: usize = 1000;
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+))]
+fn platform_state_dir() -> Option<PathBuf> {
+    dirs::state_dir()
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+)))]
+fn platform_state_dir() -> Option<PathBuf> {
+    None
+}
+
+fn repl_history_path() -> Option<PathBuf> {
+    platform_state_dir()
+        .or_else(dirs::data_local_dir)
+        .map(|dir| dir.join("datu").join("history"))
+}
+
+fn load_repl_history(rl: &mut DefaultEditor) -> Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    println!("Loading REPL history from: {:?}", history_path);
+    if history_path.exists() {
+        rl.load_history(&history_path)?;
+    }
+    Ok(())
+}
+
+fn save_repl_history(rl: &mut DefaultEditor) -> Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = history_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    rl.save_history(&history_path)?;
+    Ok(())
+}
+
 /// Runs the datu REPL.
 pub async fn run() -> Result<()> {
     let config = rustyline::Config::builder()
@@ -16,8 +72,11 @@ pub async fn run() -> Result<()> {
         .auto_add_history(true)
         .build();
     let mut rl = DefaultEditor::with_config(config)?;
+    let _ = load_repl_history(&mut rl);
     let mut context = ReplPipelineBuilder::new();
-    repl(&mut rl, &mut context).await
+    let repl_result = repl(&mut rl, &mut context).await;
+    let _ = save_repl_history(&mut rl);
+    repl_result
 }
 
 /// Reads, evaluates, and prints in a loop until EOF.

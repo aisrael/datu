@@ -25,7 +25,12 @@ async fn repl(rl: &mut DefaultEditor, context: &mut ReplPipelineBuilder) -> Resu
     loop {
         // On success, we get the input line. On EOF, we break the loop.
         // On interrupt, we continue. On any other error, we return.
-        let line = match rl.readline("> ") {
+        let prompt = if context.statement_incomplete {
+            "|> "
+        } else {
+            "> "
+        };
+        let line = match rl.readline(prompt) {
             Ok(line) => line,
             Err(ReadlineError::Eof) => break Ok(()),
             Err(ReadlineError::Interrupted) => continue,

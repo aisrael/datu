@@ -35,6 +35,8 @@ rustc-literal-escaper = "0.0.7"
 rustyline = "17.0"
 flt = { version = "0.0.2" }
 dirs = { version = "2.0.0", package = "dirs-next" }
+rand = "0.8"
+reservoir-sampling = "0.5"
 
 [dev-dependencies]
 criterion = "0.5"

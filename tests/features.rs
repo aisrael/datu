@@ -388,6 +388,18 @@ fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
     );
 }
 
+#[then(expr = "the file {string} should contain {string}")]
+fn the_file_should_contain(world: &mut CliWorld, s: String, s2: String) {
+    let path_resolved = resolve_path(world, &s);
+    let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
+    assert!(
+        content.contains(&s2),
+        "Expected file {} to contain '{}', but it did not",
+        path_resolved,
+        s2
+    );
+}
+
 fn main() {
     futures::executor::block_on(CliWorld::run("features/cli"));
 }

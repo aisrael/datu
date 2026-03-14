@@ -70,6 +70,8 @@ Feature: Convert
     Then the command should succeed
     And the output should contain "Converted fixtures/no_header.csv to $TEMPDIR/no_header.parquet"
     And the file "$TEMPDIR/no_header.parquet" should exist
+    And that file should be valid Parquet
+    And that file should have 3 records
 
   Scenario: Avro to CSV
     Given a file "fixtures/userdata5.avro"

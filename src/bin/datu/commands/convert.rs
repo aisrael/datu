@@ -1,11 +1,26 @@
+use std::fs::File;
+use std::sync::Arc;
+use std::time::Duration;
+
+use arrow::array::RecordBatchReader;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
 use clap::Args;
+use datu::Error;
 use datu::FileType;
+use datu::pipeline::Source;
 use datu::pipeline::Step;
+use datu::pipeline::VecRecordBatchReader;
+use datu::pipeline::avro;
 use datu::pipeline::dataframe::DataFrameReader;
-use datu::pipeline::dataframe::DataFrameWriter;
-use spinoff::Color;
-use spinoff::Spinner;
-use spinoff::spinners;
+use datu::pipeline::display;
+use datu::pipeline::orc;
+use datu::pipeline::parquet as parquet_writer;
+use datu::pipeline::xlsx;
+use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
+use orc_rust::reader::metadata::read_metadata;
+use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
@@ -41,16 +56,76 @@ pub struct ConvertArgs {
     pub has_headers: Option<bool>,
 }
 
+/// Returns the total number of rows from file metadata, if available.
+fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
+    match file_type {
+        FileType::Parquet => {
+            let file = File::open(path).ok()?;
+            let metadata = ParquetMetaDataReader::new().parse_and_finish(&file).ok()?;
+            Some(metadata.file_metadata().num_rows().max(0) as u64)
+        }
+        FileType::Orc => {
+            let mut file = File::open(path).ok()?;
+            let metadata = read_metadata(&mut file).ok()?;
+            Some(metadata.number_of_rows())
+        }
+        _ => None,
+    }
+}
+
+/// A `RecordBatchReader` wrapper that increments an `indicatif::ProgressBar` by
+/// the number of rows in each batch as it is yielded.
+struct ProgressRecordBatchReader {
+    inner: VecRecordBatchReader,
+    progress: ProgressBar,
+}
+
+impl Iterator for ProgressRecordBatchReader {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        if let Ok(ref batch) = item {
+            self.progress.inc(batch.num_rows() as u64);
+        }
+        Some(item)
+    }
+}
+
+impl RecordBatchReader for ProgressRecordBatchReader {
+    fn schema(&self) -> Arc<Schema> {
+        self.inner.schema()
+    }
+}
+
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
 pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
-    let mut spinner = Spinner::new(
-        spinners::Dots,
-        format!("Converting {} to {}...", args.input, args.output),
-        Color::Cyan,
-    );
+    let total_rows = get_total_rows(&args.input, input_file_type);
+
+    let progress = match total_rows {
+        Some(total) => {
+            let pb = ProgressBar::new(total);
+            pb.set_style(
+                ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos}/{len} rows ({eta})")
+                    .expect("valid template")
+                    .progress_chars("=>-"),
+            );
+            pb.set_message(format!("Converting {} to {}", args.input, args.output));
+            pb
+        }
+        None => {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::with_template("{spinner:.cyan} {msg}").expect("valid template"),
+            );
+            pb.set_message(format!("Converting {} to {}...", args.input, args.output));
+            pb.enable_steady_tick(Duration::from_millis(100));
+            pb
+        }
+    };
 
     let reader_step = DataFrameReader::new(
         &args.input,
@@ -60,29 +135,68 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         args.has_headers,
     );
 
-    let writer_step = DataFrameWriter::new(
-        args.output.clone(),
-        output_file_type,
-        args.sparse,
-        args.json_pretty,
-    );
+    let result: Result<(), datu::Error> = async {
+        let mut source = reader_step.execute(()).await?;
+        let df = source.get()?;
 
-    let result = async {
-        let source = reader_step.execute(()).await?;
-        writer_step.execute(source).await
+        if output_file_type != FileType::Json && args.json_pretty {
+            eprintln!("Warning: --json-pretty is only supported when converting to JSON");
+        }
+
+        let handle = tokio::runtime::Handle::current();
+        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+
+        let mut reader = ProgressRecordBatchReader {
+            inner: VecRecordBatchReader::new(batches),
+            progress: progress.clone(),
+        };
+
+        let output_path = &args.output;
+
+        match output_file_type {
+            FileType::Parquet => {
+                parquet_writer::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Csv => {
+                datu::pipeline::csv::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Json => {
+                let file = File::create(output_path).map_err(Error::IoError)?;
+                if args.json_pretty {
+                    display::write_record_batches_as_json_pretty(&mut reader, file, args.sparse)?;
+                } else {
+                    display::write_record_batches_as_json(&mut reader, file, args.sparse)?;
+                }
+            }
+            FileType::Yaml => {
+                let file = File::create(output_path).map_err(Error::IoError)?;
+                display::write_record_batches_as_yaml(&mut reader, file, args.sparse)?;
+            }
+            FileType::Avro => {
+                avro::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Orc => {
+                orc::write_record_batches(output_path, &mut reader)?;
+            }
+            FileType::Xlsx => {
+                xlsx::write_record_batches(output_path, &mut reader)?;
+            }
+        }
+
+        Ok(())
     }
     .await;
 
     match result {
         Ok(()) => {
-            spinner.success(&format!("Converted {} to {}", args.input, args.output));
+            progress.finish_and_clear();
+            eprintln!("Converted {} to {}", args.input, args.output);
             Ok(())
         }
         Err(e) => {
-            spinner.fail(&format!(
-                "Failed to convert {} to {}",
-                args.input, args.output
-            ));
+            progress.abandon();
+            eprintln!("Failed to convert {} to {}", args.input, args.output);
             Err(e.into())
         }
     }

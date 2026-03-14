@@ -22,7 +22,7 @@ use parquet::file::metadata::ParquetMetaDataReader;
 
 /// tail command implementation: print the last N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input.as_str().try_into()?;
+    let input_file_type: FileType = args.input_path.as_str().try_into()?;
     match input_file_type {
         FileType::Parquet => tail_parquet(args).await,
         FileType::Avro => tail_avro(args).await,
@@ -34,7 +34,7 @@ pub async fn tail(args: HeadsOrTails) -> Result<()> {
 
 /// Prints the last N lines of a Parquet file.
 async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
-    let meta_file = File::open(&args.input).map_err(Error::IoError)?;
+    let meta_file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
         .map_err(Error::ParquetError)?;
@@ -44,7 +44,7 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadParquetStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: Some(number),
             offset: Some(offset),
             csv_has_header: None,
@@ -91,7 +91,7 @@ async fn tail_from_reader(
 /// Prints the last N lines of a CSV file.
 async fn tail_csv(args: HeadsOrTails) -> Result<()> {
     let batches = read_to_batches(
-        &args.input,
+        &args.input_path,
         FileType::Csv,
         &args.select,
         None,
@@ -113,7 +113,7 @@ async fn tail_csv(args: HeadsOrTails) -> Result<()> {
 async fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: None,
             offset: None,
             csv_has_header: None,
@@ -131,7 +131,7 @@ async fn tail_avro(args: HeadsOrTails) -> Result<()> {
 
 /// Prints the last N lines of an ORC file.
 async fn tail_orc(args: HeadsOrTails) -> Result<()> {
-    let mut file = File::open(&args.input).map_err(Error::IoError)?;
+    let mut file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
     let total_rows = metadata.number_of_rows() as usize;
     let number = args.number.min(total_rows);
@@ -139,7 +139,7 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadOrcStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: Some(number),
             offset: Some(offset),
             csv_has_header: None,

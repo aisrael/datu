@@ -244,17 +244,17 @@ fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<
 
 /// The `datu schema` command
 pub async fn schema(args: SchemaArgs) -> Result<()> {
-    let file_type: FileType = args.file.as_str().try_into()?;
+    let file_type: FileType = args.input_path.as_str().try_into()?;
     match file_type {
-        FileType::Parquet => schema_parquet(&args.file, args.output, args.sparse),
-        FileType::Avro => schema_avro(&args.file, args.output, args.sparse),
+        FileType::Parquet => schema_parquet(&args.input_path, args.output, args.sparse),
+        FileType::Avro => schema_avro(&args.input_path, args.output, args.sparse),
         FileType::Csv => schema_csv(
-            &args.file,
+            &args.input_path,
             args.output,
             args.sparse,
             args.input_headers.unwrap_or(true),
         ),
-        FileType::Orc => schema_orc(&args.file, args.output, args.sparse),
+        FileType::Orc => schema_orc(&args.input_path, args.output, args.sparse),
         _ => bail!("schema is only supported for Parquet, Avro, CSV, and ORC files"),
     }
 }

@@ -13,7 +13,7 @@ use datu::pipeline::parquet::ReadParquetStep;
 
 /// The `datu count` command
 pub async fn count(args: CountArgs) -> anyhow::Result<()> {
-    let file_type: FileType = args.file.as_str().try_into()?;
+    let file_type: FileType = args.input_path.as_str().try_into()?;
     let mut reader_step: RecordBatchReaderSource = get_reader_step(file_type, &args)?;
 
     let reader = reader_step.get()?;
@@ -31,7 +31,7 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
     let reader: RecordBatchReaderSource = match file_type {
         FileType::Parquet => Box::new(ReadParquetStep {
             args: ReadArgs {
-                path: args.file.clone(),
+                path: args.input_path.clone(),
                 limit: None,
                 offset: None,
                 csv_has_header: None,
@@ -39,19 +39,19 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
         }),
         FileType::Avro => Box::new(ReadAvroStep {
             args: ReadArgs {
-                path: args.file.clone(),
+                path: args.input_path.clone(),
                 limit: None,
                 offset: None,
                 csv_has_header: None,
             },
         }),
         FileType::Csv => Box::new(ReadCsvStep {
-            path: args.file.clone(),
+            path: args.input_path.clone(),
             has_header: args.input_headers,
         }),
         FileType::Orc => Box::new(ReadOrcStep {
             args: ReadArgs {
-                path: args.file.clone(),
+                path: args.input_path.clone(),
                 limit: None,
                 offset: None,
                 csv_has_header: None,
@@ -69,7 +69,7 @@ mod tests {
     #[tokio::test]
     async fn test_count_parquet() {
         let args = CountArgs {
-            file: "fixtures/table.parquet".to_string(),
+            input_path: "fixtures/table.parquet".to_string(),
             input_headers: None,
         };
         let result = count(args).await;
@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn test_count_avro() {
         let args = CountArgs {
-            file: "fixtures/userdata5.avro".to_string(),
+            input_path: "fixtures/userdata5.avro".to_string(),
             input_headers: None,
         };
         let result = count(args).await;

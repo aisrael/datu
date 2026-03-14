@@ -9,9 +9,9 @@ use datu::pipeline::read_to_batches;
 
 /// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input.as_str().try_into()?;
+    let input_file_type: FileType = args.input_path.as_str().try_into()?;
     let batches = read_to_batches(
-        &args.input,
+        &args.input_path,
         input_file_type,
         &args.select,
         Some(args.number),

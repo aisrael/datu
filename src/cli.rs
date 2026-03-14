@@ -55,7 +55,7 @@ impl FromStr for DisplayOutputFormat {
 #[derive(Args)]
 pub struct SchemaArgs {
     /// Path to the Parquet, Avro, ORC, or CSV file
-    pub file: String,
+    pub input_path: String,
     #[arg(
         long,
         short,
@@ -84,7 +84,7 @@ pub struct SchemaArgs {
 #[derive(Args)]
 pub struct CountArgs {
     /// Path to the Parquet, Avro, ORC, or CSV file
-    pub file: String,
+    pub input_path: String,
     #[arg(
         long,
         value_parser = clap::value_parser!(bool),
@@ -98,7 +98,8 @@ pub struct CountArgs {
 /// Arguments for the `datu head` and `datu tail` commands.
 #[derive(Args)]
 pub struct HeadsOrTails {
-    pub input: String,
+    /// Path to the Parquet, Avro, ORC, or CSV file
+    pub input_path: String,
     #[arg(
         short = 'n',
         long,

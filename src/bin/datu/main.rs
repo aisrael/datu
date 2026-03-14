@@ -9,6 +9,7 @@ mod repl;
 use commands::convert;
 use commands::count;
 use commands::head;
+use commands::sample;
 use commands::schema;
 use commands::tail;
 
@@ -32,6 +33,8 @@ pub enum Command {
     Count(datu::cli::CountArgs),
     /// print the first n lines of a file
     Head(datu::cli::HeadsOrTails),
+    /// sample n random rows from a file
+    Sample(datu::cli::HeadsOrTails),
     /// print the last n lines of a file
     Tail(datu::cli::HeadsOrTails),
     /// display the schema of a file
@@ -49,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
         Some(Command::Head(args)) => head(args).await,
+        Some(Command::Sample(args)) => sample(args).await,
         Some(Command::Schema(args)) => schema(args).await,
         Some(Command::Tail(args)) => tail(args).await,
         Some(Command::Version) => {

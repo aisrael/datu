@@ -16,6 +16,7 @@ Feature: CLI
         convert  convert between file formats
         count    return the number of rows in a file
         head     print the first n lines of a file
+        sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
         version  print the datu version
@@ -38,6 +39,7 @@ Feature: CLI
         convert  convert between file formats
         count    return the number of rows in a file
         head     print the first n lines of a file
+        sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
         version  print the datu version

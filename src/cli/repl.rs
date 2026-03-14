@@ -10,6 +10,7 @@ use crate::pipeline::Source;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
+use crate::pipeline::sample_batches;
 use crate::pipeline::select;
 use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::tail_batches;
@@ -22,6 +23,7 @@ pub enum PipelineStage {
     Select { columns: Vec<ColumnSpec> },
     Head { n: usize },
     Tail { n: usize },
+    Sample { n: usize },
     Count,
     Write { path: String },
     Print,
@@ -32,7 +34,10 @@ impl PipelineStage {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Write { .. }
+            PipelineStage::Head { .. }
+                | PipelineStage::Tail { .. }
+                | PipelineStage::Sample { .. }
+                | PipelineStage::Write { .. }
         )
     }
 
@@ -44,7 +49,9 @@ impl PipelineStage {
     /// Returns any implicit stage that should be appended after this stage.
     pub fn implicit_followup_stage(&self) -> Option<PipelineStage> {
         match self {
-            PipelineStage::Head { .. } | PipelineStage::Tail { .. } => Some(PipelineStage::Print),
+            PipelineStage::Head { .. }
+            | PipelineStage::Tail { .. }
+            | PipelineStage::Sample { .. } => Some(PipelineStage::Print),
             _ => None,
         }
     }
@@ -66,6 +73,7 @@ impl fmt::Display for PipelineStage {
             }
             PipelineStage::Head { n } => write!(f, "head({n})"),
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
+            PipelineStage::Sample { n } => write!(f, "sample({n})"),
             PipelineStage::Count => write!(f, "count()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
             PipelineStage::Print => write!(f, "print()"),
@@ -164,6 +172,7 @@ impl ReplPipelineBuilder {
             PipelineStage::Select { columns } => self.exec_select(&columns).await,
             PipelineStage::Head { n } => self.exec_head(n),
             PipelineStage::Tail { n } => self.exec_tail(n),
+            PipelineStage::Sample { n } => self.exec_sample(n),
             PipelineStage::Count => self.exec_count(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
             PipelineStage::Print => self.print_batches(),
@@ -219,6 +228,16 @@ impl ReplPipelineBuilder {
         Ok(())
     }
 
+    /// Samples N random rows from the batches in context.
+    fn exec_sample(&mut self, n: usize) -> crate::Result<()> {
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("sample requires a preceding read in the pipe".to_string())
+        })?;
+        let result = sample_batches(batches, n);
+        self.batches = Some(result);
+        Ok(())
+    }
+
     /// Counts the total number of rows across all batches and prints the result.
     fn exec_count(&mut self) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
@@ -266,7 +285,10 @@ fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
 
 fn is_terminal_expr(expr: &Expr) -> bool {
     if let Expr::FunctionCall(name, _) = expr {
-        matches!(name.to_string().as_str(), "head" | "tail" | "write")
+        matches!(
+            name.to_string().as_str(),
+            "head" | "tail" | "sample" | "write"
+        )
     } else {
         false
     }
@@ -329,6 +351,11 @@ impl ReplPipelineBuilder {
         self.exec_tail(n)
     }
 
+    fn eval_sample(&mut self, args: Vec<Expr>) -> crate::Result<()> {
+        let n = extract_sample_n(&args)?;
+        self.exec_sample(n)
+    }
+
     async fn eval_write(&mut self, args: Vec<Expr>) -> crate::Result<()> {
         let path = extract_path_from_args("write", &args)?;
         self.exec_write(&path).await
@@ -374,6 +401,10 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                 "tail" => {
                     let n = extract_tail_n(&args)?;
                     Ok(PipelineStage::Tail { n })
+                }
+                "sample" => {
+                    let n = extract_sample_n(&args)?;
+                    Ok(PipelineStage::Sample { n })
                 }
                 "count" => {
                     if !args.is_empty() {
@@ -443,6 +474,14 @@ fn extract_head_n(args: &[Expr]) -> crate::Result<usize> {
 /// Extracts the integer argument N from a tail() call's args.
 fn extract_tail_n(args: &[Expr]) -> crate::Result<usize> {
     extract_usize_arg("tail", args)
+}
+
+/// Extracts the optional integer argument N from a sample() call's args (default 10).
+fn extract_sample_n(args: &[Expr]) -> crate::Result<usize> {
+    if args.is_empty() {
+        return Ok(10);
+    }
+    extract_usize_arg("sample", args)
 }
 
 #[cfg(test)]
@@ -1575,5 +1614,194 @@ mod tests {
             .expect("execute");
 
         assert!(output_path.exists());
+    }
+
+    // ── plan_stage: sample ──────────────────────────────────────
+
+    #[test]
+    fn test_plan_stage_sample_with_arg() {
+        let expr = parse("sample(5)");
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Sample { n: 5 });
+    }
+
+    #[test]
+    fn test_plan_stage_sample_no_arg_defaults_to_10() {
+        let expr = Expr::FunctionCall(Identifier("sample".into()), vec![]);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Sample { n: 10 });
+    }
+
+    #[test]
+    fn test_sample_is_terminal() {
+        assert!(PipelineStage::Sample { n: 5 }.is_terminal());
+    }
+
+    #[test]
+    fn test_sample_implicit_followup_is_print() {
+        assert_eq!(
+            PipelineStage::Sample { n: 5 }.implicit_followup_stage(),
+            Some(PipelineStage::Print)
+        );
+    }
+
+    // ── plan_pipeline: sample auto-print ────────────────────────
+
+    #[test]
+    fn test_plan_pipeline_auto_appends_print_after_sample() {
+        let expr = parse(r#"read("a.parquet") |> sample(5)"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(pipeline[1], PipelineStage::Sample { n: 5 });
+        assert_eq!(pipeline[2], PipelineStage::Print);
+    }
+
+    #[test]
+    fn test_plan_pipeline_no_print_when_write_follows_sample() {
+        let expr = parse(r#"read("a.parquet") |> sample(5) |> write("b.csv")"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
+        assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
+    }
+
+    // ── extract_sample_n ────────────────────────────────────────
+
+    #[test]
+    fn test_extract_sample_n_valid() {
+        let args = parse_fn_args("sample(10)");
+        assert_eq!(extract_sample_n(&args).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_extract_sample_n_empty_defaults_to_10() {
+        assert_eq!(extract_sample_n(&[]).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_extract_sample_n_bad_args() {
+        let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
+        assert!(extract_sample_n(&args).is_err());
+    }
+
+    // ── eval_sample ─────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_eval_sample_success() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let args = parse_fn_args("sample(2)");
+        ctx.eval_sample(args).expect("sample");
+
+        let batches = ctx.batches.as_ref().expect("batches after sample");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_eval_sample_default_n() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        ctx.eval_sample(vec![]).expect("sample with default n");
+
+        let batches = ctx.batches.as_ref().expect("batches after sample");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert!(total_rows <= 10);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_eval_sample_preserves_schema() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
+        let args = parse_fn_args("sample(1)");
+        ctx.eval_sample(args).expect("sample");
+
+        let batches = ctx.batches.as_ref().expect("batches");
+        assert_eq!(batches[0].schema(), original_schema);
+    }
+
+    #[test]
+    fn test_eval_sample_no_preceding_read() {
+        let mut ctx = new_context();
+        let args = parse_fn_args("sample(5)");
+        let result = ctx.eval_sample(args);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
+    }
+
+    // ── eval_sample: pipeline integration ───────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_sample_write() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let output_path = temp_dir.path().join("sampled.csv");
+        let output_str = output_path.to_str().unwrap().to_string();
+
+        let pipeline = format!(
+            r#"read("fixtures/table.parquet") |> sample(2) |> write("{}")"#,
+            output_str.replace('\\', "\\\\")
+        );
+        let expr = parse(&pipeline);
+
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+
+        assert!(output_path.exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(ctx.batches.is_none(), "batches consumed by write");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_select_sample_write() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let output_path = temp_dir.path().join("selected_sampled.csv");
+        let output_str = output_path.to_str().unwrap().to_string();
+
+        let pipeline = format!(
+            r#"read("fixtures/table.parquet") |> select(:one, :two) |> sample(1) |> write("{}")"#,
+            output_str.replace('\\', "\\\\")
+        );
+        let expr = parse(&pipeline);
+
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_display_sample_stage() {
+        assert_eq!(PipelineStage::Sample { n: 10 }.to_string(), "sample(10)");
     }
 }

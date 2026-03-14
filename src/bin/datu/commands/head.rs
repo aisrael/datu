@@ -15,13 +15,14 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
         input_file_type,
         &args.select,
         Some(args.number),
-        args.has_headers,
+        args.input_headers,
     )
     .await?;
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }

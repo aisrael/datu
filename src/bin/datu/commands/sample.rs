@@ -62,6 +62,7 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -92,6 +93,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -118,6 +120,7 @@ async fn sample_avro(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -129,7 +132,7 @@ async fn sample_csv(args: HeadsOrTails) -> Result<()> {
         FileType::Csv,
         &args.select,
         None,
-        args.has_headers,
+        args.input_headers,
     )
     .await?;
     let reader: Box<dyn arrow::array::RecordBatchReader + 'static> =
@@ -140,6 +143,7 @@ async fn sample_csv(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }

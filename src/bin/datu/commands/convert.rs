@@ -51,9 +51,9 @@ pub struct ConvertArgs {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
 }
 
 /// Returns the total number of rows from file metadata, if available.
@@ -132,7 +132,7 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         input_file_type,
         args.select,
         args.limit,
-        args.has_headers,
+        args.input_headers,
     );
 
     let result: Result<(), datu::Error> = async {
@@ -225,7 +225,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -249,7 +249,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -273,7 +273,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -297,7 +297,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -321,7 +321,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -345,7 +345,7 @@ mod tests {
             limit: Some(10),
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -370,7 +370,7 @@ mod tests {
             limit: Some(10),
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
         convert(orc_args).await.expect("Avro to ORC failed");
 
@@ -388,7 +388,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
         let result = convert(csv_args).await;
         assert!(result.is_ok(), "Convert failed: {:?}", result.err());
@@ -411,7 +411,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -435,7 +435,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;
@@ -477,7 +477,7 @@ mod tests {
             limit: None,
             sparse: true,
             json_pretty: false,
-            has_headers: None,
+            input_headers: None,
         };
 
         let result = convert(args).await;

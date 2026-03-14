@@ -36,7 +36,7 @@ cargo install --git https://github.com/aisrael/datu
 - **Write** — Output file formats for `convert`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
-**CSV options:** When reading CSV files, the `--has-headers` option controls whether the first row is treated as column names. Omitted or `--has-headers` means true (header present); `--has-headers=false` for headerless CSV. Applies to `convert`, `count`, `schema`, `head`, and `tail`.
+**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `convert`, `count`, `schema`, `head`, and `tail`.
 
 Usage
 =====
@@ -77,7 +77,7 @@ datu schema <FILE> [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Output formats:**
 
@@ -121,7 +121,7 @@ datu count <FILE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -135,7 +135,7 @@ datu count data.csv
 datu count data.orc
 
 # Count rows in a headerless CSV file
-datu count data.csv --has-headers=false
+datu count data.csv --input-headers=false
 ```
 
 ---
@@ -162,7 +162,7 @@ datu convert <INPUT> <OUTPUT> [OPTIONS]
 | `--limit <N>` | Maximum number of records to read from the input. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When converting to JSON, format output with indentation and newlines. Ignored for other output formats. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -180,7 +180,7 @@ datu convert data.parquet data.avro --limit 1000
 datu convert events.avro events.csv --select id,timestamp,user_id
 
 # CSV to JSON with headerless input
-datu convert data.csv output.json --has-headers=false
+datu convert data.csv output.json --input-headers=false
 
 # Parquet to Parquet with column subset
 datu convert input.parq output.parquet --select one,two,three
@@ -217,7 +217,7 @@ datu sample <INPUT> [OPTIONS]
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -257,7 +257,7 @@ datu head <INPUT> [OPTIONS]
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -275,7 +275,7 @@ datu head data.orc --number 100
 datu head data.parquet -n 20 --select id,name,email
 
 # Head from a headerless CSV file
-datu head data.csv --has-headers=false
+datu head data.csv --input-headers=false
 ```
 
 ---
@@ -302,7 +302,7 @@ datu tail <INPUT> [OPTIONS]
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 

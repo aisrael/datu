@@ -56,8 +56,8 @@ Feature: Convert
     And the file "$TEMPDIR/table_from_csv.json" should contain "one"
     And the file "$TEMPDIR/table_from_csv.json" should contain "two"
 
-  Scenario: CSV to Parquet with --has-headers=false
-    When I run `datu convert fixtures/no_header.csv $TEMPDIR/no_header.parquet --has-headers=false`
+  Scenario: CSV to Parquet with --input-headers=false
+    When I run `datu convert fixtures/no_header.csv $TEMPDIR/no_header.parquet --input-headers=false`
     Then the command should succeed
     And the output should contain "Converted fixtures/no_header.csv to $TEMPDIR/no_header.parquet"
     And the file "$TEMPDIR/no_header.parquet" should exist

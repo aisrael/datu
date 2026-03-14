@@ -268,7 +268,7 @@ impl ReplPipelineBuilder {
         })?;
         let mut source = VecRecordBatchReaderSource::new(batches);
         let mut reader = source.get()?;
-        write_record_batches_as_csv(&mut *reader, std::io::stdout())
+        write_record_batches_as_csv(&mut *reader, std::io::stdout(), true)
     }
 }
 

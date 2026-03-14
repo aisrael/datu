@@ -48,11 +48,16 @@ fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'sta
 }
 
 /// Write record batches from a reader to the given writer as CSV.
-pub fn write_record_batches_as_csv<W>(reader: &mut dyn RecordBatchReader, w: W) -> Result<()>
+pub fn write_record_batches_as_csv<W>(
+    reader: &mut dyn RecordBatchReader,
+    w: W,
+    headers: bool,
+) -> Result<()>
 where
     W: Write,
 {
-    let mut writer = arrow::csv::Writer::new(w);
+    let builder = arrow::csv::WriterBuilder::new().with_header(headers);
+    let mut writer = builder.build(w);
     for batch in reader {
         let batch = batch.map_err(Error::ArrowError)?;
         writer.write(&batch).map_err(Error::ArrowError)?;
@@ -131,6 +136,7 @@ where
 pub struct DisplayWriterStep {
     pub output_format: DisplayOutputFormat,
     pub sparse: bool,
+    pub headers: bool,
 }
 
 #[async_trait(?Send)]
@@ -142,7 +148,7 @@ impl Step for DisplayWriterStep {
         let mut reader = input.get()?;
         match self.output_format {
             DisplayOutputFormat::Csv => {
-                write_record_batches_as_csv(&mut *reader, std::io::stdout())?;
+                write_record_batches_as_csv(&mut *reader, std::io::stdout(), self.headers)?;
             }
             DisplayOutputFormat::Json => {
                 write_record_batches_as_json(&mut *reader, std::io::stdout(), self.sparse)?;
@@ -197,9 +203,22 @@ mod tests {
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
         let mut reader = source.get().unwrap();
         let mut out = Vec::new();
-        write_record_batches_as_csv(&mut *reader, &mut out).unwrap();
+        write_record_batches_as_csv(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("id,name"));
+        assert!(s.contains("1,alice"));
+        assert!(s.contains("2,bob"));
+    }
+
+    #[test]
+    fn test_write_record_batches_as_csv_no_headers() {
+        let batch = make_test_batch();
+        let mut source = VecRecordBatchReaderSource::new(vec![batch]);
+        let mut reader = source.get().unwrap();
+        let mut out = Vec::new();
+        write_record_batches_as_csv(&mut *reader, &mut out, false).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(!s.contains("id,name"));
         assert!(s.contains("1,alice"));
         assert!(s.contains("2,bob"));
     }

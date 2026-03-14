@@ -75,9 +75,9 @@ pub struct SchemaArgs {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
 }
 
 /// Arguments for the `datu count` command.
@@ -90,9 +90,9 @@ pub struct CountArgs {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
 }
 
 /// Arguments for the `datu head` and `datu tail` commands.
@@ -131,7 +131,15 @@ pub struct HeadsOrTails {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV output: whether to print column headers. Default: true when omitted. Use --output-headers=false to suppress headers."
+    )]
+    pub output_headers: Option<bool>,
 }

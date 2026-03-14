@@ -59,6 +59,7 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -69,6 +70,7 @@ async fn tail_from_reader(
     number: usize,
     output: datu::cli::DisplayOutputFormat,
     sparse: bool,
+    headers: bool,
 ) -> Result<()> {
     let reader = reader_step.get()?;
     let batches: Vec<arrow::record_batch::RecordBatch> = reader
@@ -81,6 +83,7 @@ async fn tail_from_reader(
     let display_step = DisplayWriterStep {
         output_format: output,
         sparse,
+        headers,
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -92,11 +95,18 @@ async fn tail_csv(args: HeadsOrTails) -> Result<()> {
         FileType::Csv,
         &args.select,
         None,
-        args.has_headers,
+        args.input_headers,
     )
     .await?;
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
-    tail_from_reader(reader_step, args.number, args.output, args.sparse).await
+    tail_from_reader(
+        reader_step,
+        args.number,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
 }
 
 /// Prints the last N lines of an Avro file.
@@ -115,7 +125,8 @@ async fn tail_avro(args: HeadsOrTails) -> Result<()> {
         reader_step = select_step.execute(reader_step).await?;
     }
     let sparse = args.sparse;
-    tail_from_reader(reader_step, args.number, args.output, sparse).await
+    let headers = args.output_headers.unwrap_or(true);
+    tail_from_reader(reader_step, args.number, args.output, sparse, headers).await
 }
 
 /// Prints the last N lines of an ORC file.
@@ -143,6 +154,7 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }

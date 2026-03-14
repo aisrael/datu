@@ -252,7 +252,7 @@ pub async fn schema(args: SchemaArgs) -> Result<()> {
             &args.file,
             args.output,
             args.sparse,
-            args.has_headers.unwrap_or(true),
+            args.input_headers.unwrap_or(true),
         ),
         FileType::Orc => schema_orc(&args.file, args.output, args.sparse),
         _ => bail!("schema is only supported for Parquet, Avro, CSV, and ORC files"),

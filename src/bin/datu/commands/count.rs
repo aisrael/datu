@@ -47,7 +47,7 @@ fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchR
         }),
         FileType::Csv => Box::new(ReadCsvStep {
             path: args.file.clone(),
-            has_header: args.has_headers,
+            has_header: args.input_headers,
         }),
         FileType::Orc => Box::new(ReadOrcStep {
             args: ReadArgs {
@@ -70,7 +70,7 @@ mod tests {
     async fn test_count_parquet() {
         let args = CountArgs {
             file: "fixtures/table.parquet".to_string(),
-            has_headers: None,
+            input_headers: None,
         };
         let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());
@@ -80,7 +80,7 @@ mod tests {
     async fn test_count_avro() {
         let args = CountArgs {
             file: "fixtures/userdata5.avro".to_string(),
-            has_headers: None,
+            input_headers: None,
         };
         let result = count(args).await;
         assert!(result.is_ok(), "count failed: {:?}", result.err());

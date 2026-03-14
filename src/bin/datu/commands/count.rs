@@ -10,10 +10,11 @@ use datu::pipeline::avro::ReadAvroStep;
 use datu::pipeline::csv::ReadCsvStep;
 use datu::pipeline::orc::ReadOrcStep;
 use datu::pipeline::parquet::ReadParquetStep;
+use datu::resolve_input_file_type;
 
 /// The `datu count` command
 pub async fn count(args: CountArgs) -> anyhow::Result<()> {
-    let file_type: FileType = args.input_path.as_str().try_into()?;
+    let file_type = resolve_input_file_type(args.input, &args.input_path)?;
     let mut reader_step: RecordBatchReaderSource = get_reader_step(file_type, &args)?;
 
     let reader = reader_step.get()?;
@@ -70,6 +71,7 @@ mod tests {
     async fn test_count_parquet() {
         let args = CountArgs {
             input_path: "fixtures/table.parquet".to_string(),
+            input: None,
             input_headers: None,
         };
         let result = count(args).await;
@@ -80,6 +82,7 @@ mod tests {
     async fn test_count_avro() {
         let args = CountArgs {
             input_path: "fixtures/userdata5.avro".to_string(),
+            input: None,
             input_headers: None,
         };
         let result = count(args).await;

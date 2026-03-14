@@ -6,6 +6,8 @@ use std::str::FromStr;
 
 use clap::Args;
 
+use crate::FileType;
+
 /// Output format for schema, head, and tail commands (csv, json, json-pretty, yaml).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DisplayOutputFormat {
@@ -58,6 +60,13 @@ pub struct SchemaArgs {
     pub input_path: String,
     #[arg(
         long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
+    #[arg(
+        long,
         short,
         default_value_t = DisplayOutputFormat::Csv,
         value_parser = clap::value_parser!(DisplayOutputFormat),
@@ -87,6 +96,13 @@ pub struct CountArgs {
     pub input_path: String,
     #[arg(
         long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
+    #[arg(
+        long,
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
@@ -100,6 +116,13 @@ pub struct CountArgs {
 pub struct HeadsOrTails {
     /// Path to the Parquet, Avro, ORC, or CSV file
     pub input_path: String,
+    #[arg(
+        long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
     #[arg(
         short = 'n',
         long,

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use cucumber::World;
+use cucumber::given;
 use cucumber::then;
 use cucumber::when;
 use datu::utils;
@@ -20,6 +21,16 @@ pub struct CliWorld {
 
 fn replace_tempdir(s: &str, temp_path: &str) -> String {
     s.replace(TEMPDIR_PLACEHOLDER, temp_path)
+}
+
+#[given(regex = r#"^a file "(.+)"$"#)]
+fn a_file(world: &mut CliWorld, path: String) {
+    let path_resolved = resolve_path(world, &path);
+    assert!(
+        Path::new(&path_resolved).exists(),
+        "Expected file to exist: {}",
+        path_resolved
+    );
 }
 
 #[when(regex = r#"^I run `datu (.+)`$"#)]

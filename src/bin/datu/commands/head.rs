@@ -1,15 +1,15 @@
 use anyhow::Result;
-use datu::FileType;
 use datu::cli::HeadsOrTails;
 use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::display::DisplayWriterStep;
 use datu::pipeline::read_to_batches;
+use datu::resolve_input_file_type;
 
 /// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input_path.as_str().try_into()?;
+    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
     let batches = read_to_batches(
         &args.input_path,
         input_file_type,

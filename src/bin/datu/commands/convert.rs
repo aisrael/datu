@@ -17,6 +17,7 @@ use datu::pipeline::display;
 use datu::pipeline::orc;
 use datu::pipeline::parquet as parquet_writer;
 use datu::pipeline::xlsx;
+use datu::resolve_input_file_type;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use orc_rust::reader::metadata::read_metadata;
@@ -29,6 +30,20 @@ pub struct ConvertArgs {
     pub input_path: String,
     /// Path to the output file
     pub output_path: String,
+    #[arg(
+        long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
+    #[arg(
+        long,
+        short = 'O',
+        value_parser = clap::value_parser!(FileType),
+        help = "Output file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub output: Option<FileType>,
     #[arg(
         long,
         help = "Columns to select. If not specified, all columns will be selected."
@@ -102,8 +117,8 @@ impl RecordBatchReader for ProgressRecordBatchReader {
 
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
 pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
-    let input_file_type: FileType = args.input_path.as_str().try_into()?;
-    let output_file_type: FileType = args.output_path.as_str().try_into()?;
+    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
+    let output_file_type = resolve_input_file_type(args.output, &args.output_path)?;
 
     let total_rows = get_total_rows(&args.input_path, input_file_type);
 
@@ -232,6 +247,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -256,6 +273,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -280,6 +299,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/userdata5.avro".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -304,6 +325,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -328,6 +351,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -352,6 +377,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/userdata5.avro".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: Some(vec!["id".to_string(), "first_name".to_string()]),
             limit: Some(10),
             sparse: true,
@@ -377,6 +404,8 @@ mod tests {
                 .to_str()
                 .expect("Failed to convert path to string")
                 .to_string(),
+            input: None,
+            output: None,
             select: Some(vec!["id".to_string(), "first_name".to_string()]),
             limit: Some(10),
             sparse: true,
@@ -395,6 +424,8 @@ mod tests {
                 .to_str()
                 .expect("Failed to convert path to string")
                 .to_string(),
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -418,6 +449,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path,
+            input: None,
+            output: None,
             select: None,
             limit: None,
             sparse: true,
@@ -442,6 +475,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path: output_path.clone(),
+            input: None,
+            output: None,
             select: Some(vec!["two".to_string(), "four".to_string()]),
             limit: None,
             sparse: true,
@@ -484,6 +519,8 @@ mod tests {
         let args = ConvertArgs {
             input_path: "fixtures/table.parquet".to_string(),
             output_path: output_path.clone(),
+            input: None,
+            output: None,
             select: Some(vec!["one".to_string(), "two".to_string()]),
             limit: None,
             sparse: true,

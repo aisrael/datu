@@ -14,6 +14,7 @@ use datafusion::prelude::CsvReadOptions;
 use datu::FileType;
 use datu::cli::DisplayOutputFormat;
 use datu::cli::SchemaArgs;
+use datu::resolve_input_file_type;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use parquet::basic::ConvertedType;
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -244,7 +245,7 @@ fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<
 
 /// The `datu schema` command
 pub async fn schema(args: SchemaArgs) -> Result<()> {
-    let file_type: FileType = args.input_path.as_str().try_into()?;
+    let file_type = resolve_input_file_type(args.input, &args.input_path)?;
     match file_type {
         FileType::Parquet => schema_parquet(&args.input_path, args.output, args.sparse),
         FileType::Avro => schema_avro(&args.input_path, args.output, args.sparse),

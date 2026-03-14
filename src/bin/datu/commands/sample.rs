@@ -18,13 +18,14 @@ use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::reservoir_sample_from_reader;
 use datu::pipeline::sample_from_reader;
+use datu::resolve_input_file_type;
 use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// sample command implementation: print N random rows from an Avro, CSV, Parquet, or ORC file.
 pub async fn sample(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input_path.as_str().try_into()?;
+    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
     match input_file_type {
         FileType::Parquet => sample_parquet(args).await,
         FileType::Avro => sample_avro(args).await,

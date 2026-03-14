@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::str::FromStr;
 
 use rustc_literal_escaper::unescape_str as unescape_str_raw;
 
@@ -48,6 +49,39 @@ pub enum FileType {
     Yaml,
 }
 
+impl std::fmt::Display for FileType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileType::Avro => write!(f, "avro"),
+            FileType::Csv => write!(f, "csv"),
+            FileType::Json => write!(f, "json"),
+            FileType::Orc => write!(f, "orc"),
+            FileType::Parquet => write!(f, "parquet"),
+            FileType::Xlsx => write!(f, "xlsx"),
+            FileType::Yaml => write!(f, "yaml"),
+        }
+    }
+}
+
+impl FromStr for FileType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "avro" => Ok(FileType::Avro),
+            "csv" => Ok(FileType::Csv),
+            "json" => Ok(FileType::Json),
+            "orc" => Ok(FileType::Orc),
+            "parq" | "parquet" => Ok(FileType::Parquet),
+            "xlsx" => Ok(FileType::Xlsx),
+            "yaml" | "yml" => Ok(FileType::Yaml),
+            _ => Err(format!(
+                "unknown file type '{s}', expected one of: avro, csv, json, orc, parquet, xlsx, yaml"
+            )),
+        }
+    }
+}
+
 /// Try to determine the FileType from a filename
 impl TryFrom<&str> for FileType {
     type Error = crate::Error;
@@ -72,6 +106,17 @@ impl TryFrom<&str> for FileType {
         };
 
         Err(crate::Error::UnknownFileType(s.to_owned()))
+    }
+}
+
+/// Resolve the input file type: use the explicit override if provided, otherwise infer from the file path extension.
+pub fn resolve_input_file_type(
+    input_override: Option<FileType>,
+    path: &str,
+) -> crate::Result<FileType> {
+    match input_override {
+        Some(ft) => Ok(ft),
+        None => FileType::try_from(path),
     }
 }
 

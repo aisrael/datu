@@ -10,6 +10,7 @@ pub mod utils;
 
 pub use errors::Error;
 pub use utils::FileType;
+pub use utils::resolve_input_file_type;
 
 /// Result type alias for datu operations.
 pub type Result<T> = std::result::Result<T, Error>;

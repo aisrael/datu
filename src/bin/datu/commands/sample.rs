@@ -18,13 +18,14 @@ use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::reservoir_sample_from_reader;
 use datu::pipeline::sample_from_reader;
+use datu::resolve_input_file_type;
 use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// sample command implementation: print N random rows from an Avro, CSV, Parquet, or ORC file.
 pub async fn sample(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input.as_str().try_into()?;
+    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
     match input_file_type {
         FileType::Parquet => sample_parquet(args).await,
         FileType::Avro => sample_avro(args).await,
@@ -36,7 +37,7 @@ pub async fn sample(args: HeadsOrTails) -> Result<()> {
 
 /// Samples N random rows from a Parquet file using metadata for total row count.
 async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
-    let meta_file = File::open(&args.input).map_err(Error::IoError)?;
+    let meta_file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
         .map_err(Error::ParquetError)?;
@@ -44,7 +45,7 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadParquetStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: None,
             offset: None,
             csv_has_header: None,
@@ -62,19 +63,20 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
 
 /// Samples N random rows from an ORC file using metadata for total row count.
 async fn sample_orc(args: HeadsOrTails) -> Result<()> {
-    let mut file = File::open(&args.input).map_err(Error::IoError)?;
+    let mut file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
     let total_rows = metadata.number_of_rows() as usize;
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadOrcStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: None,
             offset: None,
             csv_has_header: None,
@@ -92,6 +94,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -100,7 +103,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
 async fn sample_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: None,
             offset: None,
             csv_has_header: None,
@@ -118,6 +121,7 @@ async fn sample_avro(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -125,11 +129,11 @@ async fn sample_avro(args: HeadsOrTails) -> Result<()> {
 /// Samples N random rows from a CSV file using reservoir sampling.
 async fn sample_csv(args: HeadsOrTails) -> Result<()> {
     let batches = read_to_batches(
-        &args.input,
+        &args.input_path,
         FileType::Csv,
         &args.select,
         None,
-        args.has_headers,
+        args.input_headers,
     )
     .await?;
     let reader: Box<dyn arrow::array::RecordBatchReader + 'static> =
@@ -140,6 +144,7 @@ async fn sample_csv(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse: args.sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }

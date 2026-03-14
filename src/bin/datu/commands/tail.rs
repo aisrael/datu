@@ -16,13 +16,14 @@ use datu::pipeline::parquet::ReadParquetStep;
 use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::tail_batches;
+use datu::resolve_input_file_type;
 use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// tail command implementation: print the last N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
-    let input_file_type: FileType = args.input.as_str().try_into()?;
+    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
     match input_file_type {
         FileType::Parquet => tail_parquet(args).await,
         FileType::Avro => tail_avro(args).await,
@@ -34,7 +35,7 @@ pub async fn tail(args: HeadsOrTails) -> Result<()> {
 
 /// Prints the last N lines of a Parquet file.
 async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
-    let meta_file = File::open(&args.input).map_err(Error::IoError)?;
+    let meta_file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = ParquetMetaDataReader::new()
         .parse_and_finish(&meta_file)
         .map_err(Error::ParquetError)?;
@@ -44,7 +45,7 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadParquetStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: Some(number),
             offset: Some(offset),
             csv_has_header: None,
@@ -59,6 +60,7 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -69,6 +71,7 @@ async fn tail_from_reader(
     number: usize,
     output: datu::cli::DisplayOutputFormat,
     sparse: bool,
+    headers: bool,
 ) -> Result<()> {
     let reader = reader_step.get()?;
     let batches: Vec<arrow::record_batch::RecordBatch> = reader
@@ -81,6 +84,7 @@ async fn tail_from_reader(
     let display_step = DisplayWriterStep {
         output_format: output,
         sparse,
+        headers,
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }
@@ -88,22 +92,29 @@ async fn tail_from_reader(
 /// Prints the last N lines of a CSV file.
 async fn tail_csv(args: HeadsOrTails) -> Result<()> {
     let batches = read_to_batches(
-        &args.input,
+        &args.input_path,
         FileType::Csv,
         &args.select,
         None,
-        args.has_headers,
+        args.input_headers,
     )
     .await?;
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
-    tail_from_reader(reader_step, args.number, args.output, args.sparse).await
+    tail_from_reader(
+        reader_step,
+        args.number,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
 }
 
 /// Prints the last N lines of an Avro file.
 async fn tail_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: None,
             offset: None,
             csv_has_header: None,
@@ -115,12 +126,13 @@ async fn tail_avro(args: HeadsOrTails) -> Result<()> {
         reader_step = select_step.execute(reader_step).await?;
     }
     let sparse = args.sparse;
-    tail_from_reader(reader_step, args.number, args.output, sparse).await
+    let headers = args.output_headers.unwrap_or(true);
+    tail_from_reader(reader_step, args.number, args.output, sparse, headers).await
 }
 
 /// Prints the last N lines of an ORC file.
 async fn tail_orc(args: HeadsOrTails) -> Result<()> {
-    let mut file = File::open(&args.input).map_err(Error::IoError)?;
+    let mut file = File::open(&args.input_path).map_err(Error::IoError)?;
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
     let total_rows = metadata.number_of_rows() as usize;
     let number = args.number.min(total_rows);
@@ -128,7 +140,7 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
 
     let mut reader_step: RecordBatchReaderSource = Box::new(ReadOrcStep {
         args: ReadArgs {
-            path: args.input.clone(),
+            path: args.input_path.clone(),
             limit: Some(number),
             offset: Some(offset),
             csv_has_header: None,
@@ -143,6 +155,7 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
     let display_step = DisplayWriterStep {
         output_format: args.output,
         sparse,
+        headers: args.output_headers.unwrap_or(true),
     };
     display_step.execute(reader_step).await.map_err(Into::into)
 }

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use cucumber::World;
+use cucumber::given;
 use cucumber::then;
 use cucumber::when;
 use datu::utils;
@@ -20,6 +21,16 @@ pub struct CliWorld {
 
 fn replace_tempdir(s: &str, temp_path: &str) -> String {
     s.replace(TEMPDIR_PLACEHOLDER, temp_path)
+}
+
+#[given(regex = r#"^a file "(.+)"$"#)]
+fn a_file(world: &mut CliWorld, path: String) {
+    let path_resolved = resolve_path(world, &path);
+    assert!(
+        Path::new(&path_resolved).exists(),
+        "Expected file to exist: {}",
+        path_resolved
+    );
 }
 
 #[when(regex = r#"^I run `datu (.+)`$"#)]
@@ -374,6 +385,18 @@ fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
         path_resolved,
         n,
         line_count
+    );
+}
+
+#[then(expr = "the file {string} should contain {string}")]
+fn the_file_should_contain(world: &mut CliWorld, s: String, s2: String) {
+    let path_resolved = resolve_path(world, &s);
+    let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
+    assert!(
+        content.contains(&s2),
+        "Expected file {} to contain '{}', but it did not",
+        path_resolved,
+        s2
     );
 }
 

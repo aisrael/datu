@@ -6,6 +6,8 @@ use std::str::FromStr;
 
 use clap::Args;
 
+use crate::FileType;
+
 /// Output format for schema, head, and tail commands (csv, json, json-pretty, yaml).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DisplayOutputFormat {
@@ -55,7 +57,14 @@ impl FromStr for DisplayOutputFormat {
 #[derive(Args)]
 pub struct SchemaArgs {
     /// Path to the Parquet, Avro, ORC, or CSV file
-    pub file: String,
+    pub input_path: String,
+    #[arg(
+        long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
     #[arg(
         long,
         short,
@@ -75,30 +84,45 @@ pub struct SchemaArgs {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
 }
 
 /// Arguments for the `datu count` command.
 #[derive(Args)]
 pub struct CountArgs {
     /// Path to the Parquet, Avro, ORC, or CSV file
-    pub file: String,
+    pub input_path: String,
+    #[arg(
+        long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
     #[arg(
         long,
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
 }
 
 /// Arguments for the `datu head` and `datu tail` commands.
 #[derive(Args)]
 pub struct HeadsOrTails {
-    pub input: String,
+    /// Path to the Parquet, Avro, ORC, or CSV file
+    pub input_path: String,
+    #[arg(
+        long,
+        short = 'I',
+        value_parser = clap::value_parser!(FileType),
+        help = "Input file type (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub input: Option<FileType>,
     #[arg(
         short = 'n',
         long,
@@ -131,7 +155,15 @@ pub struct HeadsOrTails {
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
         default_missing_value = "true",
-        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --has-headers=false for headerless CSV."
+        help = "For CSV input: whether the first row is a header. Default: true when omitted. Use --input-headers=false for headerless CSV."
     )]
-    pub has_headers: Option<bool>,
+    pub input_headers: Option<bool>,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(bool),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        help = "For CSV output: whether to print column headers. Default: true when omitted. Use --output-headers=false to suppress headers."
+    )]
+    pub output_headers: Option<bool>,
 }

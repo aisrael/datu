@@ -36,7 +36,9 @@ cargo install --git https://github.com/aisrael/datu
 - **Write** — Output file formats for `convert`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
-**CSV options:** When reading CSV files, the `--has-headers` option controls whether the first row is treated as column names. Omitted or `--has-headers` means true (header present); `--has-headers=false` for headerless CSV. Applies to `convert`, `count`, `schema`, `head`, and `tail`.
+**File type detection:** By default, file types are inferred from extensions. Use `--input <TYPE>` (`-I`) to override input format detection, and `--output <TYPE>` (`-O`, `convert` only) to override output format detection. Valid types: `avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`.
+
+**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `convert`, `count`, `schema`, `head`, and `tail`.
 
 Usage
 =====
@@ -76,8 +78,9 @@ datu schema <FILE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Output formats:**
 
@@ -121,7 +124,8 @@ datu count <FILE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -135,14 +139,14 @@ datu count data.csv
 datu count data.orc
 
 # Count rows in a headerless CSV file
-datu count data.csv --has-headers=false
+datu count data.csv --input-headers=false
 ```
 
 ---
 
 ### `convert`
 
-Convert data between supported formats. Input and output formats are inferred from file extensions.
+Convert data between supported formats. Input and output formats are inferred from file extensions, or can be specified explicitly with `--input` and `--output`.
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
 
@@ -158,11 +162,13 @@ datu convert <INPUT> <OUTPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `-O`, `--output <TYPE>` | Output file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are written. Column names can be given as multiple arguments or as comma-separated values (e.g. `--select id,name,email` or `--select id --select name --select email`). |
 | `--limit <N>` | Maximum number of records to read from the input. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When converting to JSON, format output with indentation and newlines. Ignored for other output formats. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -180,7 +186,7 @@ datu convert data.parquet data.avro --limit 1000
 datu convert events.avro events.csv --select id,timestamp,user_id
 
 # CSV to JSON with headerless input
-datu convert data.csv output.json --has-headers=false
+datu convert data.csv output.json --input-headers=false
 
 # Parquet to Parquet with column subset
 datu convert input.parq output.parquet --select one,two,three
@@ -193,6 +199,47 @@ datu convert data.parquet data.orc
 
 # Parquet or Avro to JSON
 datu convert data.parquet data.json
+```
+
+---
+
+### `sample`
+
+Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats). For Parquet and ORC, sampling uses file metadata to determine total row count and selects random indices; for Avro and CSV, reservoir sampling is used.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Usage:**
+
+```sh
+datu sample <INPUT> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `-n`, `--number <N>` | Number of rows to sample. Default: 10. |
+| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
+| `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
+
+**Examples:**
+
+```sh
+# 10 random rows (default)
+datu sample data.parquet
+
+# 5 random rows
+datu sample data.parquet -n 5
+datu sample data.avro --number 5
+datu sample data.csv -n 5
+datu sample data.orc --number 5
+
+# 20 random rows, specific columns
+datu sample data.parquet -n 20 --select id,name,email
 ```
 
 ---
@@ -213,11 +260,12 @@ datu head <INPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -235,7 +283,7 @@ datu head data.orc --number 100
 datu head data.parquet -n 20 --select id,name,email
 
 # Head from a headerless CSV file
-datu head data.csv --has-headers=false
+datu head data.csv --input-headers=false
 ```
 
 ---
@@ -258,11 +306,12 @@ datu tail <INPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
 | `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
-| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
 
@@ -350,6 +399,14 @@ Take the first _n_ rows.
 > read("data.parquet") |> head(10) |> write("first10.csv")
 ```
 
+#### `sample(n)`
+
+Take _n_ random rows from the data. Default: 10.
+
+```text
+> read("data.parquet") |> sample(5) |> write("sampled.csv")
+```
+
 #### `tail(n)`
 
 Take the last _n_ rows.
@@ -365,6 +422,7 @@ Functions can be chained in any order to build more complex pipelines:
 ```text
 > read("users.avro") |> select(:id, :first_name, :email) |> head(5) |> write("top5.json")
 > read("data.parquet") |> select(:two, :one) |> tail(1) |> write("last_row.csv")
+> read("data.parquet") |> select(:id, :email) |> sample(5) |> write("sample.csv")
 ```
 
 ---

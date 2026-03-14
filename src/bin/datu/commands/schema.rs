@@ -14,6 +14,7 @@ use datafusion::prelude::CsvReadOptions;
 use datu::FileType;
 use datu::cli::DisplayOutputFormat;
 use datu::cli::SchemaArgs;
+use datu::resolve_input_file_type;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use parquet::basic::ConvertedType;
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -244,17 +245,17 @@ fn schema_avro(path: &str, output: DisplayOutputFormat, sparse: bool) -> Result<
 
 /// The `datu schema` command
 pub async fn schema(args: SchemaArgs) -> Result<()> {
-    let file_type: FileType = args.file.as_str().try_into()?;
+    let file_type = resolve_input_file_type(args.input, &args.input_path)?;
     match file_type {
-        FileType::Parquet => schema_parquet(&args.file, args.output, args.sparse),
-        FileType::Avro => schema_avro(&args.file, args.output, args.sparse),
+        FileType::Parquet => schema_parquet(&args.input_path, args.output, args.sparse),
+        FileType::Avro => schema_avro(&args.input_path, args.output, args.sparse),
         FileType::Csv => schema_csv(
-            &args.file,
+            &args.input_path,
             args.output,
             args.sparse,
-            args.has_headers.unwrap_or(true),
+            args.input_headers.unwrap_or(true),
         ),
-        FileType::Orc => schema_orc(&args.file, args.output, args.sparse),
+        FileType::Orc => schema_orc(&args.input_path, args.output, args.sparse),
         _ => bail!("schema is only supported for Parquet, Avro, CSV, and ORC files"),
     }
 }

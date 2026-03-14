@@ -2,24 +2,28 @@ Feature: Convert
   Convert between Parquet, Avro, ORC, CSV, JSON, YAML, and XLSX file formats.
 
   Scenario: Parquet to Avro
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.avro`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table.avro"
     And the file "$TEMPDIR/table.avro" should exist
 
   Scenario: Avro to Parquet
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.parquet`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.parquet"
     And the file "$TEMPDIR/userdata5.parquet" should exist
 
   Scenario: Avro to ORC
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.orc"
     And the file "$TEMPDIR/userdata5.orc" should exist
 
   Scenario: ORC to Parquet
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.parquet`
@@ -28,12 +32,14 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5.parquet" should exist
 
   Scenario: Parquet to ORC
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/table.orc --select id,first_name --limit 10`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/table.orc"
     And the file "$TEMPDIR/table.orc" should exist
 
   Scenario: Parquet to CSV
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.csv`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table.csv"
@@ -42,12 +48,14 @@ Feature: Convert
     And that file should have 4 lines
 
   Scenario: CSV to Parquet
+    Given a file "fixtures/table.csv"
     When I run `datu convert fixtures/table.csv $TEMPDIR/table_from_csv.parquet`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.csv to $TEMPDIR/table_from_csv.parquet"
     And the file "$TEMPDIR/table_from_csv.parquet" should exist
 
   Scenario: CSV to JSON
+    Given a file "fixtures/table.csv"
     When I run `datu convert fixtures/table.csv $TEMPDIR/table_from_csv.json`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.csv to $TEMPDIR/table_from_csv.json"
@@ -56,13 +64,17 @@ Feature: Convert
     And the file "$TEMPDIR/table_from_csv.json" should contain "one"
     And the file "$TEMPDIR/table_from_csv.json" should contain "two"
 
-  Scenario: CSV to Parquet with --has-headers=false
-    When I run `datu convert fixtures/no_header.csv $TEMPDIR/no_header.parquet --has-headers=false`
+  Scenario: CSV to Parquet with --input-headers=false
+    Given a file "fixtures/no_header.csv"
+    When I run `datu convert fixtures/no_header.csv $TEMPDIR/no_header.parquet --input-headers=false`
     Then the command should succeed
     And the output should contain "Converted fixtures/no_header.csv to $TEMPDIR/no_header.parquet"
     And the file "$TEMPDIR/no_header.parquet" should exist
+    And that file should be valid Parquet
+    And that file should have 3 records
 
   Scenario: Avro to CSV
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.csv`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.csv"
@@ -71,6 +83,7 @@ Feature: Convert
     And that file should have 1001 lines
 
   Scenario: ORC to CSV
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.csv`
@@ -80,6 +93,7 @@ Feature: Convert
     And the first line of that file should contain "id,first_name"
 
   Scenario: Parquet to CSV with --select
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.csv --select two,four`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_select.csv"
@@ -88,6 +102,7 @@ Feature: Convert
     And that file should have 4 lines
 
   Scenario: Avro to CSV with --select
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5_select.csv --select id,first_name,email`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5_select.csv"
@@ -96,12 +111,14 @@ Feature: Convert
     And that file should have 1001 lines
 
   Scenario: Parquet to Avro with --limit
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_limit.avro --limit 2`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_limit.avro"
     And the file "$TEMPDIR/table_limit.avro" should exist
 
   Scenario: Avro to CSV with --limit and --select
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5_limit_select.csv --limit 3 --select id,email`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5_limit_select.csv"
@@ -110,6 +127,7 @@ Feature: Convert
     And that file should have 4 lines
 
   Scenario: Parquet to JSON
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.json`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table.json"
@@ -121,6 +139,7 @@ Feature: Convert
       ```
 
   Scenario: Parquet to JSON (with `--json-pretty`)
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_sparse.json --json-pretty`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_sparse.json"
@@ -155,6 +174,7 @@ Feature: Convert
       ```
 
   Scenario: Avro to JSON
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.json --json-pretty`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.json"
@@ -162,6 +182,7 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5.json" should be valid JSON
 
   Scenario: Parquet to YAML (default sparse)
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.yaml`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table.yaml"
@@ -188,6 +209,7 @@ Feature: Convert
       ```
 
   Scenario: Parquet to JSON with sparse=false
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_no_sparse.json --sparse=false`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_no_sparse.json"
@@ -197,6 +219,7 @@ Feature: Convert
     And that file should contain "null"
 
   Scenario: Parquet to YAML with sparse=false
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_no_sparse.yaml --sparse=false`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_no_sparse.yaml"
@@ -205,6 +228,7 @@ Feature: Convert
     And that file should contain "one:"
 
   Scenario: Avro to YAML
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.yaml`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.yaml"
@@ -214,6 +238,7 @@ Feature: Convert
     And that file should contain "first_name:"
 
   Scenario: ORC to JSON
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.json --json-pretty`
@@ -223,6 +248,7 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5.json" should be valid JSON
 
   Scenario: ORC to YAML
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.yaml`
@@ -234,6 +260,7 @@ Feature: Convert
     And that file should contain "first_name:"
 
   Scenario: Parquet to YAML with --select
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.yaml --select two,four`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_select.yaml"
@@ -243,6 +270,7 @@ Feature: Convert
     And that file should contain "four:"
 
   Scenario: Parquet to YAML with --limit
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_limit.yaml --limit 2`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_limit.yaml"
@@ -250,6 +278,7 @@ Feature: Convert
     And that file should be valid YAML
 
   Scenario: Avro to YAML with .yml extension
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.yml`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.yml"
@@ -258,18 +287,21 @@ Feature: Convert
     And that file should contain "email:"
 
   Scenario: Parquet to XLSX
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table.xlsx`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table.xlsx"
     And the file "$TEMPDIR/table.xlsx" should exist
 
   Scenario: Avro to XLSX
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.xlsx`
     Then the command should succeed
     And the output should contain "Converted fixtures/userdata5.avro to $TEMPDIR/userdata5.xlsx"
     And the file "$TEMPDIR/userdata5.xlsx" should exist
 
   Scenario: ORC to CSV with --select
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name,email --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5_select.csv --select id,first_name,email`
@@ -279,6 +311,7 @@ Feature: Convert
     And the first line of that file should contain "id,first_name,email"
 
   Scenario: ORC to XLSX
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5.xlsx`
@@ -287,6 +320,7 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5.xlsx" should exist
 
   Scenario: ORC to Parquet with --limit
+    Given a file "fixtures/userdata5.avro"
     When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
     Then the command should succeed
     When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5_limit.parquet --limit 5`
@@ -295,12 +329,14 @@ Feature: Convert
     And the file "$TEMPDIR/userdata5_limit.parquet" should exist
 
   Scenario: Parquet to XLSX with --select
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_select.xlsx --select two,four`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_select.xlsx"
     And the file "$TEMPDIR/table_select.xlsx" should exist
 
   Scenario: Parquet to XLSX with --limit
+    Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_limit.xlsx --limit 2`
     Then the command should succeed
     And the output should contain "Converted fixtures/table.parquet to $TEMPDIR/table_limit.xlsx"

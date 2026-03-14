@@ -37,7 +37,7 @@ flt = { version = "0.0.2" }
 dirs = { version = "2.0.0", package = "dirs-next" }
 rand = "0.8"
 reservoir-sampling = "0.5"
-spinoff = "0.8.0"
+indicatif = "0.17"
 
 [dev-dependencies]
 criterion = "0.5"

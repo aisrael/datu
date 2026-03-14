@@ -197,6 +197,46 @@ datu convert data.parquet data.json
 
 ---
 
+### `sample`
+
+Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats). For Parquet and ORC, sampling uses file metadata to determine total row count and selects random indices; for Avro and CSV, reservoir sampling is used.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Usage:**
+
+```sh
+datu sample <INPUT> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-n`, `--number <N>` | Number of rows to sample. Default: 10. |
+| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
+| `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
+| `--has-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--has-headers=false` for headerless CSV. |
+
+**Examples:**
+
+```sh
+# 10 random rows (default)
+datu sample data.parquet
+
+# 5 random rows
+datu sample data.parquet -n 5
+datu sample data.avro --number 5
+datu sample data.csv -n 5
+datu sample data.orc --number 5
+
+# 20 random rows, specific columns
+datu sample data.parquet -n 20 --select id,name,email
+```
+
+---
+
 ### `head`
 
 Print the first N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats).
@@ -350,6 +390,14 @@ Take the first _n_ rows.
 > read("data.parquet") |> head(10) |> write("first10.csv")
 ```
 
+#### `sample(n)`
+
+Take _n_ random rows from the data. Default: 10.
+
+```text
+> read("data.parquet") |> sample(5) |> write("sampled.csv")
+```
+
 #### `tail(n)`
 
 Take the last _n_ rows.
@@ -365,6 +413,7 @@ Functions can be chained in any order to build more complex pipelines:
 ```text
 > read("users.avro") |> select(:id, :first_name, :email) |> head(5) |> write("top5.json")
 > read("data.parquet") |> select(:two, :one) |> tail(1) |> write("last_row.csv")
+> read("data.parquet") |> select(:id, :email) |> sample(5) |> write("sample.csv")
 ```
 
 ---

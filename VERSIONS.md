@@ -1,5 +1,45 @@
 # datu Version Notes
 
+## v0.3.1
+
+Compare range: `0.3.0...0.3.1`
+
+### Highlights
+
+- Added a `sample` CLI command and REPL function for randomly sampling rows from data files.
+- Replaced the `spinoff` spinner with an `indicatif` progress bar in the `convert` command, showing row-level progress for Parquet and ORC inputs.
+- Improved REPL with incremental execution and persistent history across sessions.
+- Internal refactoring of record-batch writing and tail slicing into shared pipeline helpers.
+
+### New Features
+
+- **`sample` command (CLI and REPL)**
+  - `datu sample <FILE> [-n N]` — print N random rows from a Parquet, Avro, CSV, or ORC file (default: 10).
+  - Uses index-based sampling for Parquet and ORC (metadata-aware); reservoir sampling for Avro and CSV.
+  - Supports `--select`, `--output`, `--sparse`, and `--has-headers` options (same as `head`/`tail`).
+  - REPL: `read("file") |> sample(5)` — samples 5 random rows from the pipeline.
+
+- **Progress bar for `convert`**
+  - Parquet and ORC inputs show a row-level progress bar (using file metadata for total row count).
+  - Avro and CSV inputs show an animated spinner (total row count not available upfront).
+
+### Improvements
+
+- **REPL enhancements**
+  - Incremental pipeline execution: stages are evaluated as they are parsed.
+  - Command history is now persisted across sessions.
+
+- **Internal refactoring**
+  - Extracted record-batch writing into a shared sink harness (`batch_write` module).
+  - Extracted tail batch slicing into a shared pipeline helper.
+
+### Changelog Stats
+
+- 7 commits
+- 20 files changed
+- 1317 insertions
+- 157 deletions
+
 ## v0.3.0
 
 Compare range: `0.2.4...0.3.0`

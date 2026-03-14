@@ -3,6 +3,9 @@ use datu::FileType;
 use datu::pipeline::Step;
 use datu::pipeline::dataframe::DataFrameReader;
 use datu::pipeline::dataframe::DataFrameWriter;
+use spinoff::Color;
+use spinoff::Spinner;
+use spinoff::spinners;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
@@ -43,7 +46,11 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
     let input_file_type: FileType = args.input.as_str().try_into()?;
     let output_file_type: FileType = args.output.as_str().try_into()?;
 
-    println!("Converting {} to {}", args.input, args.output);
+    let mut spinner = Spinner::new(
+        spinners::Dots,
+        format!("Converting {} to {}...", args.input, args.output),
+        Color::Cyan,
+    );
 
     let reader_step = DataFrameReader::new(
         &args.input,
@@ -53,12 +60,32 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         args.has_headers,
     );
 
-    let writer_step =
-        DataFrameWriter::new(args.output, output_file_type, args.sparse, args.json_pretty);
-    let source = reader_step.execute(()).await?;
-    writer_step.execute(source).await?;
+    let writer_step = DataFrameWriter::new(
+        args.output.clone(),
+        output_file_type,
+        args.sparse,
+        args.json_pretty,
+    );
 
-    Ok(())
+    let result = async {
+        let source = reader_step.execute(()).await?;
+        writer_step.execute(source).await
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            spinner.success(&format!("Converted {} to {}", args.input, args.output));
+            Ok(())
+        }
+        Err(e) => {
+            spinner.fail(&format!(
+                "Failed to convert {} to {}",
+                args.input, args.output
+            ));
+            Err(e.into())
+        }
+    }
 }
 
 #[cfg(test)]

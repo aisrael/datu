@@ -516,8 +516,10 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
 /// Replaces [Read { path }, Count { path: None }] with [Count { path: Some(path) }]
 /// so Parquet/ORC use metadata without loading the file.
 fn optimize_read_then_count(stages: &mut Vec<PipelineStage>) {
-    if let [PipelineStage::Read { path }, PipelineStage::Count { path: None }] =
-        stages.as_slice()
+    if let [
+        PipelineStage::Read { path },
+        PipelineStage::Count { path: None },
+    ] = stages.as_slice()
     {
         *stages = vec![PipelineStage::Count {
             path: Some(path.clone()),

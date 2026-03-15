@@ -14,11 +14,12 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc => {}
         _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for head"),
     }
+    // Pass offset=0 when limiting so ORC row selection applies (it requires both offset and limit).
     let reader_step = build_reader(
         &args.input_path,
         input_file_type,
         Some(args.number),
-        None,
+        Some(0),
         args.input_headers,
     )?;
     apply_select_and_display(

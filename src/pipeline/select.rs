@@ -1,4 +1,5 @@
-//! DataFusion DataFrame API for column selection.
+//! Column selection: ColumnSpec resolution (shared by CLI and REPL), in-memory projection
+//! (Arrow), and DataFusion-based read helpers.
 
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -103,30 +104,29 @@ pub async fn read_avro_select(
     Ok(Box::new(VecRecordBatchReaderSource::new(batches)))
 }
 
-/// Applies column selection to record batches using the DataFusion DataFrame API.
-/// Returns the selected batches directly (for use when RecordBatchReaderSource is not needed).
-/// Resolves ColumnSpec against the schema: Exact uses case-sensitive match, CaseInsensitive uses
-/// case-insensitive match.
-pub async fn select_columns_to_batches(
+/// Applies column selection to record batches using the same resolution and projection
+/// as the streaming SelectColumnsStep: resolve_column_specs then Arrow project by indices.
+pub fn select_columns_to_batches(
     batches: Vec<RecordBatch>,
     specs: &[ColumnSpec],
 ) -> crate::Result<Vec<RecordBatch>> {
-    if batches.is_empty() {
+    if batches.is_empty() || specs.is_empty() {
         return Ok(batches);
     }
     let schema = batches[0].schema();
-    let columns = resolve_column_specs(&schema, specs)?;
-    let ctx = SessionContext::new();
-    let col_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
-    let df = ctx
-        .read_batches(batches)
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-    let df = df
-        .select_columns(&col_refs)
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-    df.collect()
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))
+    let column_names = resolve_column_specs(schema.as_ref(), specs)?;
+    let indices: Vec<usize> = column_names
+        .iter()
+        .map(|col| {
+            schema
+                .index_of(col)
+                .map_err(|e| crate::Error::GenericError(format!("Column '{col}' not found: {e}")))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    batches
+        .into_iter()
+        .map(|batch| batch.project(&indices).map_err(crate::Error::from))
+        .collect()
 }
 
 /// Applies column selection to record batches using the DataFusion DataFrame API.

@@ -219,7 +219,7 @@ impl ReplPipelineBuilder {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("select requires a preceding read in the pipe".to_string())
         })?;
-        let selected = select::select_columns_to_batches(batches, columns).await?;
+        let selected = select::select_columns_to_batches(batches, columns)?;
         self.batches = Some(selected);
         Ok(())
     }

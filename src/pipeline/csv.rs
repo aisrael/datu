@@ -18,6 +18,8 @@ use crate::pipeline::batch_write::write_record_batches_with_sink;
 pub struct ReadCsvStep {
     pub path: String,
     pub has_header: Option<bool>,
+    /// Maximum number of rows to read. None means read all.
+    pub limit: Option<usize>,
 }
 
 impl Source<dyn RecordBatchReader + 'static> for ReadCsvStep {
@@ -30,11 +32,25 @@ impl Source<dyn RecordBatchReader + 'static> for ReadCsvStep {
         })
         .map_err(|e| Error::GenericError(e.to_string()))?;
 
-        let batches = tokio::task::block_in_place(|| {
+        let mut batches = tokio::task::block_in_place(|| {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(df.collect())
         })
         .map_err(|e| Error::GenericError(e.to_string()))?;
+
+        if let Some(limit) = self.limit {
+            let mut result = Vec::new();
+            let mut remaining = limit;
+            for batch in batches {
+                if remaining == 0 {
+                    break;
+                }
+                let rows = batch.num_rows().min(remaining);
+                result.push(batch.slice(0, rows));
+                remaining -= rows;
+            }
+            batches = result;
+        }
 
         Ok(Box::new(VecRecordBatchReader::new(batches)))
     }

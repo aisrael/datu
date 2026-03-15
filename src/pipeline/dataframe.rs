@@ -1,3 +1,4 @@
+use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
@@ -62,16 +63,48 @@ impl DataFrameWriter {
     }
 }
 
+/// Writes record batches from a reader to an output file. Used by DataFrameWriter and the convert
+/// command to eliminate duplicate format dispatch.
+pub fn write_record_batches_from_reader(
+    reader: &mut dyn RecordBatchReader,
+    output_path: &str,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+) -> crate::Result<()> {
+    if output_file_type != FileType::Json && json_pretty {
+        eprintln!("Warning: --json-pretty is only supported when converting to JSON");
+    }
+
+    match output_file_type {
+        FileType::Parquet => parquet::write_record_batches(output_path, reader)?,
+        FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
+        FileType::Json => {
+            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+            if json_pretty {
+                display::write_record_batches_as_json_pretty(reader, file, sparse)?;
+            } else {
+                display::write_record_batches_as_json(reader, file, sparse)?;
+            }
+        }
+        FileType::Yaml => {
+            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+            display::write_record_batches_as_yaml(reader, file, sparse)?;
+        }
+        FileType::Avro => avro::write_record_batches(output_path, reader)?,
+        FileType::Orc => orc::write_record_batches(output_path, reader)?,
+        FileType::Xlsx => xlsx::write_record_batches(output_path, reader)?,
+    }
+
+    Ok(())
+}
+
 #[async_trait(?Send)]
 impl Step for DataFrameWriter {
     type Input = DataFrameSource;
     type Output = ();
 
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
-        if self.output_file_type != FileType::Json && self.json_pretty {
-            eprintln!("Warning: --json-pretty is only supported when converting to JSON");
-        }
-
         let df = input.get()?;
 
         let handle = tokio::runtime::Handle::current();
@@ -79,39 +112,13 @@ impl Step for DataFrameWriter {
             .map_err(|e| Error::GenericError(e.to_string()))?;
 
         let mut reader = VecRecordBatchReader::new(batches);
-        let output_path = &self.output_path;
-
-        match self.output_file_type {
-            FileType::Parquet => {
-                parquet::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Csv => {
-                crate::pipeline::csv::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Json => {
-                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-                if self.json_pretty {
-                    display::write_record_batches_as_json_pretty(&mut reader, file, self.sparse)?;
-                } else {
-                    display::write_record_batches_as_json(&mut reader, file, self.sparse)?;
-                }
-            }
-            FileType::Yaml => {
-                let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-                display::write_record_batches_as_yaml(&mut reader, file, self.sparse)?;
-            }
-            FileType::Avro => {
-                avro::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Orc => {
-                orc::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Xlsx => {
-                xlsx::write_record_batches(output_path, &mut reader)?;
-            }
-        }
-
-        Ok(())
+        write_record_batches_from_reader(
+            &mut reader,
+            &self.output_path,
+            self.output_file_type,
+            self.sparse,
+            self.json_pretty,
+        )
     }
 }
 

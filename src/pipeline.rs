@@ -158,6 +158,22 @@ pub fn build_reader(
     Ok(reader)
 }
 
+/// Counts rows in a file. Uses metadata for Parquet and ORC (no data read);
+/// streams batches for Avro and CSV.
+pub fn count_rows(path: &str, file_type: FileType, csv_has_header: Option<bool>) -> Result<usize> {
+    if let Ok(total) = crate::get_total_rows_result(path, file_type) {
+        return Ok(total);
+    }
+    let mut reader_step = build_reader(path, file_type, None, None, csv_has_header)?;
+    let reader = reader_step.get()?;
+    let mut total = 0usize;
+    for batch in reader {
+        let batch = batch.map_err(crate::Error::from)?;
+        total += batch.num_rows();
+    }
+    Ok(total)
+}
+
 /// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming
 /// batches from the underlying DataFrame via `execute_stream()`.
 pub struct DataFrameToBatchReader {

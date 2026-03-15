@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,12 +10,8 @@ use datu::FileType;
 use datu::pipeline::Source;
 use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReader;
-use datu::pipeline::avro;
 use datu::pipeline::dataframe::DataFrameReader;
-use datu::pipeline::display;
-use datu::pipeline::orc;
-use datu::pipeline::parquet as parquet_writer;
-use datu::pipeline::xlsx;
+use datu::pipeline::dataframe::write_record_batches_from_reader;
 use datu::resolve_input_file_type;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
@@ -150,10 +145,6 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         let mut source = reader_step.execute(()).await?;
         let df = source.get()?;
 
-        if output_file_type != FileType::Json && args.json_pretty {
-            eprintln!("Warning: --json-pretty is only supported when converting to JSON");
-        }
-
         let handle = tokio::runtime::Handle::current();
         let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
             .map_err(|e| Error::GenericError(e.to_string()))?;
@@ -163,39 +154,13 @@ pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
             progress: progress.clone(),
         };
 
-        let output_path = &args.output_path;
-
-        match output_file_type {
-            FileType::Parquet => {
-                parquet_writer::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Csv => {
-                datu::pipeline::csv::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Json => {
-                let file = File::create(output_path).map_err(Error::IoError)?;
-                if args.json_pretty {
-                    display::write_record_batches_as_json_pretty(&mut reader, file, args.sparse)?;
-                } else {
-                    display::write_record_batches_as_json(&mut reader, file, args.sparse)?;
-                }
-            }
-            FileType::Yaml => {
-                let file = File::create(output_path).map_err(Error::IoError)?;
-                display::write_record_batches_as_yaml(&mut reader, file, args.sparse)?;
-            }
-            FileType::Avro => {
-                avro::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Orc => {
-                orc::write_record_batches(output_path, &mut reader)?;
-            }
-            FileType::Xlsx => {
-                xlsx::write_record_batches(output_path, &mut reader)?;
-            }
-        }
-
-        Ok(())
+        write_record_batches_from_reader(
+            &mut reader,
+            &args.output_path,
+            output_file_type,
+            args.sparse,
+            args.json_pretty,
+        )
     }
     .await;
 

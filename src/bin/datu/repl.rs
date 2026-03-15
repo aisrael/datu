@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use datu::cli::repl::ReplPipelineBuilder;
+use datu::cli::repl::ReplPipeline;
 use eyre::Result;
 use flt::parser::parse_expr;
 use rustyline::DefaultEditor;
@@ -45,14 +45,14 @@ pub async fn run() -> Result<()> {
         .build();
     let mut rl = DefaultEditor::with_config(config)?;
     let _ = load_repl_history(&mut rl);
-    let mut context = ReplPipelineBuilder::new();
+    let mut context = ReplPipeline::new();
     let repl_result = repl(&mut rl, &mut context).await;
     let _ = save_repl_history(&mut rl);
     repl_result
 }
 
 /// Reads, evaluates, and prints in a loop until EOF.
-async fn repl(rl: &mut DefaultEditor, context: &mut ReplPipelineBuilder) -> Result<()> {
+async fn repl(rl: &mut DefaultEditor, context: &mut ReplPipeline) -> Result<()> {
     loop {
         // On success, we get the input line. On EOF, we break the loop.
         // On interrupt, we continue. On any other error, we return.

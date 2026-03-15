@@ -105,20 +105,20 @@ impl fmt::Display for PipelineStage {
 }
 
 /// Builder for a REPL pipeline.
-pub struct ReplPipelineBuilder {
+pub struct ReplPipeline {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
     pub statement_incomplete: bool,
     pending_exprs: Vec<Expr>,
 }
 
-impl Default for ReplPipelineBuilder {
+impl Default for ReplPipeline {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ReplPipelineBuilder {
+impl ReplPipeline {
     pub fn new() -> Self {
         Self {
             batches: None,
@@ -518,8 +518,8 @@ mod tests {
 
     use super::*;
 
-    fn new_context() -> ReplPipelineBuilder {
-        ReplPipelineBuilder::new()
+    fn new_context() -> ReplPipeline {
+        ReplPipeline::new()
     }
 
     fn parse(input: &str) -> Expr {

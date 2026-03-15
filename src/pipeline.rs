@@ -11,6 +11,7 @@ pub mod orc;
 pub mod parquet;
 pub mod read;
 pub mod record_batch_filter;
+pub mod schema;
 pub mod select;
 pub mod write;
 pub mod xlsx;

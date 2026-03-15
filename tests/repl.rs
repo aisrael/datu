@@ -20,6 +20,7 @@ pub struct ReplWorld {
     session: Option<OsSession>,
     temp_dir: Option<tempfile::TempDir>,
     last_file: Option<String>,
+    last_output: Option<std::process::Output>,
 }
 
 fn replace_tempdir(s: &str, temp_path: &str) -> String {
@@ -86,9 +87,26 @@ fn repl_is_ran_and_user_types(world: &mut ReplWorld, step: &Step) {
     drop(child.stdin.take());
 
     let output = child.wait_with_output().expect("Failed to wait for datu");
+    world.last_output = Some(output);
+    let last = world.last_output.as_ref().unwrap();
+    assert!(
+        last.status.success(),
+        "datu REPL exited with error.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&last.stdout),
+        String::from_utf8_lossy(&last.stderr)
+    );
+}
+
+#[then(regex = r#"^the command should succeed$"#)]
+fn command_should_succeed(world: &mut ReplWorld) {
+    let output = world
+        .last_output
+        .as_ref()
+        .expect("No command output; use 'the REPL is ran and the user types' first");
     assert!(
         output.status.success(),
-        "datu REPL exited with error.\nstdout: {}\nstderr: {}",
+        "Command failed with exit code {:?}:\nstdout: {}\nstderr: {}",
+        output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

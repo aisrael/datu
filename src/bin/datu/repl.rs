@@ -19,8 +19,8 @@ fn load_repl_history(rl: &mut DefaultEditor) -> Result<()> {
     let Some(history_path) = repl_history_path() else {
         return Ok(());
     };
-    println!("Loading REPL history from: {:?}", history_path);
     if history_path.exists() {
+        println!("Loading REPL history from: {:?}", history_path);
         rl.load_history(&history_path)?;
     }
     Ok(())

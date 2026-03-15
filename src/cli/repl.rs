@@ -9,6 +9,7 @@ use crate::FileType;
 use crate::cli::DisplayOutputFormat;
 use crate::pipeline::Source;
 use crate::pipeline::VecRecordBatchReaderSource;
+use crate::pipeline::count_rows;
 use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
 use crate::pipeline::sample_batches;
@@ -21,14 +22,29 @@ use crate::pipeline::write_batches;
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum PipelineStage {
-    Read { path: String },
-    Select { columns: Vec<ColumnSpec> },
-    Head { n: usize },
-    Tail { n: usize },
-    Sample { n: usize },
-    Count,
+    Read {
+        path: String,
+    },
+    Select {
+        columns: Vec<ColumnSpec>,
+    },
+    Head {
+        n: usize,
+    },
+    Tail {
+        n: usize,
+    },
+    Sample {
+        n: usize,
+    },
+    /// Count rows. `Some(path)` = count file directly (efficient); `None` = sum batches in context.
+    Count {
+        path: Option<String>,
+    },
     Schema,
-    Write { path: String },
+    Write {
+        path: String,
+    },
     Print,
 }
 
@@ -37,7 +53,8 @@ impl PipelineStage {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            PipelineStage::Head { .. }
+            PipelineStage::Count { .. }
+                | PipelineStage::Head { .. }
                 | PipelineStage::Tail { .. }
                 | PipelineStage::Sample { .. }
                 | PipelineStage::Schema
@@ -78,7 +95,8 @@ impl fmt::Display for PipelineStage {
             PipelineStage::Head { n } => write!(f, "head({n})"),
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
             PipelineStage::Sample { n } => write!(f, "sample({n})"),
-            PipelineStage::Count => write!(f, "count()"),
+            PipelineStage::Count { path: Some(p) } => write!(f, r#"count("{p}")"#),
+            PipelineStage::Count { path: None } => write!(f, "count()"),
             PipelineStage::Schema => write!(f, "schema()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
             PipelineStage::Print => write!(f, "print()"),
@@ -178,7 +196,8 @@ impl ReplPipelineBuilder {
             PipelineStage::Head { n } => self.exec_head(n),
             PipelineStage::Tail { n } => self.exec_tail(n),
             PipelineStage::Sample { n } => self.exec_sample(n),
-            PipelineStage::Count => self.exec_count(),
+            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p),
+            PipelineStage::Count { path: None } => self.exec_count(),
             PipelineStage::Schema => self.exec_schema(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
             PipelineStage::Print => self.print_batches(),
@@ -244,6 +263,15 @@ impl ReplPipelineBuilder {
         Ok(())
     }
 
+    /// Counts rows in a file directly (metadata for Parquet/ORC, streaming for Avro/CSV).
+    fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
+        let file_type: FileType = path.try_into()?;
+        let total =
+            count_rows(path, file_type, None).map_err(|e| Error::GenericError(e.to_string()))?;
+        println!("{total}");
+        Ok(())
+    }
+
     /// Counts the total number of rows across all batches and prints the result.
     fn exec_count(&mut self) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
@@ -306,7 +334,7 @@ fn is_terminal_expr(expr: &Expr) -> bool {
     if let Expr::FunctionCall(name, _) = expr {
         matches!(
             name.to_string().as_str(),
-            "head" | "tail" | "sample" | "schema" | "write"
+            "count" | "head" | "tail" | "sample" | "schema" | "write"
         )
     } else {
         false
@@ -430,12 +458,16 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                     Ok(PipelineStage::Sample { n })
                 }
                 "count" => {
-                    if !args.is_empty() {
-                        return Err(Error::UnsupportedFunctionCall(
-                            "count takes no arguments".to_string(),
-                        ));
-                    }
-                    Ok(PipelineStage::Count)
+                    let path = match args.as_slice() {
+                        [] => None,
+                        [Expr::Literal(Literal::String(s))] => Some(s.clone()),
+                        _ => {
+                            return Err(Error::UnsupportedFunctionCall(
+                                "count takes no arguments or a single path string".to_string(),
+                            ));
+                        }
+                    };
+                    Ok(PipelineStage::Count { path })
                 }
                 "schema" => {
                     if !args.is_empty() {
@@ -1378,7 +1410,10 @@ mod tests {
             .implicit_followup_stage(),
             None
         );
-        assert_eq!(PipelineStage::Count.implicit_followup_stage(), None);
+        assert_eq!(
+            PipelineStage::Count { path: None }.implicit_followup_stage(),
+            None
+        );
     }
 
     #[test]
@@ -1533,14 +1568,29 @@ mod tests {
     fn test_plan_stage_count() {
         let expr = parse("count()");
         let stage = plan_stage(expr).unwrap();
-        assert_eq!(stage, PipelineStage::Count);
+        assert_eq!(stage, PipelineStage::Count { path: None });
     }
 
     #[test]
-    fn test_plan_stage_count_rejects_args() {
+    fn test_plan_stage_count_with_path() {
+        let expr = parse(r#"count("fixtures/table.parquet")"#);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            PipelineStage::Count {
+                path: Some("fixtures/table.parquet".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_stage_count_rejects_invalid_args() {
         let expr = Expr::FunctionCall(
             Identifier("count".into()),
-            vec![Expr::Literal(Literal::String("extra".into()))],
+            vec![
+                Expr::Literal(Literal::String("a".into())),
+                Expr::Literal(Literal::String("b".into())),
+            ],
         );
         let result = plan_stage(expr);
         assert!(result.is_err());
@@ -1565,7 +1615,7 @@ mod tests {
                 path: "a.parquet".to_string()
             }
         );
-        assert_eq!(pipeline[1], PipelineStage::Count);
+        assert_eq!(pipeline[1], PipelineStage::Count { path: None });
     }
 
     // ── eval_count ─────────────────────────────────────────────
@@ -1624,6 +1674,17 @@ mod tests {
             .await
             .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_count_path_uses_efficient_path() {
+        let expr = parse(r#"count("fixtures/table.parquet")"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+        assert!(ctx.batches.is_none(), "count(path) does not use batches");
     }
 
     // ── plan_stage: schema ────────────────────────────────────────

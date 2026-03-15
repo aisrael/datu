@@ -5,15 +5,12 @@ use anyhow::bail;
 use datu::Error;
 use datu::FileType;
 use datu::cli::HeadsOrTails;
-use datu::pipeline::ReadArgs;
 use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReader;
 use datu::pipeline::VecRecordBatchReaderSource;
-use datu::pipeline::avro::ReadAvroStep;
+use datu::pipeline::build_reader;
 use datu::pipeline::display::DisplayWriterStep;
-use datu::pipeline::orc::ReadOrcStep;
-use datu::pipeline::parquet::ReadParquetStep;
 use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::reservoir_sample_from_reader;
@@ -43,14 +40,7 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
         .map_err(Error::ParquetError)?;
     let total_rows = metadata.file_metadata().num_rows().max(0) as usize;
 
-    let mut reader_step: RecordBatchReaderSource = Box::new(ReadParquetStep {
-        args: ReadArgs {
-            path: args.input_path.clone(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        },
-    });
+    let mut reader_step = build_reader(&args.input_path, FileType::Parquet, None, None, None)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };
@@ -74,14 +64,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
     let metadata = read_metadata(&mut file).map_err(Error::OrcError)?;
     let total_rows = metadata.number_of_rows() as usize;
 
-    let mut reader_step: RecordBatchReaderSource = Box::new(ReadOrcStep {
-        args: ReadArgs {
-            path: args.input_path.clone(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        },
-    });
+    let mut reader_step = build_reader(&args.input_path, FileType::Orc, None, None, None)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };
@@ -101,14 +84,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
 
 /// Samples N random rows from an Avro file using reservoir sampling.
 async fn sample_avro(args: HeadsOrTails) -> Result<()> {
-    let mut reader_step: RecordBatchReaderSource = Box::new(ReadAvroStep {
-        args: ReadArgs {
-            path: args.input_path.clone(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        },
-    });
+    let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
     if let Some(select) = &args.select {
         let columns = parse_select_columns(select);
         let select_step = SelectColumnsStep { columns };

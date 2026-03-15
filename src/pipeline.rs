@@ -25,8 +25,12 @@ use futures::StreamExt;
 
 use crate::FileType;
 use crate::Result;
+use crate::pipeline::avro::ReadAvroStep;
+use crate::pipeline::csv::ReadCsvStep;
 use crate::pipeline::dataframe::DataFrameReader;
 use crate::pipeline::dataframe::DataFrameSource;
+use crate::pipeline::orc::ReadOrcStep;
+use crate::pipeline::parquet::ReadParquetStep;
 pub use crate::pipeline::read::ReadArgs;
 pub use crate::pipeline::write::WriteArgs;
 pub use crate::pipeline::write::WriteJsonArgs;
@@ -105,6 +109,52 @@ impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
             .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))?;
         Ok(Box::new(VecRecordBatchReader { batches, index: 0 }))
     }
+}
+
+/// Builds a format-specific `RecordBatchReaderSource` for the given file type.
+pub fn build_reader(
+    path: &str,
+    file_type: FileType,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    csv_has_header: Option<bool>,
+) -> Result<RecordBatchReaderSource> {
+    let reader: RecordBatchReaderSource = match file_type {
+        FileType::Parquet => Box::new(ReadParquetStep {
+            args: ReadArgs {
+                path: path.to_string(),
+                limit,
+                offset,
+                csv_has_header: None,
+            },
+        }),
+        FileType::Avro => Box::new(ReadAvroStep {
+            args: ReadArgs {
+                path: path.to_string(),
+                limit,
+                offset,
+                csv_has_header: None,
+            },
+        }),
+        FileType::Csv => Box::new(ReadCsvStep {
+            path: path.to_string(),
+            has_header: csv_has_header,
+        }),
+        FileType::Orc => Box::new(ReadOrcStep {
+            args: ReadArgs {
+                path: path.to_string(),
+                limit,
+                offset,
+                csv_has_header: None,
+            },
+        }),
+        _ => {
+            return Err(crate::Error::GenericError(format!(
+                "Unsupported file type for reading: {file_type}"
+            )));
+        }
+    };
+    Ok(reader)
 }
 
 /// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming

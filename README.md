@@ -27,8 +27,8 @@ cargo install --git https://github.com/aisrael/datu
 | Avro (`.avro`)                |  ✓   |   ✓   |    —    |
 | ORC (`.orc`)                  |  ✓   |   ✓   |    —    |
 | CSV (`.csv`)                  |  ✓   |   ✓   |    ✓    |
+| JSON (`.json`)                |  ✓   |   ✓   |    ✓    |
 | XLSX (`.xlsx`)                |  —   |   ✓   |    —    |
-| JSON (`.json`)                |  —   |   ✓   |    ✓    |
 | JSON (pretty)                 |  —   |   —   |    ✓    |
 | YAML                          |  —   |   —   |    ✓    |
 
@@ -148,7 +148,7 @@ datu count data.csv --input-headers=false
 
 Convert data between supported formats. Input and output formats are inferred from file extensions, or can be specified explicitly with `--input` and `--output`.
 
-**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), JSON (`.json`), ORC (`.orc`).
 
 **Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
@@ -191,13 +191,17 @@ datu convert data.csv output.json --input-headers=false
 # Parquet to Parquet with column subset
 datu convert input.parq output.parquet --select one,two,three
 
-# Parquet, Avro, CSV, or ORC to Excel (.xlsx)
+# JSON to CSV or Parquet
+datu convert data.json data.csv
+datu convert data.json data.parquet
+
+# Parquet, Avro, CSV, JSON, or ORC to Excel (.xlsx)
 datu convert data.parquet report.xlsx
 
-# Parquet or Avro to ORC
+# Parquet, Avro, or JSON to ORC
 datu convert data.parquet data.orc
 
-# Parquet or Avro to JSON
+# Parquet, Avro, or JSON to JSON
 datu convert data.parquet data.json
 ```
 
@@ -361,7 +365,7 @@ read("input") |> ... |> write("output")
 
 #### `read(path)`
 
-Read a data file. Supported formats: Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`). CSV files are assumed to have a header row by default.
+Read a data file. Supported formats: Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), JSON (`.json`), ORC (`.orc`). CSV files are assumed to have a header row by default.
 
 ```text
 > read("data.parquet") |> write("data.csv")

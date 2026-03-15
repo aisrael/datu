@@ -121,4 +121,4 @@ Feature: Select
       read("fixtures/userdata5.avro") |> select(:id, :first_name, :email) |> write("$TEMPDIR/select.parquet")
       ```
     Then the file "$TEMPDIR/select.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file

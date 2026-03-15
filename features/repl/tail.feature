@@ -99,7 +99,7 @@ Feature: Tail
       read("fixtures/userdata5.avro") |> tail(10) |> write("$TEMPDIR/tail.parquet")
       ```
     Then the file "$TEMPDIR/tail.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file
 
   Scenario: Tail to Avro
     When the REPL is ran and the user types:

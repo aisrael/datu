@@ -100,7 +100,7 @@ Feature: Head
       read("fixtures/userdata5.avro") |> head(10) |> write("$TEMPDIR/head.parquet")
       ```
     Then the file "$TEMPDIR/head.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file
     And that file should have 10 records
 
   Scenario: Head to Avro

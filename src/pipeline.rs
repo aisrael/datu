@@ -140,6 +140,7 @@ pub fn build_reader(
         FileType::Csv => Box::new(ReadCsvStep {
             path: path.to_string(),
             has_header: csv_has_header,
+            limit,
         }),
         FileType::Orc => Box::new(ReadOrcStep {
             args: ReadArgs {

@@ -162,8 +162,8 @@ pub fn build_reader(
 /// Counts rows in a file. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
 pub fn count_rows(path: &str, file_type: FileType, csv_has_header: Option<bool>) -> Result<usize> {
-    if let Ok(total) = crate::get_total_rows_result(path, file_type) {
-        return Ok(total);
+    if matches!(file_type, FileType::Parquet | FileType::Orc) {
+        return crate::get_total_rows_result(path, file_type);
     }
     let mut reader_step = build_reader(path, file_type, None, None, csv_has_header)?;
     let reader = reader_step.get()?;

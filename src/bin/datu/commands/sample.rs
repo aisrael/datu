@@ -1,5 +1,3 @@
-use anyhow::Result;
-use anyhow::bail;
 use datu::FileType;
 use datu::cli::HeadsOrTails;
 use datu::get_total_rows_result;
@@ -14,6 +12,8 @@ use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::pipeline::reservoir_sample_from_reader;
 use datu::pipeline::sample_from_reader;
 use datu::resolve_file_type;
+use eyre::Result;
+use eyre::bail;
 
 /// sample command implementation: print N random rows from an Avro, CSV, Parquet, or ORC file.
 pub async fn sample(args: HeadsOrTails) -> Result<()> {

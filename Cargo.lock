@@ -1791,7 +1791,6 @@ dependencies = [
 name = "datu"
 version = "0.3.1"
 dependencies = [
- "anyhow",
  "arrow",
  "arrow-avro",
  "arrow-json",
@@ -1804,6 +1803,7 @@ dependencies = [
  "datafusion",
  "dirs-next",
  "expectrl",
+ "eyre",
  "flt",
  "futures",
  "gherkin",
@@ -1974,6 +1974,16 @@ dependencies = [
  "nix 0.26.4",
  "ptyprocess",
  "regex",
+]
+
+[[package]]
+name = "eyre"
+version = "0.6.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
+dependencies = [
+ "indenter",
+ "once_cell",
 ]
 
 [[package]]
@@ -2493,6 +2503,12 @@ dependencies = [
  "walkdir",
  "winapi-util",
 ]
+
+[[package]]
+name = "indenter"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
 
 [[package]]
 name = "indexmap"

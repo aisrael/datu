@@ -1,11 +1,11 @@
-use anyhow::Result;
-use anyhow::bail;
 use datu::FileType;
 use datu::cli::HeadsOrTails;
 use datu::pipeline::build_reader;
 use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::resolve_file_type;
+use eyre::Result;
+use eyre::bail;
 
 /// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {

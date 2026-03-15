@@ -11,7 +11,7 @@ exclude = [
 ]
 
 [dependencies]
-anyhow = "1.0"
+eyre = "0.6"
 async-trait = "0.1"
 arrow = "57.2"
 log = "0.4"

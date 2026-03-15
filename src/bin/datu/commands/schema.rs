@@ -1,10 +1,10 @@
 //! `datu schema` - display the schema of a Parquet, Avro, or ORC file
 
-use anyhow::Result;
 use datu::cli::SchemaArgs;
 use datu::pipeline::schema::get_schema_fields;
 use datu::pipeline::schema::print_schema_fields;
 use datu::resolve_file_type;
+use eyre::Result;
 
 /// The `datu schema` command
 pub async fn schema(args: SchemaArgs) -> Result<()> {

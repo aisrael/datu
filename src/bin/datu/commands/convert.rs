@@ -114,7 +114,7 @@ impl RecordBatchReader for ProgressRecordBatchReader {
 }
 
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
-pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
+pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     let output_file_type = resolve_file_type(args.output, &args.output_path)?;
 

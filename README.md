@@ -68,11 +68,17 @@ Display the schema of a Parquet, Avro, CSV, or ORC file (column names, types, an
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu schema <FILE> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `read("file") |> schema()`
+>
+> Use `schema()` after a read to print the schema of the data in the pipeline. For a single file, `read("data.parquet") |> schema()` is equivalent.
 
 **Options:**
 
@@ -114,11 +120,17 @@ Return the number of rows in a Parquet, Avro, CSV, or ORC file.
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu count <FILE> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `count("file")`
+>
+> Count rows in a file directly. Or use `read("file") |> count()` after other steps, e.g. `read("data.parquet") |> select(:id) |> count()`.
 
 **Options:**
 
@@ -152,11 +164,17 @@ Convert data between supported formats. Input and output formats are inferred fr
 
 **Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu convert <INPUT> <OUTPUT> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `read("input") |> ... |> write("output")`
+>
+> Example: `read("table.parquet") |> select(:id, :email) |> write("table.csv")`. Add `select(...)`, `head(n)`, `tail(n)`, or `sample(n)` as needed.
 
 **Options:**
 
@@ -213,11 +231,17 @@ Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu sample <INPUT> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `read("file") |> sample(n)`
+>
+> Prints _n_ random rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> sample(5) |> write("sample.csv")`.
 
 **Options:**
 
@@ -254,11 +278,17 @@ Print the first N rows of a Parquet, Avro, CSV, or ORC file to stdout (default C
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu head <INPUT> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `read("file") |> head(n)`
+>
+> Prints the first _n_ rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> head(10) |> write("first10.csv")`.
 
 **Options:**
 
@@ -300,11 +330,17 @@ Print the last N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CS
 
 > **Note:** For Avro and CSV files, `tail` requires a full file scan since these formats do not support random access to the end of the file.
 
-**Usage:**
+**Usage (CLI):**
 
 ```sh
 datu tail <INPUT> [OPTIONS]
 ```
+
+**Usage (REPL):**
+
+> `read("file") |> tail(n)`
+>
+> Prints the last _n_ rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> tail(10) |> write("last10.csv")`.
 
 **Options:**
 
@@ -340,11 +376,17 @@ datu tail data.parquet -n 1000 > last1000.csv
 
 ### Version
 
-Print the installed `datu` version:
+Print the installed `datu` version.
+
+**Usage (CLI):**
 
 ```sh
 datu version
 ```
+
+**Usage (REPL):**
+
+> No equivalent; run `datu version` from the shell.
 
 ## Interactive Mode (REPL)
 

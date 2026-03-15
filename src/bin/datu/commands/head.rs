@@ -1,28 +1,33 @@
 use anyhow::Result;
+use anyhow::bail;
+use datu::FileType;
 use datu::cli::HeadsOrTails;
-use datu::pipeline::RecordBatchReaderSource;
-use datu::pipeline::Step;
-use datu::pipeline::VecRecordBatchReaderSource;
-use datu::pipeline::display::DisplayWriterStep;
-use datu::pipeline::read_to_batches;
+use datu::pipeline::build_reader;
+use datu::pipeline::display::apply_select_and_display;
+use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::resolve_input_file_type;
 
 /// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {
     let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
-    let batches = read_to_batches(
+    match input_file_type {
+        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc => {}
+        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for head"),
+    }
+    let reader_step = build_reader(
         &args.input_path,
         input_file_type,
-        &args.select,
         Some(args.number),
+        None,
         args.input_headers,
+    )?;
+    apply_select_and_display(
+        reader_step,
+        parse_select_step(&args.select),
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
     )
-    .await?;
-    let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(batches));
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    .await
+    .map_err(Into::into)
 }

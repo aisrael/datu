@@ -10,6 +10,7 @@ pub mod utils;
 
 pub use errors::Error;
 pub use utils::FileType;
+pub use utils::get_total_rows_result;
 pub use utils::resolve_input_file_type;
 
 /// Result type alias for datu operations.

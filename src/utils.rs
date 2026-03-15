@@ -1,6 +1,9 @@
+use std::fs::File;
 use std::path::Path;
 use std::str::FromStr;
 
+use orc_rust::reader::metadata::read_metadata;
+use parquet::file::metadata::ParquetMetaDataReader;
 use rustc_literal_escaper::unescape_str as unescape_str_raw;
 
 /// Unescape a string as if it were a Rust string literal.
@@ -117,6 +120,28 @@ pub fn resolve_input_file_type(
     match input_override {
         Some(ft) => Ok(ft),
         None => FileType::try_from(path),
+    }
+}
+
+/// Returns the total number of rows from file metadata for seekable formats (Parquet, ORC).
+/// Returns an error for unsupported formats or if metadata cannot be read.
+pub fn get_total_rows_result(path: &str, file_type: FileType) -> crate::Result<usize> {
+    match file_type {
+        FileType::Parquet => {
+            let file = File::open(path).map_err(crate::Error::IoError)?;
+            let metadata = ParquetMetaDataReader::new()
+                .parse_and_finish(&file)
+                .map_err(crate::Error::ParquetError)?;
+            Ok(metadata.file_metadata().num_rows().max(0) as usize)
+        }
+        FileType::Orc => {
+            let mut file = File::open(path).map_err(crate::Error::IoError)?;
+            let metadata = read_metadata(&mut file).map_err(crate::Error::OrcError)?;
+            Ok(metadata.number_of_rows() as usize)
+        }
+        _ => Err(crate::Error::GenericError(format!(
+            "get_total_rows_result is only supported for Parquet and ORC files, got: {file_type}"
+        ))),
     }
 }
 

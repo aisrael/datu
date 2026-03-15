@@ -20,8 +20,6 @@ use datu::pipeline::xlsx;
 use datu::resolve_input_file_type;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
-use orc_rust::reader::metadata::read_metadata;
-use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Arguments for the `datu convert` command.
 #[derive(Args)]
@@ -75,19 +73,9 @@ pub struct ConvertArgs {
 
 /// Returns the total number of rows from file metadata, if available.
 fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
-    match file_type {
-        FileType::Parquet => {
-            let file = File::open(path).ok()?;
-            let metadata = ParquetMetaDataReader::new().parse_and_finish(&file).ok()?;
-            Some(metadata.file_metadata().num_rows().max(0) as u64)
-        }
-        FileType::Orc => {
-            let mut file = File::open(path).ok()?;
-            let metadata = read_metadata(&mut file).ok()?;
-            Some(metadata.number_of_rows())
-        }
-        _ => None,
-    }
+    datu::get_total_rows_result(path, file_type)
+        .ok()
+        .map(|n| n as u64)
 }
 
 /// A `RecordBatchReader` wrapper that increments an `indicatif::ProgressBar` by

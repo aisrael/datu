@@ -6,11 +6,13 @@ use flt::ast::Literal;
 
 use crate::Error;
 use crate::FileType;
+use crate::cli::DisplayOutputFormat;
 use crate::pipeline::Source;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::display::write_record_batches_as_csv;
 use crate::pipeline::read_to_batches;
 use crate::pipeline::sample_batches;
+use crate::pipeline::schema;
 use crate::pipeline::select;
 use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::tail_batches;
@@ -25,6 +27,7 @@ pub enum PipelineStage {
     Tail { n: usize },
     Sample { n: usize },
     Count,
+    Schema,
     Write { path: String },
     Print,
 }
@@ -37,6 +40,7 @@ impl PipelineStage {
             PipelineStage::Head { .. }
                 | PipelineStage::Tail { .. }
                 | PipelineStage::Sample { .. }
+                | PipelineStage::Schema
                 | PipelineStage::Write { .. }
         )
     }
@@ -75,6 +79,7 @@ impl fmt::Display for PipelineStage {
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
             PipelineStage::Sample { n } => write!(f, "sample({n})"),
             PipelineStage::Count => write!(f, "count()"),
+            PipelineStage::Schema => write!(f, "schema()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
             PipelineStage::Print => write!(f, "print()"),
         }
@@ -174,6 +179,7 @@ impl ReplPipelineBuilder {
             PipelineStage::Tail { n } => self.exec_tail(n),
             PipelineStage::Sample { n } => self.exec_sample(n),
             PipelineStage::Count => self.exec_count(),
+            PipelineStage::Schema => self.exec_schema(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
             PipelineStage::Print => self.print_batches(),
         }
@@ -248,6 +254,19 @@ impl ReplPipelineBuilder {
         Ok(())
     }
 
+    /// Prints the schema of the batches in context.
+    fn exec_schema(&mut self) -> crate::Result<()> {
+        let batches = self.batches.take().ok_or_else(|| {
+            Error::GenericError("schema requires a preceding read in the pipe".to_string())
+        })?;
+        let first = batches
+            .first()
+            .ok_or_else(|| Error::GenericError("schema requires non-empty batches".to_string()))?;
+        let fields = schema::schema_fields_from_arrow(first.schema().as_ref());
+        schema::print_schema_fields(&fields, DisplayOutputFormat::Csv, true)
+            .map_err(|e| Error::GenericError(e.to_string()))
+    }
+
     /// Writes the batches in context to an output file.
     async fn exec_write(&mut self, output_path: &str) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
@@ -287,7 +306,7 @@ fn is_terminal_expr(expr: &Expr) -> bool {
     if let Expr::FunctionCall(name, _) = expr {
         matches!(
             name.to_string().as_str(),
-            "head" | "tail" | "sample" | "write"
+            "head" | "tail" | "sample" | "schema" | "write"
         )
     } else {
         false
@@ -364,6 +383,10 @@ impl ReplPipelineBuilder {
     fn eval_count(&mut self) -> crate::Result<()> {
         self.exec_count()
     }
+
+    fn eval_schema(&mut self) -> crate::Result<()> {
+        self.exec_schema()
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +436,14 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                         ));
                     }
                     Ok(PipelineStage::Count)
+                }
+                "schema" => {
+                    if !args.is_empty() {
+                        return Err(Error::UnsupportedFunctionCall(
+                            "schema takes no arguments".to_string(),
+                        ));
+                    }
+                    Ok(PipelineStage::Schema)
                 }
                 "write" => {
                     let path = extract_path_from_args("write", &args)?;
@@ -1593,6 +1624,109 @@ mod tests {
             .await
             .expect("execute");
         assert!(ctx.batches.is_none(), "batches consumed by count");
+    }
+
+    // ── plan_stage: schema ────────────────────────────────────────
+
+    #[test]
+    fn test_plan_stage_schema() {
+        let expr = parse("schema()");
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Schema);
+    }
+
+    #[test]
+    fn test_plan_stage_schema_rejects_args() {
+        let expr = Expr::FunctionCall(
+            Identifier("schema".into()),
+            vec![Expr::Literal(Literal::String("extra".into()))],
+        );
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedFunctionCall(_)
+        ));
+    }
+
+    #[test]
+    fn test_schema_is_terminal() {
+        assert!(PipelineStage::Schema.is_terminal());
+    }
+
+    #[test]
+    fn test_schema_no_implicit_followup() {
+        assert_eq!(PipelineStage::Schema.implicit_followup_stage(), None);
+    }
+
+    #[test]
+    fn test_display_schema_stage() {
+        assert_eq!(PipelineStage::Schema.to_string(), "schema()");
+    }
+
+    // ── plan_pipeline: schema does not auto-append print ─────────
+
+    #[test]
+    fn test_plan_pipeline_schema_no_auto_print() {
+        let expr = parse(r#"read("a.parquet") |> schema()"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 2);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(pipeline[1], PipelineStage::Schema);
+    }
+
+    // ── eval_schema ─────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_eval_schema_success() {
+        let mut ctx = new_context();
+        ctx.eval_read(vec![Expr::Literal(Literal::String(
+            "fixtures/table.parquet".into(),
+        ))])
+        .await
+        .expect("read");
+
+        ctx.eval_schema().expect("schema");
+        assert!(ctx.batches.is_none(), "batches consumed by schema");
+    }
+
+    #[test]
+    fn test_eval_schema_no_preceding_read() {
+        let mut ctx = new_context();
+        let result = ctx.eval_schema();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
+    }
+
+    // ── eval_schema: pipeline integration ────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_schema() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> schema()"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+        assert!(ctx.batches.is_none(), "batches consumed by schema");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_select_schema() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> schema()"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+        assert!(ctx.batches.is_none(), "batches consumed by schema");
     }
 
     #[tokio::test(flavor = "multi_thread")]

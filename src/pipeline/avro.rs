@@ -1,6 +1,12 @@
 use std::io::BufReader;
+use std::sync::Arc;
 
 use arrow::array::RecordBatchReader;
+use arrow::compute;
+use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
@@ -15,6 +21,71 @@ use crate::pipeline::Step;
 use crate::pipeline::WriteArgs;
 use crate::pipeline::batch_write::BatchWriteSink;
 use crate::pipeline::batch_write::write_record_batches_with_sink;
+
+/// Returns true if the schema has any Int16 field (avro writer does not support Int16).
+fn schema_has_int16(schema: &Schema) -> bool {
+    schema
+        .fields()
+        .iter()
+        .any(|f| f.data_type() == &DataType::Int16)
+}
+
+/// Builds a schema suitable for the Avro writer: Int16 fields are replaced with Int32.
+fn schema_for_avro_writer(schema: &Schema) -> SchemaRef {
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let dt = if f.data_type() == &DataType::Int16 {
+                DataType::Int32
+            } else {
+                f.data_type().clone()
+            };
+            Field::new(f.name(), dt, f.is_nullable())
+        })
+        .collect();
+    Arc::new(Schema::new(fields))
+}
+
+/// Casts Int16 columns in the batch to Int32 so the batch matches the Avro-compat schema.
+fn cast_record_batch_for_avro(
+    batch: &RecordBatch,
+    compat_schema: &SchemaRef,
+) -> arrow::error::Result<RecordBatch> {
+    let mut columns: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(batch.num_columns());
+    for (i, field) in compat_schema.fields().iter().enumerate() {
+        let col = batch.column(i);
+        let target_type = field.data_type();
+        let cast_col = if col.data_type() == &DataType::Int16 && target_type == &DataType::Int32 {
+            compute::cast(col.as_ref(), target_type)?
+        } else {
+            col.clone()
+        };
+        columns.push(cast_col);
+    }
+    RecordBatch::try_new((*compat_schema).clone(), columns)
+}
+
+/// Wraps a record batch reader and exposes an Avro-compat schema (Int16 → Int32), casting each batch.
+struct AvroCompatRecordBatchReader<'a> {
+    reader: &'a mut dyn RecordBatchReader,
+    compat_schema: SchemaRef,
+}
+
+impl RecordBatchReader for AvroCompatRecordBatchReader<'_> {
+    fn schema(&self) -> SchemaRef {
+        self.compat_schema.clone()
+    }
+}
+
+impl Iterator for AvroCompatRecordBatchReader<'_> {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let batch = self.reader.next()?;
+        Some(batch.and_then(|b| cast_record_batch_for_avro(&b, &self.compat_schema)))
+    }
+}
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
 pub struct ReadAvroStep {
@@ -145,8 +216,19 @@ pub struct WriteAvroStep {
 pub struct WriteAvroResult {}
 
 /// Write record batches from a reader to an Avro file.
+/// Int16 columns are upcast to Int32 so the arrow-avro writer can write them.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
-    write_record_batches_with_sink(path, reader, AvroSink::new)
+    let schema = reader.schema();
+    if schema_has_int16(schema.as_ref()) {
+        let compat_schema = schema_for_avro_writer(schema.as_ref());
+        let mut wrapper = AvroCompatRecordBatchReader {
+            reader,
+            compat_schema,
+        };
+        write_record_batches_with_sink(path, &mut wrapper, AvroSink::new)
+    } else {
+        write_record_batches_with_sink(path, reader, AvroSink::new)
+    }
 }
 
 struct AvroSink {
@@ -186,9 +268,54 @@ impl Step for WriteAvroStep {
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufReader;
+    use std::sync::Arc;
+
+    use arrow::array::Int16Array;
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
+    use arrow::datatypes::Schema;
+
     use super::*;
     use crate::Error;
     use crate::pipeline::ReadArgs;
+    use crate::pipeline::VecRecordBatchReader;
+
+    #[test]
+    fn test_write_avro_int16_upcast_to_int32() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int16, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(Int16Array::from(vec![1_i16, 2, 3]))],
+        )
+        .unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("out.avro");
+        let mut reader = VecRecordBatchReader::new(vec![batch]);
+        write_record_batches(path.to_str().unwrap(), &mut reader).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let avro_reader = ReaderBuilder::new()
+            .build(BufReader::new(file))
+            .expect("written file should be valid Avro");
+        let batches: Vec<_> = avro_reader.collect();
+        assert_eq!(batches.len(), 1, "expected one batch");
+        let batch = batches.into_iter().next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1);
+        let col = batch.column(0);
+        assert_eq!(
+            col.data_type(),
+            &DataType::Int32,
+            "Avro int is read as Int32"
+        );
+        let ints = col
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(ints.value(0), 1);
+        assert_eq!(ints.value(1), 2);
+        assert_eq!(ints.value(2), 3);
+    }
 
     #[test]
     fn test_read_avro() {

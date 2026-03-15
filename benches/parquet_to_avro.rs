@@ -12,10 +12,13 @@ fn parquet_to_avro_benchmark(c: &mut Criterion) {
     let output_path = temp_dir.path().join("output.avro");
     let output = output_path.to_str().expect("Path to string").to_string();
 
+    let input_path =
+        std::env::var("DATU_BENCH_PARQUET_PATH").unwrap_or("fixtures/userdata.parquet".to_string());
+
     c.bench_function("parquet_to_avro_userdata", |b| {
         b.iter(|| {
             let result = Command::new(&datu_path)
-                .args(["convert", "fixtures/userdata.parquet", black_box(&output)])
+                .args(["convert", &input_path, black_box(&output)])
                 .output()
                 .expect("Failed to execute datu");
             assert!(

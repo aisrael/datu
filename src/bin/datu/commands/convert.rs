@@ -18,7 +18,7 @@ use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReader;
 use datu::pipeline::dataframe::DataFrameReader;
 use datu::pipeline::dataframe::write_record_batches_from_reader;
-use datu::resolve_input_file_type;
+use datu::resolve_file_type;
 use datu::utils::parse_select_columns;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
@@ -115,8 +115,8 @@ impl RecordBatchReader for ProgressRecordBatchReader {
 
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
 pub async fn convert(args: ConvertArgs) -> anyhow::Result<()> {
-    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
-    let output_file_type = resolve_input_file_type(args.output, &args.output_path)?;
+    let input_file_type = resolve_file_type(args.input, &args.input_path)?;
+    let output_file_type = resolve_file_type(args.output, &args.output_path)?;
 
     let use_dataframe_api = is_datafusion_native(input_file_type)
         && (output_file_type == FileType::Parquet || output_file_type == FileType::Csv);

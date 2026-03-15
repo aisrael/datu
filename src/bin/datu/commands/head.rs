@@ -5,11 +5,11 @@ use datu::cli::HeadsOrTails;
 use datu::pipeline::build_reader;
 use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::record_batch_filter::parse_select_step;
-use datu::resolve_input_file_type;
+use datu::resolve_file_type;
 
 /// head command implementation: print the first N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn head(args: HeadsOrTails) -> Result<()> {
-    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
+    let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     match input_file_type {
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc => {}
         _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for head"),

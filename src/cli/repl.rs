@@ -502,6 +502,7 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
         .into_iter()
         .map(plan_stage)
         .collect::<crate::Result<Vec<_>>>()?;
+    optimize_read_then_count(&mut stages);
     let statement_incomplete = stages.last().is_some_and(PipelineStage::is_non_terminal);
     if let Some(implicit_stage) = stages
         .last()
@@ -510,6 +511,18 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
         stages.push(implicit_stage);
     }
     Ok((stages, statement_incomplete))
+}
+
+/// Replaces [Read { path }, Count { path: None }] with [Count { path: Some(path) }]
+/// so Parquet/ORC use metadata without loading the file.
+fn optimize_read_then_count(stages: &mut Vec<PipelineStage>) {
+    if let [PipelineStage::Read { path }, PipelineStage::Count { path: None }] =
+        stages.as_slice()
+    {
+        *stages = vec![PipelineStage::Count {
+            path: Some(path.clone()),
+        }];
+    }
 }
 
 /// Extracts a single positive integer argument from a function call's args.
@@ -1608,14 +1621,31 @@ mod tests {
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
         let pipeline = plan_pipeline(exprs).unwrap();
-        assert_eq!(pipeline.len(), 2);
+        // read(path) |> count() is optimized to count(path) so Parquet/ORC use metadata
+        assert_eq!(pipeline.len(), 1);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Count {
+                path: Some("a.parquet".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_pipeline_read_select_count_not_optimized() {
+        let expr = parse(r#"read("a.parquet") |> select(:x) |> count()"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let pipeline = plan_pipeline(exprs).unwrap();
+        assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
             PipelineStage::Read {
                 path: "a.parquet".to_string()
             }
         );
-        assert_eq!(pipeline[1], PipelineStage::Count { path: None });
+        assert!(matches!(&pipeline[1], PipelineStage::Select { .. }));
+        assert_eq!(pipeline[2], PipelineStage::Count { path: None });
     }
 
     // ── eval_count ─────────────────────────────────────────────

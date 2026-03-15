@@ -12,11 +12,10 @@ use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::build_reader;
 use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::read_to_batches;
-use datu::pipeline::record_batch_filter::SelectColumnsStep;
+use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::pipeline::reservoir_sample_from_reader;
 use datu::pipeline::sample_from_reader;
 use datu::resolve_input_file_type;
-use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
@@ -41,9 +40,7 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
     let total_rows = metadata.file_metadata().num_rows().max(0) as usize;
 
     let mut reader_step = build_reader(&args.input_path, FileType::Parquet, None, None, None)?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
+    if let Some(select_step) = parse_select_step(&args.select) {
         reader_step = select_step.execute(reader_step).await?;
     }
     let reader = reader_step.get()?;
@@ -68,9 +65,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
     let total_rows = metadata.number_of_rows() as usize;
 
     let mut reader_step = build_reader(&args.input_path, FileType::Orc, None, None, None)?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
+    if let Some(select_step) = parse_select_step(&args.select) {
         reader_step = select_step.execute(reader_step).await?;
     }
     let reader = reader_step.get()?;
@@ -91,9 +86,7 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
 /// Samples N random rows from an Avro file using reservoir sampling.
 async fn sample_avro(args: HeadsOrTails) -> Result<()> {
     let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
+    if let Some(select_step) = parse_select_step(&args.select) {
         reader_step = select_step.execute(reader_step).await?;
     }
     let reader = reader_step.get()?;

@@ -8,11 +8,10 @@ use async_trait::async_trait;
 use saphyr::Yaml;
 use saphyr::YamlEmitter;
 
-use crate::cli::DisplayOutputFormat;
-use crate::pipeline::record_batch_filter::SelectColumnsStep;
-use crate::utils::parse_select_columns;
 use crate::Error;
 use crate::Result;
+use crate::cli::DisplayOutputFormat;
+use crate::pipeline::record_batch_filter::SelectColumnsStep;
 
 /// Normalizes string values for YAML emission. Unicode line/paragraph separators (U+2028, U+2029)
 /// are replaced with newlines so that saphyr's emitter will quote and escape them, producing
@@ -168,18 +167,16 @@ impl Step for DisplayWriterStep {
 }
 
 /// Applies optional column selection and writes record batches to stdout.
-/// If `select` is `Some`, filters to the specified columns before display.
+/// If `select_step` is `Some`, filters to the specified columns before display.
 pub async fn apply_select_and_display(
     mut reader: RecordBatchReaderSource,
-    select: Option<&[String]>,
+    select_step: Option<SelectColumnsStep>,
     output_format: DisplayOutputFormat,
     sparse: bool,
     headers: bool,
 ) -> Result<()> {
-    if let Some(select) = select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
-        reader = select_step.execute(reader).await?;
+    if let Some(step) = select_step {
+        reader = step.execute(reader).await?;
     }
     let display_step = DisplayWriterStep {
         output_format,

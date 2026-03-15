@@ -11,6 +11,7 @@ use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::build_reader;
 use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::read_to_batches;
+use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::pipeline::tail_batches;
 use datu::resolve_input_file_type;
 use orc_rust::reader::metadata::read_metadata;
@@ -47,7 +48,7 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     )?;
     apply_select_and_display(
         reader_step,
-        args.select.as_deref(),
+        parse_select_step(&args.select),
         args.output,
         args.sparse,
         args.output_headers.unwrap_or(true),
@@ -100,14 +101,10 @@ async fn tail_csv(args: HeadsOrTails) -> Result<()> {
 
 /// Prints the last N lines of an Avro file.
 async fn tail_avro(args: HeadsOrTails) -> Result<()> {
-    let reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
-    let reader_step = if let Some(select) = &args.select {
-        let columns = datu::utils::parse_select_columns(select);
-        let select_step = datu::pipeline::record_batch_filter::SelectColumnsStep { columns };
-        select_step.execute(reader_step).await?
-    } else {
-        reader_step
-    };
+    let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
+    if let Some(select_step) = parse_select_step(&args.select) {
+        reader_step = select_step.execute(reader_step).await?;
+    }
     tail_from_reader(
         reader_step,
         args.number,
@@ -135,7 +132,7 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
     )?;
     apply_select_and_display(
         reader_step,
-        args.select.as_deref(),
+        parse_select_step(&args.select),
         args.output,
         args.sparse,
         args.output_headers.unwrap_or(true),

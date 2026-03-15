@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
+use crate::pipeline::select::ColumnSpec;
+use crate::pipeline::select::resolve_column_specs;
 
 /// A Source that wraps a single RecordBatchReader and yields it on get().
 struct RecordBatchReaderHolder {
@@ -19,7 +21,7 @@ impl Source<dyn RecordBatchReader + 'static> for RecordBatchReaderHolder {
 
 /// Pipeline step that filters record batches to only the specified columns.
 pub struct SelectColumnsStep {
-    pub columns: Vec<String>,
+    pub columns: Vec<ColumnSpec>,
 }
 
 #[async_trait(?Send)]
@@ -29,11 +31,12 @@ impl Step for SelectColumnsStep {
 
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         let reader = input.get()?;
-        let indices: Vec<usize> = self
-            .columns
+        let schema = reader.schema();
+        let column_names = resolve_column_specs(&schema, &self.columns)?;
+        let indices: Vec<usize> = column_names
             .iter()
             .map(|col| {
-                reader.schema().index_of(col).map_err(|e| {
+                schema.index_of(col).map_err(|e| {
                     crate::Error::GenericError(format!("Column '{col}' not found: {e}"))
                 })
             })
@@ -73,12 +76,55 @@ impl Iterator for SelectColumnRecordBatchReader {
     }
 }
 
+/// Parses CLI --select argument into a SelectColumnsStep.
+/// Returns None when no selection is requested.
+pub fn parse_select_step(select: &Option<Vec<String>>) -> Option<SelectColumnsStep> {
+    let select = select.as_ref()?;
+    let columns = crate::utils::parse_select_columns(select);
+    if columns.is_empty() {
+        return None;
+    }
+    Some(SelectColumnsStep {
+        columns: columns.into_iter().map(ColumnSpec::Exact).collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::ReadArgs;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::parquet::ReadParquetStep;
+    use crate::pipeline::select::ColumnSpec;
+
+    #[test]
+    fn test_parse_select_step_none() {
+        assert!(parse_select_step(&None).is_none());
+    }
+
+    #[test]
+    fn test_parse_select_step_some() {
+        let select = Some(vec!["one".to_string(), "two".to_string()]);
+        let step = parse_select_step(&select).expect("should return some");
+        assert_eq!(step.columns.len(), 2);
+        assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
+        assert_eq!(step.columns[1], ColumnSpec::Exact("two".into()));
+    }
+
+    #[test]
+    fn test_parse_select_step_comma_separated() {
+        let select = Some(vec!["one, two".to_string()]);
+        let step = parse_select_step(&select).expect("should return some");
+        assert_eq!(step.columns.len(), 2);
+        assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
+        assert_eq!(step.columns[1], ColumnSpec::Exact("two".into()));
+    }
+
+    #[test]
+    fn test_parse_select_step_empty_returns_none() {
+        let select = Some(vec!["  ,  ".to_string()]);
+        assert!(parse_select_step(&select).is_none());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_select_columns() {
@@ -93,7 +139,10 @@ mod tests {
 
         let source: RecordBatchReaderSource = Box::new(parquet_step);
         let select_step = SelectColumnsStep {
-            columns: vec!["two".to_string(), "four".to_string()],
+            columns: vec![
+                ColumnSpec::Exact("two".to_string()),
+                ColumnSpec::Exact("four".to_string()),
+            ],
         };
         let mut projected_source = select_step
             .execute(source)

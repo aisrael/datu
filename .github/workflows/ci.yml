@@ -1,4 +1,4 @@
-name: CI
+cname: CI
 
 on:
   push:
@@ -11,6 +11,11 @@ on:
       - "README.md"
       - ".github/workflows/ci.yml"
 
+env:
+  # We use environment variables to specify the Rust version and other settings once
+  RUST_TOOLCHAIN: 1.91.1
+  CARGO_TERM_COLOR: always
+
 jobs:
   check:
     name: Lint & Test
@@ -19,17 +24,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly
-          components: clippy
-
-      - name: Install rustfmt
-        run: rustup component add rustfmt
-
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo +nightly fmt -- --check

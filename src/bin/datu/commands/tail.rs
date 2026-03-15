@@ -9,12 +9,10 @@ use datu::pipeline::RecordBatchReaderSource;
 use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::build_reader;
-use datu::pipeline::display::DisplayWriterStep;
+use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::read_to_batches;
-use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::tail_batches;
 use datu::resolve_input_file_type;
-use datu::utils::parse_select_columns;
 use orc_rust::reader::metadata::read_metadata;
 use parquet::file::metadata::ParquetMetaDataReader;
 
@@ -40,24 +38,22 @@ async fn tail_parquet(args: HeadsOrTails) -> Result<()> {
     let number = args.number.min(total_rows);
     let offset = total_rows.saturating_sub(number);
 
-    let mut reader_step = build_reader(
+    let reader_step = build_reader(
         &args.input_path,
         FileType::Parquet,
         Some(number),
         Some(offset),
         None,
     )?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step).await?;
-    }
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        args.select.as_deref(),
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Prints the last N rows from a generic record batch reader (used for Avro).
@@ -76,12 +72,9 @@ async fn tail_from_reader(
 
     let reader_step: RecordBatchReaderSource =
         Box::new(VecRecordBatchReaderSource::new(tail_batches));
-    let display_step = DisplayWriterStep {
-        output_format: output,
-        sparse,
-        headers,
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(reader_step, None, output, sparse, headers)
+        .await
+        .map_err(Into::into)
 }
 
 /// Prints the last N lines of a CSV file.
@@ -107,12 +100,14 @@ async fn tail_csv(args: HeadsOrTails) -> Result<()> {
 
 /// Prints the last N lines of an Avro file.
 async fn tail_avro(args: HeadsOrTails) -> Result<()> {
-    let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step).await?;
-    }
+    let reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
+    let reader_step = if let Some(select) = &args.select {
+        let columns = datu::utils::parse_select_columns(select);
+        let select_step = datu::pipeline::record_batch_filter::SelectColumnsStep { columns };
+        select_step.execute(reader_step).await?
+    } else {
+        reader_step
+    };
     tail_from_reader(
         reader_step,
         args.number,
@@ -131,22 +126,20 @@ async fn tail_orc(args: HeadsOrTails) -> Result<()> {
     let number = args.number.min(total_rows);
     let offset = total_rows.saturating_sub(number);
 
-    let mut reader_step = build_reader(
+    let reader_step = build_reader(
         &args.input_path,
         FileType::Orc,
         Some(number),
         Some(offset),
         None,
     )?;
-    if let Some(select) = &args.select {
-        let columns = parse_select_columns(select);
-        let select_step = SelectColumnsStep { columns };
-        reader_step = select_step.execute(reader_step).await?;
-    }
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        args.select.as_deref(),
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }

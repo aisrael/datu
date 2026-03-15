@@ -10,7 +10,7 @@ use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReader;
 use datu::pipeline::VecRecordBatchReaderSource;
 use datu::pipeline::build_reader;
-use datu::pipeline::display::DisplayWriterStep;
+use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::SelectColumnsStep;
 use datu::pipeline::reservoir_sample_from_reader;
@@ -50,12 +50,15 @@ async fn sample_parquet(args: HeadsOrTails) -> Result<()> {
     let sampled = sample_from_reader(reader, total_rows, args.number);
 
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        None,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Samples N random rows from an ORC file using metadata for total row count.
@@ -74,12 +77,15 @@ async fn sample_orc(args: HeadsOrTails) -> Result<()> {
     let sampled = sample_from_reader(reader, total_rows, args.number);
 
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        None,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Samples N random rows from an Avro file using reservoir sampling.
@@ -94,12 +100,15 @@ async fn sample_avro(args: HeadsOrTails) -> Result<()> {
     let sampled = reservoir_sample_from_reader(reader, args.number);
 
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        None,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Samples N random rows from a CSV file using reservoir sampling.
@@ -117,10 +126,13 @@ async fn sample_csv(args: HeadsOrTails) -> Result<()> {
     let sampled = reservoir_sample_from_reader(reader, args.number);
 
     let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    let display_step = DisplayWriterStep {
-        output_format: args.output,
-        sparse: args.sparse,
-        headers: args.output_headers.unwrap_or(true),
-    };
-    display_step.execute(reader_step).await.map_err(Into::into)
+    apply_select_and_display(
+        reader_step,
+        None,
+        args.output,
+        args.sparse,
+        args.output_headers.unwrap_or(true),
+    )
+    .await
+    .map_err(Into::into)
 }

@@ -1,21 +1,14 @@
 //! `datu count` - return the number of rows in a Parquet, Avro, or ORC file
 
-use anyhow::Result;
-use anyhow::bail;
-use datu::FileType;
 use datu::cli::CountArgs;
-use datu::pipeline::ReadArgs;
-use datu::pipeline::RecordBatchReaderSource;
-use datu::pipeline::avro::ReadAvroStep;
-use datu::pipeline::csv::ReadCsvStep;
-use datu::pipeline::orc::ReadOrcStep;
-use datu::pipeline::parquet::ReadParquetStep;
+use datu::pipeline::build_reader;
 use datu::resolve_input_file_type;
 
 /// The `datu count` command
 pub async fn count(args: CountArgs) -> anyhow::Result<()> {
     let file_type = resolve_input_file_type(args.input, &args.input_path)?;
-    let mut reader_step: RecordBatchReaderSource = get_reader_step(file_type, &args)?;
+    let mut reader_step =
+        build_reader(&args.input_path, file_type, None, None, args.input_headers)?;
 
     let reader = reader_step.get()?;
     let mut total: usize = 0;
@@ -26,41 +19,6 @@ pub async fn count(args: CountArgs) -> anyhow::Result<()> {
 
     println!("{total}");
     Ok(())
-}
-
-fn get_reader_step(file_type: FileType, args: &CountArgs) -> Result<RecordBatchReaderSource> {
-    let reader: RecordBatchReaderSource = match file_type {
-        FileType::Parquet => Box::new(ReadParquetStep {
-            args: ReadArgs {
-                path: args.input_path.clone(),
-                limit: None,
-                offset: None,
-                csv_has_header: None,
-            },
-        }),
-        FileType::Avro => Box::new(ReadAvroStep {
-            args: ReadArgs {
-                path: args.input_path.clone(),
-                limit: None,
-                offset: None,
-                csv_has_header: None,
-            },
-        }),
-        FileType::Csv => Box::new(ReadCsvStep {
-            path: args.input_path.clone(),
-            has_header: args.input_headers,
-        }),
-        FileType::Orc => Box::new(ReadOrcStep {
-            args: ReadArgs {
-                path: args.input_path.clone(),
-                limit: None,
-                offset: None,
-                csv_has_header: None,
-            },
-        }),
-        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for count"),
-    };
-    Ok(reader)
 }
 
 #[cfg(test)]

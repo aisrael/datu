@@ -1,8 +1,41 @@
 # datu Version Notes
 
-## v0.3.1
+## v0.3.2
 
-Compare range: `0.3.0...0.3.1`
+### Highlights
+
+- **Convert command** now uses the DataFrame API for streamlined file processing; internal `resolve_input_file_type` renamed to `resolve_file_type`.
+- **Avro**: Added compatibility for Int16 fields in record batches.
+- **Error handling**: Replaced `anyhow` with `eyre`.
+- **REPL**: Refactored evaluation to use `exec_*` naming and improved test structure; feature files updated with REPL equivalents.
+- **Docs**: README updates for JSON support and REPL usage.
+- **CI**: Switched to `actions-rust-lang/setup-rust-toolchain@v1`, Rust 1.94.0, no nightly.
+
+### Improvements
+
+- **Convert**
+  - Implemented DataFrame API support for file processing in the convert command.
+
+- **Avro pipeline**
+  - Int16 fields in record batches are now handled correctly when writing Avro.
+
+- **REPL**
+  - Evaluation methods refactored to `exec_*` naming convention.
+  - Test structure and REPL feature scenarios updated.
+
+- **Project**
+  - Added `.clocignore`.
+  - Dependency and version updates in Cargo files.
+  - CI workflow and toolchain adjustments.
+
+### Changelog Stats
+
+- 16 commits
+- 28 files changed
+- 754 insertions
+- 610 deletions
+
+## v0.3.1
 
 ### Highlights
 
@@ -41,8 +74,6 @@ Compare range: `0.3.0...0.3.1`
 - 157 deletions
 
 ## v0.3.0
-
-Compare range: `0.2.4...0.3.0`
 
 ### Highlights
 

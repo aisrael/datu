@@ -367,57 +367,6 @@ fn extract_column_specs(args: &[Expr]) -> crate::Result<Vec<ColumnSpec>> {
 }
 
 #[cfg(test)]
-impl ReplPipelineBuilder {
-    async fn eval_stage(&mut self, expr: Expr) -> crate::Result<()> {
-        let stage = plan_stage(expr)?;
-        self.execute_stage(stage).await
-    }
-
-    async fn eval_read(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let path = extract_path_from_args("read", &args)?;
-        self.exec_read(&path).await
-    }
-
-    async fn eval_select(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let columns = extract_column_specs(&args)?;
-        if columns.is_empty() {
-            return Err(Error::UnsupportedFunctionCall(
-                "select expects at least one column name".to_string(),
-            ));
-        }
-        self.exec_select(&columns).await
-    }
-
-    fn eval_head(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let n = extract_head_n(&args)?;
-        self.exec_head(n)
-    }
-
-    fn eval_tail(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let n = extract_tail_n(&args)?;
-        self.exec_tail(n)
-    }
-
-    fn eval_sample(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let n = extract_sample_n(&args)?;
-        self.exec_sample(n)
-    }
-
-    async fn eval_write(&mut self, args: Vec<Expr>) -> crate::Result<()> {
-        let path = extract_path_from_args("write", &args)?;
-        self.exec_write(&path).await
-    }
-
-    fn eval_count(&mut self) -> crate::Result<()> {
-        self.exec_count()
-    }
-
-    fn eval_schema(&mut self) -> crate::Result<()> {
-        self.exec_schema()
-    }
-}
-
-#[cfg(test)]
 fn is_head_call(expr: Option<&Expr>) -> bool {
     if let Some(Expr::FunctionCall(name, _)) = expr {
         *name == "head"
@@ -957,50 +906,22 @@ mod tests {
         assert!(ctx.pending_exprs.is_empty());
     }
 
-    // ── eval_stage: error paths ─────────────────────────────────────
+    // ── exec_read / extract_path_from_args ──────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_stage_unsupported_function() {
+    async fn test_exec_read_success() {
         let mut ctx = new_context();
-        let expr = Expr::FunctionCall(Identifier("unknown".into()), vec![]);
-        let result = ctx.eval_stage(expr).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_stage_non_function_expr() {
-        let mut ctx = new_context();
-        let expr = Expr::Ident("x".into());
-        let result = ctx.eval_stage(expr).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedExpression(_)
-        ));
-    }
-
-    // ── eval_read ───────────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_read_success() {
-        let mut ctx = new_context();
-        let args = vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))];
-        ctx.eval_read(args).await.expect("eval_read");
+        ctx.exec_read("fixtures/table.parquet")
+            .await
+            .expect("exec_read");
         assert!(ctx.batches.is_some());
         assert!(!ctx.batches.as_ref().unwrap().is_empty());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_read_bad_args() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_extract_path_from_args_read_bad_args() {
         let args = vec![Expr::Ident("not_a_string".into())];
-        let result = ctx.eval_read(args).await;
+        let result = extract_path_from_args("read", &args);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1008,40 +929,34 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_read_no_args() {
-        let mut ctx = new_context();
-        let result = ctx.eval_read(vec![]).await;
+    #[test]
+    fn test_extract_path_from_args_read_no_args() {
+        let result = extract_path_from_args("read", &[]);
         assert!(result.is_err());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_read_too_many_args() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_extract_path_from_args_read_too_many_args() {
         let args = vec![
             Expr::Literal(Literal::String("a.parquet".into())),
             Expr::Literal(Literal::String("b.parquet".into())),
         ];
-        let result = ctx.eval_read(args).await;
+        let result = extract_path_from_args("read", &args);
         assert!(result.is_err());
     }
 
-    // ── eval_select ─────────────────────────────────────────────────
+    // ── exec_select ─────────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_select_success() {
+    async fn test_exec_select_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = vec![
-            Expr::Literal(Literal::Symbol("one".into())),
-            Expr::Literal(Literal::Symbol("two".into())),
+        let columns = vec![
+            ColumnSpec::CaseInsensitive("one".into()),
+            ColumnSpec::CaseInsensitive("two".into()),
         ];
-        ctx.eval_select(args).await.expect("select");
+        ctx.exec_select(&columns).await.expect("select");
         let batches = ctx.batches.as_ref().expect("batches after select");
         let schema = batches[0].schema();
         let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
@@ -1049,24 +964,18 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_select_no_preceding_read() {
+    async fn test_exec_select_no_preceding_read() {
         let mut ctx = new_context();
-        let args = vec![Expr::Literal(Literal::Symbol("one".into()))];
-        let result = ctx.eval_select(args).await;
+        let columns = vec![ColumnSpec::CaseInsensitive("one".into())];
+        let result = ctx.exec_select(&columns).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_select_empty_columns() {
-        let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
-
-        let result = ctx.eval_select(vec![]).await;
+    #[test]
+    fn test_plan_stage_select_empty_columns_rejected() {
+        let expr = parse("select()");
+        let result = plan_stage(expr);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1074,42 +983,35 @@ mod tests {
         ));
     }
 
-    // ── eval_write ──────────────────────────────────────────────────
+    // ── exec_write ──────────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_write_success() {
+    async fn test_exec_write_success() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let output_path = temp_dir.path().join("output.parquet");
         let output_str = output_path.to_str().unwrap().to_string();
 
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = vec![Expr::Literal(Literal::String(output_str.clone()))];
-        ctx.eval_write(args).await.expect("write");
+        ctx.exec_write(&output_str).await.expect("write");
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_write_no_preceding_read() {
+    async fn test_exec_write_no_preceding_read() {
         let mut ctx = new_context();
-        let args = vec![Expr::Literal(Literal::String("out.csv".into()))];
-        let result = ctx.eval_write(args).await;
+        let result = ctx.exec_write("out.csv").await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_write_bad_args() {
-        let mut ctx = new_context();
+    #[test]
+    fn test_extract_path_from_args_write_bad_args() {
         let args = vec![Expr::Ident("not_a_string".into())];
-        let result = ctx.eval_write(args).await;
+        let result = extract_path_from_args("write", &args);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1188,17 +1090,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_select_symbol_case_insensitive() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = vec![
-            Expr::Literal(Literal::Symbol("ONE".into())),
-            Expr::Literal(Literal::Symbol("TWO".into())),
+        let columns = vec![
+            ColumnSpec::CaseInsensitive("ONE".into()),
+            ColumnSpec::CaseInsensitive("TWO".into()),
         ];
-        ctx.eval_select(args).await.expect("select");
+        ctx.exec_select(&columns).await.expect("select");
         let batches = ctx.batches.as_ref().expect("batches after select");
         let schema = batches[0].schema();
         let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
@@ -1208,14 +1106,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_select_string_exact_match_fails_on_wrong_case() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = vec![Expr::Literal(Literal::String("ONE".into()))];
-        let result = ctx.eval_select(args).await;
+        let columns = vec![ColumnSpec::Exact("ONE".into())];
+        let result = ctx.exec_select(&columns).await;
         assert!(result.is_err());
     }
 
@@ -1254,7 +1148,7 @@ mod tests {
         assert!(!is_head_call(None));
     }
 
-    // ── eval_head ──────────────────────────────────────────────────
+    // ── exec_head ──────────────────────────────────────────────────
 
     fn parse_fn_args(input: &str) -> Vec<Expr> {
         match parse(input) {
@@ -1264,16 +1158,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_head_success() {
+    async fn test_exec_head_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = parse_fn_args("head(2)");
-        ctx.eval_head(args).expect("head");
+        ctx.exec_head(2).expect("head");
 
         let batches = ctx.batches.as_ref().expect("batches after head");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -1281,55 +1170,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_head_preserves_schema() {
+    async fn test_exec_head_preserves_schema() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
         let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        let args = parse_fn_args("head(1)");
-        ctx.eval_head(args).expect("head");
+        ctx.exec_head(1).expect("head");
 
         let batches = ctx.batches.as_ref().expect("batches");
         assert_eq!(batches[0].schema(), original_schema);
     }
 
     #[test]
-    fn test_eval_head_no_preceding_read() {
+    fn test_exec_head_no_preceding_read() {
         let mut ctx = new_context();
-        let args = parse_fn_args("head(5)");
-        let result = ctx.eval_head(args);
+        let result = ctx.exec_head(5);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[test]
-    fn test_eval_head_bad_args_string() {
-        let mut ctx = new_context();
-        let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-        let result = ctx.eval_head(args);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    #[test]
-    fn test_eval_head_no_args() {
-        let mut ctx = new_context();
-        let result = ctx.eval_head(vec![]);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    // ── eval_head: pipeline integration ────────────────────────────
+    // ── exec_head: pipeline integration ──────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_head_write() {
@@ -1484,19 +1344,14 @@ mod tests {
         assert!(extract_tail_n(&[]).is_err());
     }
 
-    // ── eval_tail ───────────────────────────────────────────────
+    // ── exec_tail ───────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_tail_success() {
+    async fn test_exec_tail_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = parse_fn_args("tail(2)");
-        ctx.eval_tail(args).expect("tail");
+        ctx.exec_tail(2).expect("tail");
 
         let batches = ctx.batches.as_ref().expect("batches after tail");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -1504,55 +1359,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_tail_preserves_schema() {
+    async fn test_exec_tail_preserves_schema() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
         let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        let args = parse_fn_args("tail(1)");
-        ctx.eval_tail(args).expect("tail");
+        ctx.exec_tail(1).expect("tail");
 
         let batches = ctx.batches.as_ref().expect("batches");
         assert_eq!(batches[0].schema(), original_schema);
     }
 
     #[test]
-    fn test_eval_tail_no_preceding_read() {
+    fn test_exec_tail_no_preceding_read() {
         let mut ctx = new_context();
-        let args = parse_fn_args("tail(5)");
-        let result = ctx.eval_tail(args);
+        let result = ctx.exec_tail(5);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    #[test]
-    fn test_eval_tail_bad_args_string() {
-        let mut ctx = new_context();
-        let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-        let result = ctx.eval_tail(args);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    #[test]
-    fn test_eval_tail_no_args() {
-        let mut ctx = new_context();
-        let result = ctx.eval_tail(vec![]);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    // ── eval_tail: pipeline integration ─────────────────────────
+    // ── exec_tail: pipeline integration ──────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_tail_write() {
@@ -1650,30 +1476,26 @@ mod tests {
         assert_eq!(pipeline[2], PipelineStage::Count { path: None });
     }
 
-    // ── eval_count ─────────────────────────────────────────────
+    // ── exec_count ─────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_count_success() {
+    async fn test_exec_count_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        ctx.eval_count().expect("count");
+        ctx.exec_count().expect("count");
         assert!(ctx.batches.is_none(), "batches consumed by count");
     }
 
     #[test]
-    fn test_eval_count_no_preceding_read() {
+    fn test_exec_count_no_preceding_read() {
         let mut ctx = new_context();
-        let result = ctx.eval_count();
+        let result = ctx.exec_count();
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    // ── eval_count: pipeline integration ────────────────────────
+    // ── exec_count: pipeline integration ────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_count() {
@@ -1775,30 +1597,26 @@ mod tests {
         assert_eq!(pipeline[1], PipelineStage::Schema);
     }
 
-    // ── eval_schema ─────────────────────────────────────────────
+    // ── exec_schema ─────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_schema_success() {
+    async fn test_exec_schema_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        ctx.eval_schema().expect("schema");
+        ctx.exec_schema().expect("schema");
         assert!(ctx.batches.is_none(), "batches consumed by schema");
     }
 
     #[test]
-    fn test_eval_schema_no_preceding_read() {
+    fn test_exec_schema_no_preceding_read() {
         let mut ctx = new_context();
-        let result = ctx.eval_schema();
+        let result = ctx.exec_schema();
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    // ── eval_schema: pipeline integration ────────────────────────
+    // ── exec_schema: pipeline integration ────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_schema() {
@@ -1920,19 +1738,14 @@ mod tests {
         assert!(extract_sample_n(&args).is_err());
     }
 
-    // ── eval_sample ─────────────────────────────────────────────
+    // ── exec_sample ─────────────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_sample_success() {
+    async fn test_exec_sample_success() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        let args = parse_fn_args("sample(2)");
-        ctx.eval_sample(args).expect("sample");
+        ctx.exec_sample(2).expect("sample");
 
         let batches = ctx.batches.as_ref().expect("batches after sample");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -1940,15 +1753,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_sample_default_n() {
+    async fn test_exec_sample_default_n() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        ctx.eval_sample(vec![]).expect("sample with default n");
+        ctx.exec_sample(10).expect("sample with n=10");
 
         let batches = ctx.batches.as_ref().expect("batches after sample");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -1956,32 +1765,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_sample_preserves_schema() {
+    async fn test_exec_sample_preserves_schema() {
         let mut ctx = new_context();
-        ctx.eval_read(vec![Expr::Literal(Literal::String(
-            "fixtures/table.parquet".into(),
-        ))])
-        .await
-        .expect("read");
+        ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
         let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        let args = parse_fn_args("sample(1)");
-        ctx.eval_sample(args).expect("sample");
+        ctx.exec_sample(1).expect("sample");
 
         let batches = ctx.batches.as_ref().expect("batches");
         assert_eq!(batches[0].schema(), original_schema);
     }
 
     #[test]
-    fn test_eval_sample_no_preceding_read() {
+    fn test_exec_sample_no_preceding_read() {
         let mut ctx = new_context();
-        let args = parse_fn_args("sample(5)");
-        let result = ctx.eval_sample(args);
+        let result = ctx.exec_sample(5);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
-    // ── eval_sample: pipeline integration ───────────────────────
+    // ── exec_sample: pipeline integration ────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_sample_write() {

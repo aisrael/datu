@@ -7,13 +7,13 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use anyhow::Result;
-use anyhow::bail;
 use arrow::array::RecordBatchReader;
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_avro::reader::ReaderBuilder;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
+use eyre::Result;
+use eyre::bail;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use parquet::basic::ConvertedType;
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -202,7 +202,7 @@ fn get_schema_fields_csv(path: &str, has_header: bool) -> Result<Vec<SchemaField
         let handle = tokio::runtime::Handle::current();
         handle.block_on(ctx.read_csv(path, CsvReadOptions::new().has_header(has_header)))
     })
-    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    .map_err(|e| eyre::eyre!("{e}"))?;
     let schema = df.schema();
     Ok(schema_fields_from_arrow(schema.as_ref()))
 }

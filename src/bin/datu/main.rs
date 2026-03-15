@@ -45,7 +45,7 @@ pub enum Command {
 
 /// Application entry point; parses CLI args and dispatches to the appropriate command.
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => repl::run().await,

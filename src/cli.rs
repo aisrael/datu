@@ -111,7 +111,7 @@ pub struct CountArgs {
     pub input_headers: Option<bool>,
 }
 
-/// Arguments for the `datu head` and `datu tail` commands.
+/// Arguments for the `head`, `sample`, and `tail` commands.
 #[derive(Args)]
 pub struct HeadsOrTails {
     /// Path to the Parquet, Avro, ORC, or CSV file

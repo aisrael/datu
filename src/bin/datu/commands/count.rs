@@ -2,12 +2,12 @@
 
 use datu::cli::CountArgs;
 use datu::pipeline::count_rows;
-use datu::resolve_input_file_type;
+use datu::resolve_file_type;
 
 /// The `datu count` command. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
-pub async fn count(args: CountArgs) -> anyhow::Result<()> {
-    let file_type = resolve_input_file_type(args.input, &args.input_path)?;
+pub async fn count(args: CountArgs) -> eyre::Result<()> {
+    let file_type = resolve_file_type(args.input, &args.input_path)?;
     let total = count_rows(&args.input_path, file_type, args.input_headers)?;
     println!("{total}");
     Ok(())

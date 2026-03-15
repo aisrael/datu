@@ -1,5 +1,3 @@
-use anyhow::Result;
-use anyhow::bail;
 use datu::Error;
 use datu::FileType;
 use datu::cli::HeadsOrTails;
@@ -12,11 +10,13 @@ use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::read_to_batches;
 use datu::pipeline::record_batch_filter::parse_select_step;
 use datu::pipeline::tail_batches;
-use datu::resolve_input_file_type;
+use datu::resolve_file_type;
+use eyre::Result;
+use eyre::bail;
 
 /// tail command implementation: print the last N lines of an Avro, CSV, Parquet, or ORC file.
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
-    let input_file_type = resolve_input_file_type(args.input, &args.input_path)?;
+    let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     match input_file_type {
         FileType::Parquet => tail_seekable_format(args, FileType::Parquet).await,
         FileType::Avro => tail_avro(args).await,

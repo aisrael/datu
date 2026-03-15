@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::NdJsonReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 
 use crate::Error;
@@ -170,6 +171,10 @@ impl DataFrameReader {
                 .await
                 .map_err(|e| Error::GenericError(e.to_string()))?
             }
+            FileType::Json => ctx
+                .read_json(&self.input_path, NdJsonReadOptions::default())
+                .await
+                .map_err(|e| Error::GenericError(e.to_string()))?,
             FileType::Orc => {
                 let batches = read_orc_to_batches(&self.input_path)?;
                 if batches.is_empty() {
@@ -182,7 +187,7 @@ impl DataFrameReader {
             }
             _ => {
                 return Err(Error::GenericError(
-                    "Only Parquet, Avro, CSV, and ORC are supported as input file types"
+                    "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types"
                         .to_string(),
                 ));
             }
@@ -383,15 +388,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_unsupported_type() {
-        let result = DataFrameReader::new("fixtures/data.json", FileType::Json, None, None, None)
-            .execute(())
-            .await;
+        let result =
+            DataFrameReader::new("fixtures/table.parquet", FileType::Xlsx, None, None, None)
+                .execute(())
+                .await;
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Only Parquet, Avro, CSV, and ORC")
+                .contains("Only Parquet, Avro, CSV, JSON, and ORC")
         );
     }
 

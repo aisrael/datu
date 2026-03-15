@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -11,33 +11,33 @@ exclude = [
 ]
 
 [dependencies]
-anyhow = "1.0.100"
+eyre = "0.6"
 async-trait = "0.1"
-arrow = "57.2.0"
+arrow = "57.2"
 log = "0.4"
-arrow-avro = "57.2.0"
-arrow-json = "57.2.0"
-clap = { version = "4.5.54", features = ["cargo", "derive"] }
+arrow-avro = "57.2"
+arrow-json = "57.2"
+clap = { version = "4.6", features = ["cargo", "derive"] }
 chrono = "0.4"
-datafusion = { version = "52.1.0", features = ["avro"] }
-parquet = "57.2.0"
-orc-rust = "0.7"
+datafusion = { version = "52.3", features = ["avro"] }
+parquet = "57.2"
+orc-rust = "0.7.1"
 futures = "0.3"
-tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
-thiserror = "2.0.18"
-csv = "1.4.0"
+tokio = { version = "1.50", features = ["macros", "rt", "sync"] }
+thiserror = "2.0"
+csv = "1.4"
 hashlink = "0.10"
 saphyr = "0.0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rust_xlsxwriter = { version = "0.93", features = ["chrono"] }
+rust_xlsxwriter = { version = "0.94", features = ["chrono"] }
 rustc-literal-escaper = "0.0.7"
-rustyline = "17.0"
-flt = { version = "0.0.2" }
-dirs = { version = "2.0.0", package = "dirs-next" }
+rustyline = "17"
+flt = "0.0.2"
+dirs = { version = "2.0", package = "dirs-next" }
 rand = "0.8"
-reservoir-sampling = "0.5"
-indicatif = "0.17"
+reservoir-sampling = "0.5.1"
+indicatif = "0.18"
 
 [dev-dependencies]
 criterion = "0.5"

@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
 use datu::cli::repl::ReplPipelineBuilder;
+use eyre::Result;
 use flt::parser::parse_expr;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;

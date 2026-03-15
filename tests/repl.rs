@@ -221,7 +221,7 @@ fn that_file_should_be_valid_avro(world: &mut ReplWorld) {
     );
 }
 
-#[then(regex = r#"^that file should be valid Parquet$"#)]
+#[then(regex = r#"^that file should be a valid Parquet file$"#)]
 fn that_file_should_be_valid_parquet(world: &mut ReplWorld) {
     let path = world
         .last_file

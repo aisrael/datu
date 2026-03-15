@@ -79,7 +79,7 @@ Feature: Conversion
       read("fixtures/userdata5.avro") |> write("$TEMPDIR/userdata5.parquet")
       ```
     Then the file "$TEMPDIR/userdata5.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file
 
   Scenario: Avro to ORC
     When the REPL is ran and the user types:
@@ -103,7 +103,7 @@ Feature: Conversion
       read("fixtures/table.csv") |> write("$TEMPDIR/table_from_csv.parquet")
       ```
     Then the file "$TEMPDIR/table_from_csv.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file
 
   Scenario: CSV to JSON
     When the REPL is ran and the user types:
@@ -155,7 +155,7 @@ Feature: Conversion
       read("fixtures/userdata.orc") |> write("$TEMPDIR/userdata_orc.parquet")
       ```
     Then the file "$TEMPDIR/userdata_orc.parquet" should exist
-    And that file should be valid Parquet
+    And that file should be a valid Parquet file
 
   Scenario: ORC to Avro
     When the REPL is ran and the user types:

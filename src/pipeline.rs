@@ -162,8 +162,8 @@ pub fn build_reader(
 /// Counts rows in a file. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
 pub fn count_rows(path: &str, file_type: FileType, csv_has_header: Option<bool>) -> Result<usize> {
-    if let Ok(total) = crate::get_total_rows_result(path, file_type) {
-        return Ok(total);
+    if matches!(file_type, FileType::Parquet | FileType::Orc) {
+        return crate::get_total_rows_result(path, file_type);
     }
     let mut reader_step = build_reader(path, file_type, None, None, csv_has_header)?;
     let reader = reader_step.get()?;
@@ -228,7 +228,7 @@ pub async fn read_to_batches(
     select: &Option<Vec<String>>,
     limit: Option<usize>,
     csv_has_header: Option<bool>,
-) -> anyhow::Result<Vec<arrow::record_batch::RecordBatch>> {
+) -> eyre::Result<Vec<arrow::record_batch::RecordBatch>> {
     let source = {
         let select = select.clone();
         DataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
@@ -237,7 +237,7 @@ pub async fn read_to_batches(
     .await?;
     let reader = DataFrameToBatchReader::try_new(source)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| eyre::eyre!("{e}"))?;
     Ok(reader.into_batches())
 }
 
@@ -390,11 +390,9 @@ pub async fn write_batches(
     output_file_type: FileType,
     sparse: bool,
     json_pretty: bool,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     let ctx = datafusion::execution::context::SessionContext::new();
-    let df = ctx
-        .read_batches(batches)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let df = ctx.read_batches(batches).map_err(|e| eyre::eyre!("{e}"))?;
 
     let source = crate::pipeline::dataframe::DataFrameSource::new(df);
     let writer_step = crate::pipeline::dataframe::DataFrameWriter::new(

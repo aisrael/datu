@@ -298,7 +298,7 @@ fn that_file_should_have_n_lines(world: &mut ReplWorld, n: usize) {
 
 #[then(regex = r#"^that file should have (\d+) records$"#)]
 fn that_file_should_have_n_records(world: &mut ReplWorld, n: usize) {
-    use datu::utils::FileType;
+    use datu::FileType;
 
     let path = world
         .last_file

@@ -1,5 +1,13 @@
+use std::any::Any;
 use std::fmt;
+use std::path::Path;
 
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::execution::context::SessionContext;
+use datafusion::prelude::AvroReadOptions;
+use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::NdJsonReadOptions;
+use datafusion::prelude::ParquetReadOptions;
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
 use flt::ast::Literal;
@@ -18,6 +26,236 @@ use crate::pipeline::select;
 use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write_batches;
+
+#[derive(Default)]
+pub struct PipelineBuilder {
+    read: Option<String>,
+    select: Option<Vec<ColumnSpec>>,
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+    count: Option<String>,
+    write: Option<String>,
+    schema: bool,
+}
+
+impl PipelineBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl PipelineBuilder {
+    pub fn read(&mut self, path: &str) -> &mut Self {
+        self.read = Some(path.to_string());
+        self
+    }
+    pub fn select(&mut self, columns: &[&str]) -> &mut Self {
+        self.select = Some(
+            columns
+                .iter()
+                .map(|c| ColumnSpec::Exact(c.to_string()))
+                .collect(),
+        );
+        self
+    }
+    pub fn write(&mut self, path: &Path) -> &mut Self {
+        self.write = Some(path.to_string_lossy().to_string());
+        self
+    }
+    pub fn head(&mut self, n: usize) -> &mut Self {
+        self.head = Some(n);
+        self
+    }
+    pub fn tail(&mut self, n: usize) -> &mut Self {
+        self.tail = Some(n);
+        self
+    }
+    pub fn sample(&mut self, n: usize) -> &mut Self {
+        self.sample = Some(n);
+        self
+    }
+    pub fn count(&mut self, path: &str) -> &mut Self {
+        self.count = Some(path.to_string());
+        self
+    }
+    pub fn schema(&mut self) -> &mut Self {
+        self.schema = true;
+        self
+    }
+
+    pub fn build(&mut self) -> crate::Result<Box<dyn Pipeline + 'static>> {
+        let input_path = self.read.as_ref().ok_or_else(|| {
+            Error::PipelinePlanningError("Missing required stage: read(path)".to_string())
+        })?;
+        let output_path = self.write.as_ref().ok_or_else(|| {
+            Error::PipelinePlanningError("Missing required stage: write(path)".to_string())
+        })?;
+
+        if self.tail.is_some() {
+            return Err(Error::PipelinePlanningError(
+                "tail(n) is not supported by the DataFusion-native pipeline".to_string(),
+            ));
+        }
+        if self.sample.is_some() {
+            return Err(Error::PipelinePlanningError(
+                "sample(n) is not supported by the DataFusion-native pipeline".to_string(),
+            ));
+        }
+        if self.count.is_some() {
+            return Err(Error::PipelinePlanningError(
+                "count(path?) is not supported by the DataFusion-native pipeline".to_string(),
+            ));
+        }
+        if self.schema {
+            return Err(Error::PipelinePlanningError(
+                "schema() is not supported by the DataFusion-native pipeline".to_string(),
+            ));
+        }
+
+        let input_file_type = crate::resolve_file_type(None, input_path)?;
+        let output_file_type = crate::resolve_file_type(None, output_path)?;
+
+        let is_input_native = matches!(
+            input_file_type,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
+        );
+        let is_output_native = matches!(
+            output_file_type,
+            FileType::Parquet | FileType::Csv | FileType::Json
+        );
+
+        if !is_input_native || !is_output_native {
+            return Err(Error::PipelinePlanningError(format!(
+                "DataFusion-native pipeline supports input in {{parquet,avro,csv,json}} and output in {{parquet,csv,json}}; got input={input_file_type}, output={output_file_type}"
+            )));
+        }
+
+        let select = self.select.clone();
+        if let Some(columns) = &select
+            && columns.is_empty()
+        {
+            return Err(Error::PipelinePlanningError(
+                "select(...) cannot be empty".to_string(),
+            ));
+        }
+
+        Ok(Box::new(DataFramePipeline {
+            input_path: input_path.to_string(),
+            input_file_type,
+            select,
+            head: self.head,
+            output_path: output_path.to_string(),
+            output_file_type,
+        }))
+    }
+}
+
+pub trait Pipeline: Any {
+    fn execute(&mut self) -> crate::Result<()>;
+}
+
+pub struct DataFramePipeline {
+    input_path: String,
+    input_file_type: FileType,
+    select: Option<Vec<ColumnSpec>>,
+    head: Option<usize>,
+    output_path: String,
+    output_file_type: FileType,
+}
+
+impl Pipeline for DataFramePipeline {
+    fn execute(&mut self) -> crate::Result<()> {
+        let input_path = self.input_path.clone();
+        let input_file_type = self.input_file_type;
+        let select = self.select.clone();
+        let head = self.head;
+        let output_path = self.output_path.clone();
+        let output_file_type = self.output_file_type;
+
+        let fut = async move {
+            let ctx = SessionContext::new();
+
+            let mut df = match input_file_type {
+                FileType::Parquet => ctx
+                    .read_parquet(&input_path, ParquetReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Avro => ctx
+                    .read_avro(&input_path, AvroReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => ctx
+                    .read_csv(&input_path, CsvReadOptions::new().has_header(true))
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => ctx
+                    .read_json(&input_path, NdJsonReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                other => {
+                    return Err(Error::PipelinePlanningError(format!(
+                        "DataFusion-native pipeline does not support input file type: {other}"
+                    )));
+                }
+            };
+
+            if let Some(columns) = &select
+                && !columns.is_empty()
+            {
+                let schema = df.schema();
+                let resolved: Vec<String> = columns
+                    .iter()
+                    .map(|c| c.resolve(schema.as_ref()))
+                    .collect::<crate::Result<_>>()?;
+                let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+                df = df
+                    .select_columns(&col_refs)
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            if let Some(n) = head {
+                df = df
+                    .limit(0, Some(n))
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            let write_opts = DataFrameWriteOptions::new();
+            let _ = match output_file_type {
+                FileType::Parquet => df
+                    .write_parquet(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => df
+                    .write_csv(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => df
+                    .write_json(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                other => {
+                    return Err(Error::PipelinePlanningError(format!(
+                        "DataFusion-native pipeline does not support output file type: {other}"
+                    )));
+                }
+            };
+
+            Ok::<(), crate::Error>(())
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(fut)
+        } else {
+            // If `Pipeline::execute` is called outside a tokio runtime, spin one up.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            rt.block_on(fut)
+        }
+    }
+}
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
@@ -104,7 +342,7 @@ impl fmt::Display for PipelineStage {
     }
 }
 
-/// Builder for a REPL pipeline.
+/// A general REPL pipeline.
 pub struct ReplPipeline {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
@@ -515,6 +753,7 @@ fn extract_sample_n(args: &[Expr]) -> crate::Result<usize> {
 mod tests {
     use flt::ast::Identifier;
     use flt::parser::parse_expr;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -526,6 +765,25 @@ mod tests {
         let (remainder, expr) = parse_expr(input).expect("parse");
         assert!(remainder.trim().is_empty(), "unconsumed: {remainder:?}");
         expr
+    }
+
+    #[test]
+    fn test_pipeline_builder() {
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path();
+
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("fixtures/table.parquet")
+            .select(&["one", "two"])
+            .write(output_path);
+
+        let pipeline = builder.build().expect("Failed to build pipeline");
+        assert!(
+            (pipeline.as_ref() as &dyn Any)
+                .downcast_ref::<DataFramePipeline>()
+                .is_some()
+        );
     }
 
     // ── plan_stage ─────────────────────────────────────────────────
@@ -987,17 +1245,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_exec_write_success() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("output.parquet");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let mut ctx = new_context();
         ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        ctx.exec_write(&output_str).await.expect("write");
+        ctx.exec_write(output_path).await.expect("write");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1023,13 +1280,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_write() {
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let output_path = temp_dir.path().join("table.avro");
-        let output_str = output_path.to_str().expect("path to str").to_string();
+        let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1039,18 +1295,17 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_write_without_select() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("table.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1060,19 +1315,18 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_with_strings() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("out.parquet");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select("one", "three") |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1082,7 +1336,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
         let batches = ctx.batches.as_ref();
         assert!(batches.is_none(), "batches consumed by write");
     }
@@ -1193,13 +1447,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_head_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("headed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> head(2) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1209,20 +1462,19 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path.as_str()));
         assert!(ctx.batches.is_none(), "batches consumed by write");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_head_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("selected_headed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> head(1) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1232,7 +1484,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     // ── plan_stage: tail ─────────────────────────────────────────
@@ -1642,13 +1894,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_tail_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("selected_tailed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> tail(1) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1658,7 +1909,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     // ── plan_stage: sample ──────────────────────────────────────

@@ -78,7 +78,7 @@ datu convert <INPUT> <OUTPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-```
+```flt
 read("table.parquet") |> select(:id, :email) |> write("table.csv")
 ```
 
@@ -145,7 +145,7 @@ datu schema <FILE> [OPTIONS]
 
 **Usage (REPL):**
 
-```
+```flt
 read("file") |> schema()
 ```
 
@@ -199,7 +199,7 @@ datu count <FILE> [OPTIONS]
 
 **Usage (REPL):**
 
-```
+```flt
 count("file")
 ```
 
@@ -243,7 +243,7 @@ datu sample <INPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-```
+```flt
 read("file") |> sample(n)
 ```
 
@@ -292,7 +292,7 @@ datu head <INPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-```
+```flt
 read("file") |> head(n)
 ```
 

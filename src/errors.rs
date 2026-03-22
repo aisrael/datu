@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::FileType;
+
 /// Errors that can occur during datu operations.
 #[derive(Error, Debug)]
 pub enum Error {
@@ -9,8 +11,6 @@ pub enum Error {
     GenericError(String),
     #[error("Unknown or unsupported file type: '{0}'")]
     UnknownFileType(String),
-    #[error("Pipeline planning error: {0}")]
-    PipelinePlanningError(String),
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error(transparent)]
@@ -29,4 +29,30 @@ pub enum Error {
     UnsupportedOperator(String),
     #[error("Unsupported function call: {0}")]
     UnsupportedFunctionCall(String),
+    #[error(transparent)]
+    PipelinePlanningError(#[from] PipelinePlanningError),
+    #[error(transparent)]
+    PipelineExecutionError(#[from] PipelineExecutionError),
+}
+
+#[derive(Error, Debug)]
+pub enum PipelinePlanningError {
+    #[error("select(...) cannot be empty")]
+    SelectEmpty,
+    #[error("Missing required stage: {0}")]
+    MissingRequiredStage(String),
+    #[error("Unsupported stage: {0}")]
+    UnsupportedStage(String),
+    #[error("Pipeline planner does not support input file type: {0}")]
+    UnsupportedInputFileType(String),
+    #[error("Pipeline planner does not support output file type: {0}")]
+    UnsupportedOutputFileType(String),
+}
+
+#[derive(Error, Debug)]
+pub enum PipelineExecutionError {
+    #[error("Datafusion-native pipeline does not support input file type: {0}")]
+    UnsupportedInputFileType(FileType),
+    #[error("Datafusion-native pipeline does not support output file type: {0}")]
+    UnsupportedOutputFileType(FileType),
 }

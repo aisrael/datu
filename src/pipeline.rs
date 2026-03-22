@@ -17,15 +17,28 @@ pub mod write;
 pub mod xlsx;
 pub mod yaml;
 
+use std::any::Any;
+use std::path::Path;
+
 use arrow::array::RecordBatchReader;
 use arrow::array::UInt32Array;
 use arrow::compute;
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::prelude::AvroReadOptions;
+use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::NdJsonReadOptions;
+use datafusion::prelude::ParquetReadOptions;
+use datafusion::prelude::SessionContext;
 use futures::StreamExt;
 
+use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::errors::PipelineExecutionError;
+use crate::errors::PipelinePlanningError;
 use crate::pipeline::avro::ReadAvroStep;
 use crate::pipeline::csv::ReadCsvStep;
 use crate::pipeline::dataframe::DataFrameReader;
@@ -36,6 +49,288 @@ pub use crate::pipeline::read::ReadArgs;
 pub use crate::pipeline::write::WriteArgs;
 pub use crate::pipeline::write::WriteJsonArgs;
 pub use crate::pipeline::write::WriteYamlArgs;
+
+#[derive(Default)]
+pub struct PipelineBuilder {
+    read: Option<String>,
+    select: Option<Vec<ColumnSpec>>,
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+    count: Option<String>,
+    write: Option<String>,
+    schema: bool,
+}
+
+impl PipelineBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl PipelineBuilder {
+    pub fn read(&mut self, path: &str) -> &mut Self {
+        self.read = Some(path.to_string());
+        self
+    }
+    pub fn select(&mut self, columns: &[&str]) -> &mut Self {
+        self.select = Some(
+            columns
+                .iter()
+                .map(|c| ColumnSpec::Exact(c.to_string()))
+                .collect(),
+        );
+        self
+    }
+    pub fn write<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.write = Some(path.as_ref().to_string_lossy().to_string());
+        self
+    }
+    pub fn head(&mut self, n: usize) -> &mut Self {
+        self.head = Some(n);
+        self
+    }
+    pub fn tail(&mut self, n: usize) -> &mut Self {
+        self.tail = Some(n);
+        self
+    }
+    pub fn sample(&mut self, n: usize) -> &mut Self {
+        self.sample = Some(n);
+        self
+    }
+    pub fn count(&mut self, path: &str) -> &mut Self {
+        self.count = Some(path.to_string());
+        self
+    }
+    pub fn schema(&mut self) -> &mut Self {
+        self.schema = true;
+        self
+    }
+
+    pub fn build(&mut self) -> crate::Result<Box<dyn Pipeline + 'static>> {
+        let input_path = self.read.as_ref().ok_or_else(|| {
+            Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
+                "read(path)".to_string(),
+            ))
+        })?;
+        let output_path = self.write.as_ref().ok_or_else(|| {
+            Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
+                "write(path)".to_string(),
+            ))
+        })?;
+
+        if self.tail.is_some() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedStage("tail(n)".to_string()),
+            ));
+        }
+        if self.sample.is_some() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedStage("sample(n)".to_string()),
+            ));
+        }
+        if self.count.is_some() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedStage("count(path?)".to_string()),
+            ));
+        }
+        if self.schema {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedStage("schema()".to_string()),
+            ));
+        }
+
+        let input_file_type = crate::resolve_file_type(None, input_path)?;
+        let output_file_type = crate::resolve_file_type(None, output_path)?;
+
+        let is_input_native = matches!(
+            input_file_type,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
+        );
+        let is_output_native = matches!(
+            output_file_type,
+            FileType::Parquet | FileType::Csv | FileType::Json
+        );
+
+        if !is_input_native {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+        if !is_output_native {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedOutputFileType(output_file_type.to_string()),
+            ));
+        }
+
+        let select = self.select.clone();
+        if let Some(columns) = &select
+            && columns.is_empty()
+        {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::SelectEmpty,
+            ));
+        }
+
+        Ok(Box::new(DataFramePipeline {
+            input_path: input_path.to_string(),
+            input_file_type,
+            select,
+            head: self.head,
+            output_path: output_path.to_string(),
+            output_file_type,
+        }))
+    }
+}
+
+pub trait Pipeline: Any {
+    fn execute(&mut self) -> crate::Result<()>;
+}
+
+pub struct DataFramePipeline {
+    input_path: String,
+    input_file_type: FileType,
+    select: Option<Vec<ColumnSpec>>,
+    head: Option<usize>,
+    output_path: String,
+    output_file_type: FileType,
+}
+
+/// How to match a column name: exact (case-sensitive) or case-insensitive.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColumnSpec {
+    /// Exact match (from string literal like "column").
+    Exact(String),
+    /// Case-insensitive match (from symbol like :column or bare identifier).
+    CaseInsensitive(String),
+}
+
+/// Macro to create a vector of ColumnSpec from a list of column names.
+#[macro_export]
+macro_rules! column_spec {
+    ( $($col:expr),+ $(,)? ) => {
+        vec![
+            $(
+                $crate::pipeline::ColumnSpec::Exact($col.to_string())
+            ),+
+        ]
+    };
+}
+
+impl ColumnSpec {
+    /// Resolves this spec against a schema, returning the actual column name.
+    pub fn resolve(&self, schema: &Schema) -> crate::Result<String> {
+        match self {
+            ColumnSpec::Exact(name) => schema
+                .index_of(name)
+                .map(|_| name.clone())
+                .map_err(|e| crate::Error::GenericError(format!("Column '{name}' not found: {e}"))),
+            ColumnSpec::CaseInsensitive(name) => schema
+                .fields()
+                .iter()
+                .find(|f| f.name().eq_ignore_ascii_case(name))
+                .map(|f| f.name().clone())
+                .ok_or_else(|| {
+                    crate::Error::GenericError(format!(
+                        "Column '{name}' not found (case-insensitive match)"
+                    ))
+                }),
+        }
+    }
+}
+
+impl Pipeline for DataFramePipeline {
+    fn execute(&mut self) -> crate::Result<()> {
+        let input_path = self.input_path.clone();
+        let input_file_type = self.input_file_type;
+        let select = self.select.clone();
+        let head = self.head;
+        let output_path = self.output_path.clone();
+        let output_file_type = self.output_file_type;
+
+        let fut = async move {
+            let ctx = SessionContext::new();
+
+            let mut df = match input_file_type {
+                FileType::Parquet => ctx
+                    .read_parquet(&input_path, ParquetReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Avro => ctx
+                    .read_avro(&input_path, AvroReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => ctx
+                    .read_csv(&input_path, CsvReadOptions::new().has_header(true))
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => ctx
+                    .read_json(&input_path, NdJsonReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                other => {
+                    return Err(Error::PipelineExecutionError(
+                        PipelineExecutionError::UnsupportedInputFileType(other),
+                    ));
+                }
+            };
+
+            if let Some(columns) = &select
+                && !columns.is_empty()
+            {
+                let schema = df.schema();
+                let resolved: Vec<String> = columns
+                    .iter()
+                    .map(|c| c.resolve(schema.as_ref()))
+                    .collect::<crate::Result<_>>()?;
+                let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+                df = df
+                    .select_columns(&col_refs)
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            if let Some(n) = head {
+                df = df
+                    .limit(0, Some(n))
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            let write_opts = DataFrameWriteOptions::new();
+            let _ = match output_file_type {
+                FileType::Parquet => df
+                    .write_parquet(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => df
+                    .write_csv(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => df
+                    .write_json(&output_path, write_opts, None)
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                other => {
+                    return Err(Error::PipelineExecutionError(
+                        PipelineExecutionError::UnsupportedOutputFileType(other),
+                    ));
+                }
+            };
+
+            Ok::<(), crate::Error>(())
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(fut)
+        } else {
+            // If `Pipeline::execute` is called outside a tokio runtime, spin one up.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            rt.block_on(fut)
+        }
+    }
+}
 
 /// A `Step` defines a step in the pipeline that can be executed
 /// and has an input and output type.
@@ -403,4 +698,66 @@ pub async fn write_batches(
     );
     writer_step.execute(source).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
+
+    use super::*;
+    use crate::pipeline::ColumnSpec;
+    use crate::pipeline::ReadArgs;
+    use crate::pipeline::RecordBatchReaderSource;
+    use crate::pipeline::parquet::ReadParquetStep;
+
+    #[test]
+    fn test_pipeline_builder_read_select_write_parquet() {
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("input.parquet")
+            .select(&["one", "two"])
+            .write("output.parquet");
+        let pipeline = builder.build().unwrap();
+        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
+        let pipeline = (pipeline.as_ref() as &dyn Any)
+            .downcast_ref::<DataFramePipeline>()
+            .expect("pipeline is a DataFramePipeline");
+        assert_eq!(FileType::Parquet, pipeline.input_file_type);
+        assert_eq!(Some(column_spec!("one", "two")), pipeline.select);
+        assert_eq!(FileType::Parquet, pipeline.output_file_type);
+    }
+
+    #[test]
+    fn test_pipeline_builder_read_select_write_csv() {
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("input.parquet")
+            .select(&["one", "two"])
+            .write("output.csv");
+
+        let pipeline = builder.build().expect("Failed to build pipeline");
+        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
+        let pipeline = (pipeline.as_ref() as &dyn Any)
+            .downcast_ref::<DataFramePipeline>()
+            .expect("pipeline is a DataFramePipeline");
+        assert_eq!(FileType::Parquet, pipeline.input_file_type);
+        assert_eq!(Some(column_spec!("one", "two")), pipeline.select);
+        assert_eq!(FileType::Csv, pipeline.output_file_type);
+    }
+
+    #[test]
+    fn test_column_spec_resolve() {
+        let schema = Schema::new(vec![
+            Field::new("one", DataType::Int32, false),
+            Field::new("two", DataType::Int32, false),
+        ]);
+        let spec = ColumnSpec::Exact("one".to_string());
+        let name = spec.resolve(&schema).unwrap();
+        assert_eq!(name, "one");
+
+        let spec = ColumnSpec::CaseInsensitive("ONE".to_string());
+        let name = spec.resolve(&schema).unwrap();
+        assert_eq!(name, "one");
+    }
 }

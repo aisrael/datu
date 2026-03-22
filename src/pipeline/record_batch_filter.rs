@@ -1,10 +1,10 @@
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
 
+use crate::pipeline::ColumnSpec;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
-use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::select::resolve_column_specs;
 
 /// A Source that wraps a single RecordBatchReader and yields it on get().
@@ -92,10 +92,10 @@ pub fn parse_select_step(select: &Option<Vec<String>>) -> Option<SelectColumnsSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::ColumnSpec;
     use crate::pipeline::ReadArgs;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::parquet::ReadParquetStep;
-    use crate::pipeline::select::ColumnSpec;
 
     #[test]
     fn test_parse_select_step_none() {

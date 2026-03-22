@@ -7,39 +7,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 
+use crate::pipeline::ColumnSpec;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::VecRecordBatchReaderSource;
-
-/// How to match a column name: exact (case-sensitive) or case-insensitive.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ColumnSpec {
-    /// Exact match (from string literal like "column").
-    Exact(String),
-    /// Case-insensitive match (from symbol like :column or bare identifier).
-    CaseInsensitive(String),
-}
-
-impl ColumnSpec {
-    /// Resolves this spec against a schema, returning the actual column name.
-    pub fn resolve(&self, schema: &Schema) -> crate::Result<String> {
-        match self {
-            ColumnSpec::Exact(name) => schema
-                .index_of(name)
-                .map(|_| name.clone())
-                .map_err(|e| crate::Error::GenericError(format!("Column '{name}' not found: {e}"))),
-            ColumnSpec::CaseInsensitive(name) => schema
-                .fields()
-                .iter()
-                .find(|f| f.name().eq_ignore_ascii_case(name))
-                .map(|f| f.name().clone())
-                .ok_or_else(|| {
-                    crate::Error::GenericError(format!(
-                        "Column '{name}' not found (case-insensitive match)"
-                    ))
-                }),
-        }
-    }
-}
 
 /// Resolves column specs to actual schema column names.
 pub fn resolve_column_specs(schema: &Schema, specs: &[ColumnSpec]) -> crate::Result<Vec<String>> {

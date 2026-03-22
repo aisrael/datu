@@ -385,6 +385,8 @@ impl ReplPipeline {
     ) -> crate::Result<Vec<PipelineStage>> {
         match op {
             BinaryOp::Pipe => {
+                // Flatten nested `|>` into a single ordered list (e.g. `a |> b |> c` is parsed as a
+                // binary tree); each leaf becomes one pipeline stage for planning.
                 let mut exprs = Vec::new();
                 collect_pipe_stages(*left, &mut exprs);
                 collect_pipe_stages(*right, &mut exprs);
@@ -675,13 +677,6 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
     }
 }
 
-/// Plans a full pipeline from a list of AST expressions.
-/// Automatically appends an implicit stage for terminal stages (head/tail).
-#[cfg(test)]
-fn plan_pipeline(exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
-    plan_pipeline_with_state(exprs).map(|(stages, _)| stages)
-}
-
 /// Plans a full pipeline and returns whether the statement is incomplete
 /// (the final explicit stage is non-terminal).
 fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStage>, bool)> {
@@ -862,14 +857,14 @@ mod tests {
         ));
     }
 
-    // ── plan_pipeline ─────────────────────────────────────────────
+    // ── plan_pipeline_with_state ──────────────────────────────────
 
     #[test]
     fn test_plan_pipeline_read_select_write() {
         let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -896,7 +891,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> head(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -913,7 +908,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> head(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }
@@ -1548,14 +1543,14 @@ mod tests {
         assert_eq!(PipelineStage::Print.to_string(), "print()");
     }
 
-    // ── plan_pipeline: tail auto-print ──────────────────────────
+    // ── plan_pipeline_with_state: tail auto-print ─────────────────
 
     #[test]
     fn test_plan_pipeline_auto_appends_print_after_tail() {
         let expr = parse(r#"read("a.parquet") |> tail(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1572,7 +1567,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> tail(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }
@@ -1693,14 +1688,14 @@ mod tests {
         ));
     }
 
-    // ── plan_pipeline: count does not auto-append print ─────────
+    // ── plan_pipeline_with_state: count does not auto-append print
 
     #[test]
     fn test_plan_pipeline_count_no_auto_print() {
         let expr = parse(r#"read("a.parquet") |> count()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         // read(path) |> count() is optimized to count(path) so Parquet/ORC use metadata
         assert_eq!(pipeline.len(), 1);
         assert_eq!(
@@ -1716,7 +1711,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> select(:x) |> count()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1831,14 +1826,14 @@ mod tests {
         assert_eq!(PipelineStage::Schema.to_string(), "schema()");
     }
 
-    // ── plan_pipeline: schema does not auto-append print ─────────
+    // ── plan_pipeline_with_state: schema does not auto-append print
 
     #[test]
     fn test_plan_pipeline_schema_no_auto_print() {
         let expr = parse(r#"read("a.parquet") |> schema()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 2);
         assert_eq!(
             pipeline[0],
@@ -1941,14 +1936,14 @@ mod tests {
         );
     }
 
-    // ── plan_pipeline: sample auto-print ────────────────────────
+    // ── plan_pipeline_with_state: sample auto-print ───────────────
 
     #[test]
     fn test_plan_pipeline_auto_appends_print_after_sample() {
         let expr = parse(r#"read("a.parquet") |> sample(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1965,7 +1960,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> sample(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }

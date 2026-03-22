@@ -19,6 +19,7 @@ pub mod yaml;
 
 use std::any::Any;
 use std::path::Path;
+use std::sync::Arc;
 
 use arrow::array::RecordBatchReader;
 use arrow::array::UInt32Array;
@@ -33,6 +34,7 @@ use datafusion::prelude::NdJsonReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
+use indicatif::ProgressBar;
 
 use crate::Error;
 use crate::FileType;
@@ -43,16 +45,15 @@ use crate::pipeline::avro::ReadAvroStep;
 use crate::pipeline::csv::ReadCsvStep;
 use crate::pipeline::dataframe::DataFrameReader;
 use crate::pipeline::dataframe::DataFrameSource;
+use crate::pipeline::dataframe::write_record_batches_from_reader;
 use crate::pipeline::orc::ReadOrcStep;
 use crate::pipeline::orc::read_orc_all_batches;
-use crate::pipeline::orc::write_record_batches;
 use crate::pipeline::parquet::ReadParquetStep;
 pub use crate::pipeline::read::ReadArgs;
 pub use crate::pipeline::write::WriteArgs;
 pub use crate::pipeline::write::WriteJsonArgs;
 pub use crate::pipeline::write::WriteYamlArgs;
 
-#[derive(Default)]
 pub struct PipelineBuilder {
     read: Option<String>,
     select: Option<Vec<ColumnSpec>>,
@@ -62,6 +63,33 @@ pub struct PipelineBuilder {
     count: Option<String>,
     write: Option<String>,
     schema: bool,
+    input_type_override: Option<FileType>,
+    output_type_override: Option<FileType>,
+    csv_has_header: Option<bool>,
+    sparse: bool,
+    json_pretty: bool,
+    progress: Option<ProgressBar>,
+}
+
+impl Default for PipelineBuilder {
+    fn default() -> Self {
+        Self {
+            read: None,
+            select: None,
+            head: None,
+            tail: None,
+            sample: None,
+            count: None,
+            write: None,
+            schema: false,
+            input_type_override: None,
+            output_type_override: None,
+            csv_has_header: None,
+            sparse: true,
+            json_pretty: false,
+            progress: None,
+        }
+    }
 }
 
 impl PipelineBuilder {
@@ -109,6 +137,42 @@ impl PipelineBuilder {
         self
     }
 
+    /// Override input format (e.g. from CLI `-I`); otherwise inferred from the read path extension.
+    pub fn input_type(&mut self, file_type: Option<FileType>) -> &mut Self {
+        self.input_type_override = file_type;
+        self
+    }
+
+    /// Override output format (e.g. from CLI `-O`); otherwise inferred from the write path extension.
+    pub fn output_type(&mut self, file_type: Option<FileType>) -> &mut Self {
+        self.output_type_override = file_type;
+        self
+    }
+
+    /// When reading CSV: whether the first row is a header (`None` means default true).
+    pub fn csv_has_header(&mut self, has_header: Option<bool>) -> &mut Self {
+        self.csv_has_header = has_header;
+        self
+    }
+
+    /// For JSON/YAML and similar writers: omit null keys when true.
+    pub fn sparse(&mut self, sparse: bool) -> &mut Self {
+        self.sparse = sparse;
+        self
+    }
+
+    /// When writing JSON: pretty-print when true.
+    pub fn json_pretty(&mut self, json_pretty: bool) -> &mut Self {
+        self.json_pretty = json_pretty;
+        self
+    }
+
+    /// Optional progress bar updated while writing from collected batches.
+    pub fn progress(&mut self, progress: Option<ProgressBar>) -> &mut Self {
+        self.progress = progress;
+        self
+    }
+
     pub fn build(&mut self) -> crate::Result<Box<dyn Pipeline + 'static>> {
         let input_path = self.read.as_ref().ok_or_else(|| {
             Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
@@ -142,16 +206,22 @@ impl PipelineBuilder {
             ));
         }
 
-        let input_file_type = crate::resolve_file_type(None, input_path)?;
-        let output_file_type = crate::resolve_file_type(None, output_path)?;
+        let input_file_type = crate::resolve_file_type(self.input_type_override, input_path)?;
+        let output_file_type = crate::resolve_file_type(self.output_type_override, output_path)?;
 
         let is_input_native = matches!(
             input_file_type,
             FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
         );
-        let is_output_native = matches!(
+        let is_output_supported = matches!(
             output_file_type,
-            FileType::Parquet | FileType::Csv | FileType::Json | FileType::Orc
+            FileType::Parquet
+                | FileType::Csv
+                | FileType::Json
+                | FileType::Orc
+                | FileType::Avro
+                | FileType::Xlsx
+                | FileType::Yaml
         );
 
         if !is_input_native {
@@ -159,7 +229,7 @@ impl PipelineBuilder {
                 PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
             ));
         }
-        if !is_output_native {
+        if !is_output_supported {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::UnsupportedOutputFileType(output_file_type.to_string()),
             ));
@@ -181,6 +251,10 @@ impl PipelineBuilder {
             head: self.head,
             output_path: output_path.to_string(),
             output_file_type,
+            csv_has_header: self.csv_has_header,
+            sparse: self.sparse,
+            json_pretty: self.json_pretty,
+            progress: self.progress.clone(),
         }))
     }
 }
@@ -196,6 +270,10 @@ pub struct DataFramePipeline {
     head: Option<usize>,
     output_path: String,
     output_file_type: FileType,
+    csv_has_header: Option<bool>,
+    sparse: bool,
+    json_pretty: bool,
+    progress: Option<ProgressBar>,
 }
 
 /// How to match a column name: exact (case-sensitive) or case-insensitive.
@@ -249,9 +327,14 @@ impl Pipeline for DataFramePipeline {
         let head = self.head;
         let output_path = self.output_path.clone();
         let output_file_type = self.output_file_type;
+        let csv_has_header = self.csv_has_header;
+        let sparse = self.sparse;
+        let json_pretty = self.json_pretty;
+        let progress = self.progress.clone();
 
         let fut = async move {
             let ctx = SessionContext::new();
+            let has_header = csv_has_header.unwrap_or(true);
 
             let mut df = match input_file_type {
                 FileType::Parquet => ctx
@@ -263,7 +346,7 @@ impl Pipeline for DataFramePipeline {
                     .await
                     .map_err(|e| Error::GenericError(e.to_string()))?,
                 FileType::Csv => ctx
-                    .read_csv(&input_path, CsvReadOptions::new().has_header(true))
+                    .read_csv(&input_path, CsvReadOptions::new().has_header(has_header))
                     .await
                     .map_err(|e| Error::GenericError(e.to_string()))?,
                 FileType::Json => ctx
@@ -319,23 +402,24 @@ impl Pipeline for DataFramePipeline {
                         .await
                         .map_err(|e| Error::GenericError(e.to_string()))?;
                 }
-                FileType::Json => {
-                    df.write_json(&output_path, write_opts, None)
-                        .await
-                        .map_err(|e| Error::GenericError(e.to_string()))?;
-                }
-                FileType::Orc => {
+                FileType::Json
+                | FileType::Avro
+                | FileType::Orc
+                | FileType::Xlsx
+                | FileType::Yaml => {
                     let batches = df
                         .collect()
                         .await
                         .map_err(|e| Error::GenericError(e.to_string()))?;
-                    let mut reader = VecRecordBatchReader::new(batches);
-                    write_record_batches(&output_path, &mut reader)?;
-                }
-                other => {
-                    return Err(Error::PipelineExecutionError(
-                        PipelineExecutionError::UnsupportedOutputFileType(other),
-                    ));
+                    let inner = VecRecordBatchReader::new(batches);
+                    let mut reader = ProgressVecRecordBatchReader { inner, progress };
+                    write_record_batches_from_reader(
+                        &mut reader,
+                        &output_path,
+                        output_file_type,
+                        sparse,
+                        json_pretty,
+                    )?;
                 }
             }
 
@@ -343,7 +427,7 @@ impl Pipeline for DataFramePipeline {
         };
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(fut)
+            tokio::task::block_in_place(|| handle.block_on(fut))
         } else {
             // If `Pipeline::execute` is called outside a tokio runtime, spin one up.
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -406,6 +490,31 @@ impl RecordBatchReader for VecRecordBatchReader {
             .first()
             .map(|b| b.schema())
             .unwrap_or_else(|| std::sync::Arc::new(arrow::datatypes::Schema::empty()))
+    }
+}
+
+struct ProgressVecRecordBatchReader {
+    inner: VecRecordBatchReader,
+    progress: Option<ProgressBar>,
+}
+
+impl Iterator for ProgressVecRecordBatchReader {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        if let Ok(ref batch) = item
+            && let Some(pb) = &self.progress
+        {
+            pb.inc(batch.num_rows() as u64);
+        }
+        Some(item)
+    }
+}
+
+impl RecordBatchReader for ProgressVecRecordBatchReader {
+    fn schema(&self) -> Arc<Schema> {
+        self.inner.schema()
     }
 }
 

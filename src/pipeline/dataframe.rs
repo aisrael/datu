@@ -226,18 +226,7 @@ impl Step for DataFrameReader {
 /// Reads an ORC file into record batches (ORC is not natively supported by DataFusion).
 /// Limit is applied via DataFusion after reading.
 fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::RecordBatch>> {
-    use crate::pipeline::ReadArgs;
-
-    let args = ReadArgs {
-        path: path.to_string(),
-        limit: None,
-        offset: None,
-        csv_has_header: None,
-    };
-    let reader = orc::read_orc(&args)?;
-    let batches: Vec<arrow::record_batch::RecordBatch> =
-        reader.collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(batches)
+    orc::read_orc_all_batches(path)
 }
 
 #[cfg(test)]

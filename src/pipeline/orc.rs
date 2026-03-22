@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use orc_rust::arrow_writer::ArrowWriterBuilder;
@@ -41,6 +42,19 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
     };
 
     Ok(Box::new(arrow_reader))
+}
+
+/// Read an entire ORC file into record batches (no row selection).
+pub(crate) fn read_orc_all_batches(path: &str) -> Result<Vec<RecordBatch>> {
+    let args = ReadArgs {
+        path: path.to_string(),
+        limit: None,
+        offset: None,
+        csv_has_header: None,
+    };
+    let reader = read_orc(&args)?;
+    let batches: Vec<RecordBatch> = reader.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(batches)
 }
 
 /// Pipeline step that writes record batches to an ORC file.

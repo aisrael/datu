@@ -44,6 +44,8 @@ use crate::pipeline::csv::ReadCsvStep;
 use crate::pipeline::dataframe::DataFrameReader;
 use crate::pipeline::dataframe::DataFrameSource;
 use crate::pipeline::orc::ReadOrcStep;
+use crate::pipeline::orc::read_orc_all_batches;
+use crate::pipeline::orc::write_record_batches;
 use crate::pipeline::parquet::ReadParquetStep;
 pub use crate::pipeline::read::ReadArgs;
 pub use crate::pipeline::write::WriteArgs;
@@ -145,11 +147,11 @@ impl PipelineBuilder {
 
         let is_input_native = matches!(
             input_file_type,
-            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
         );
         let is_output_native = matches!(
             output_file_type,
-            FileType::Parquet | FileType::Csv | FileType::Json
+            FileType::Parquet | FileType::Csv | FileType::Json | FileType::Orc
         );
 
         if !is_input_native {
@@ -268,6 +270,16 @@ impl Pipeline for DataFramePipeline {
                     .read_json(&input_path, NdJsonReadOptions::default())
                     .await
                     .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Orc => {
+                    let batches = read_orc_all_batches(&input_path)?;
+                    if batches.is_empty() {
+                        return Err(Error::GenericError(
+                            "ORC file is empty or could not be read".to_string(),
+                        ));
+                    }
+                    ctx.read_batches(batches)
+                        .map_err(|e| Error::GenericError(e.to_string()))?
+                }
                 other => {
                     return Err(Error::PipelineExecutionError(
                         PipelineExecutionError::UnsupportedInputFileType(other),
@@ -296,25 +308,36 @@ impl Pipeline for DataFramePipeline {
             }
 
             let write_opts = DataFrameWriteOptions::new();
-            let _ = match output_file_type {
-                FileType::Parquet => df
-                    .write_parquet(&output_path, write_opts, None)
-                    .await
-                    .map_err(|e| Error::GenericError(e.to_string()))?,
-                FileType::Csv => df
-                    .write_csv(&output_path, write_opts, None)
-                    .await
-                    .map_err(|e| Error::GenericError(e.to_string()))?,
-                FileType::Json => df
-                    .write_json(&output_path, write_opts, None)
-                    .await
-                    .map_err(|e| Error::GenericError(e.to_string()))?,
+            match output_file_type {
+                FileType::Parquet => {
+                    df.write_parquet(&output_path, write_opts, None)
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                }
+                FileType::Csv => {
+                    df.write_csv(&output_path, write_opts, None)
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                }
+                FileType::Json => {
+                    df.write_json(&output_path, write_opts, None)
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                }
+                FileType::Orc => {
+                    let batches = df
+                        .collect()
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                    let mut reader = VecRecordBatchReader::new(batches);
+                    write_record_batches(&output_path, &mut reader)?;
+                }
                 other => {
                     return Err(Error::PipelineExecutionError(
                         PipelineExecutionError::UnsupportedOutputFileType(other),
                     ));
                 }
-            };
+            }
 
             Ok::<(), crate::Error>(())
         };
@@ -707,9 +730,6 @@ mod tests {
 
     use super::*;
     use crate::pipeline::ColumnSpec;
-    use crate::pipeline::ReadArgs;
-    use crate::pipeline::RecordBatchReaderSource;
-    use crate::pipeline::parquet::ReadParquetStep;
 
     #[test]
     fn test_pipeline_builder_read_select_write_parquet() {
@@ -744,6 +764,67 @@ mod tests {
         assert_eq!(FileType::Parquet, pipeline.input_file_type);
         assert_eq!(Some(column_spec!("one", "two")), pipeline.select);
         assert_eq!(FileType::Csv, pipeline.output_file_type);
+    }
+
+    #[test]
+    fn test_pipeline_builder_read_orc_write_csv() {
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("input.orc")
+            .select(&["col"])
+            .write("output.csv");
+        let pipeline = builder.build().unwrap();
+        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
+        let pipeline = (pipeline.as_ref() as &dyn Any)
+            .downcast_ref::<DataFramePipeline>()
+            .expect("pipeline is a DataFramePipeline");
+        assert_eq!(FileType::Orc, pipeline.input_file_type);
+        assert_eq!(Some(column_spec!("col")), pipeline.select);
+        assert_eq!(FileType::Csv, pipeline.output_file_type);
+    }
+
+    #[test]
+    fn test_pipeline_builder_read_parquet_write_orc() {
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("input.parquet")
+            .select(&["one"])
+            .write("output.orc");
+        let pipeline = builder.build().unwrap();
+        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
+        let pipeline = (pipeline.as_ref() as &dyn Any)
+            .downcast_ref::<DataFramePipeline>()
+            .expect("pipeline is a DataFramePipeline");
+        assert_eq!(FileType::Parquet, pipeline.input_file_type);
+        assert_eq!(Some(column_spec!("one")), pipeline.select);
+        assert_eq!(FileType::Orc, pipeline.output_file_type);
+    }
+
+    #[test]
+    fn test_dataframe_pipeline_execute_orc_to_csv() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("out.csv");
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("fixtures/userdata.orc")
+            .write(out.to_str().expect("utf8 path"));
+        let mut pipeline = builder.build().expect("build pipeline");
+        pipeline.execute().expect("execute pipeline");
+        assert!(out.is_file());
+    }
+
+    #[test]
+    fn test_dataframe_pipeline_execute_avro_to_orc() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("out.orc");
+        let mut builder = PipelineBuilder::new();
+        builder
+            .read("fixtures/userdata5.avro")
+            .select(&["id", "first_name"])
+            .write(out.to_str().expect("utf8 path"));
+        let mut pipeline = builder.build().expect("build pipeline");
+        pipeline.execute().expect("execute pipeline");
+        assert!(out.is_file());
     }
 
     #[test]

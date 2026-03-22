@@ -618,15 +618,11 @@ fn extract_sample_n(args: &[Expr]) -> crate::Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-
     use flt::ast::Identifier;
     use flt::parser::parse_expr;
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::pipeline::DataFramePipeline;
-    use crate::pipeline::PipelineBuilder;
 
     fn new_context() -> ReplPipeline {
         ReplPipeline::new()

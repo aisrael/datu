@@ -23,23 +23,6 @@ pub fn unescape_str(s: &str) -> Result<String, rustc_literal_escaper::EscapeErro
     first_error.map_or(Ok(result), Err)
 }
 
-/// Parse column names from `select` by splitting each string at commas, trimming and
-/// discarding empty parts. E.g. `["a, b", "c"]` becomes `["a", "b", "c"]`.
-pub fn parse_select_columns(select: &[String]) -> Vec<String> {
-    let mut columns = Vec::with_capacity(select.len());
-    for s in select {
-        columns.extend(s.split(',').filter_map(|c| {
-            let c = c.trim();
-            if !c.is_empty() {
-                Some(c.to_string())
-            } else {
-                None
-            }
-        }));
-    }
-    columns
-}
-
 /// Returns the total number of rows from file metadata for seekable formats (Parquet, ORC).
 /// Returns an error for unsupported formats or if metadata cannot be read.
 pub fn get_total_rows_result(path: &str, file_type: FileType) -> crate::Result<usize> {
@@ -70,22 +53,5 @@ mod tests {
     fn test_unescape_str() {
         assert_eq!(unescape_str("\\u{1f4a9}").unwrap(), "💩");
         assert_eq!(unescape_str(r#"\"one:\""#).unwrap(), r#""one:""#);
-    }
-
-    #[test]
-    fn test_parse_select_columns() {
-        assert_eq!(parse_select_columns(&[]), Vec::<String>::new());
-        assert_eq!(
-            parse_select_columns(&["a".to_string(), "b".to_string()]),
-            vec!["a".to_string(), "b".to_string()]
-        );
-        assert_eq!(
-            parse_select_columns(&["a, b".to_string(), "c".to_string()]),
-            vec!["a".to_string(), "b".to_string(), "c".to_string()]
-        );
-        assert_eq!(
-            parse_select_columns(&[" one ,  two  ".to_string()]),
-            vec!["one".to_string(), "two".to_string()]
-        );
     }
 }

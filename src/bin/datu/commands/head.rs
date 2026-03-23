@@ -1,5 +1,6 @@
 use datu::FileType;
 use datu::cli::HeadsOrTails;
+use datu::pipeline::SelectSpec;
 use datu::pipeline::build_reader;
 use datu::pipeline::display::apply_select_and_display;
 use datu::pipeline::record_batch_filter::parse_select_step;
@@ -22,9 +23,10 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
         Some(0),
         args.input_headers,
     )?;
+    let select = SelectSpec::from_cli_args(&args.select);
     apply_select_and_display(
         reader_step,
-        parse_select_step(&args.select),
+        parse_select_step(&select),
         args.output,
         args.sparse,
         args.output_headers.unwrap_or(true),

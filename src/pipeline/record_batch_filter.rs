@@ -3,6 +3,7 @@ use async_trait::async_trait;
 
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::SelectSpec;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::select::resolve_column_specs;
@@ -76,16 +77,15 @@ impl Iterator for SelectColumnRecordBatchReader {
     }
 }
 
-/// Parses CLI --select argument into a SelectColumnsStep.
+/// Builds a [`SelectColumnsStep`] from a resolved [`SelectSpec`].
 /// Returns None when no selection is requested.
-pub fn parse_select_step(select: &Option<Vec<String>>) -> Option<SelectColumnsStep> {
-    let select = select.as_ref()?;
-    let columns = crate::utils::parse_select_columns(select);
-    if columns.is_empty() {
+pub fn parse_select_step(select: &Option<SelectSpec>) -> Option<SelectColumnsStep> {
+    let spec = select.as_ref()?;
+    if spec.is_empty() {
         return None;
     }
     Some(SelectColumnsStep {
-        columns: columns.into_iter().map(ColumnSpec::Exact).collect(),
+        columns: spec.columns.clone(),
     })
 }
 
@@ -95,6 +95,7 @@ mod tests {
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::ReadArgs;
     use crate::pipeline::RecordBatchReaderSource;
+    use crate::pipeline::SelectSpec;
     use crate::pipeline::parquet::ReadParquetStep;
 
     #[test]
@@ -104,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_parse_select_step_some() {
-        let select = Some(vec!["one".to_string(), "two".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["one".to_string(), "two".to_string()]));
         let step = parse_select_step(&select).expect("should return some");
         assert_eq!(step.columns.len(), 2);
         assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
@@ -113,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_parse_select_step_comma_separated() {
-        let select = Some(vec!["one, two".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["one, two".to_string()]));
         let step = parse_select_step(&select).expect("should return some");
         assert_eq!(step.columns.len(), 2);
         assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
@@ -122,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_parse_select_step_empty_returns_none() {
-        let select = Some(vec!["  ,  ".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["  ,  ".to_string()]));
         assert!(parse_select_step(&select).is_none());
     }
 

@@ -2,6 +2,7 @@ use datu::FileType;
 use datu::cli::HeadsOrTails;
 use datu::get_total_rows_result;
 use datu::pipeline::RecordBatchReaderSource;
+use datu::pipeline::SelectSpec;
 use datu::pipeline::Step;
 use datu::pipeline::VecRecordBatchReader;
 use datu::pipeline::VecRecordBatchReaderSource;
@@ -30,9 +31,10 @@ pub async fn sample(args: HeadsOrTails) -> Result<()> {
 /// Samples N random rows from a seekable format file (Parquet or ORC) using metadata for total row count.
 async fn sample_seekable_format(args: HeadsOrTails, file_type: FileType) -> Result<()> {
     let total_rows = get_total_rows_result(&args.input_path, file_type)?;
+    let select = SelectSpec::from_cli_args(&args.select);
 
     let mut reader_step = build_reader(&args.input_path, file_type, None, None, None)?;
-    if let Some(select_step) = parse_select_step(&args.select) {
+    if let Some(select_step) = parse_select_step(&select) {
         reader_step = select_step.execute(reader_step).await?;
     }
     let reader = reader_step.get()?;
@@ -52,8 +54,9 @@ async fn sample_seekable_format(args: HeadsOrTails, file_type: FileType) -> Resu
 
 /// Samples N random rows from an Avro file using reservoir sampling.
 async fn sample_avro(args: HeadsOrTails) -> Result<()> {
+    let select = SelectSpec::from_cli_args(&args.select);
     let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
-    if let Some(select_step) = parse_select_step(&args.select) {
+    if let Some(select_step) = parse_select_step(&select) {
         reader_step = select_step.execute(reader_step).await?;
     }
     let reader = reader_step.get()?;
@@ -73,10 +76,11 @@ async fn sample_avro(args: HeadsOrTails) -> Result<()> {
 
 /// Samples N random rows from a CSV file using reservoir sampling.
 async fn sample_csv(args: HeadsOrTails) -> Result<()> {
+    let select = SelectSpec::from_cli_args(&args.select);
     let batches = read_to_batches(
         &args.input_path,
         FileType::Csv,
-        &args.select,
+        &select,
         None,
         args.input_headers,
     )

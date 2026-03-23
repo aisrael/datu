@@ -56,7 +56,7 @@ pub use crate::pipeline::write::WriteYamlArgs;
 
 pub struct PipelineBuilder {
     read: Option<String>,
-    select: Option<Vec<ColumnSpec>>,
+    select: Option<SelectSpec>,
     head: Option<usize>,
     tail: Option<usize>,
     sample: Option<usize>,
@@ -104,12 +104,18 @@ impl PipelineBuilder {
         self
     }
     pub fn select(&mut self, columns: &[&str]) -> &mut Self {
-        self.select = Some(
-            columns
+        self.select = Some(SelectSpec {
+            columns: columns
                 .iter()
                 .map(|c| ColumnSpec::Exact(c.to_string()))
                 .collect(),
-        );
+        });
+        self
+    }
+
+    /// Sets column selection from a pre-built spec (e.g. from CLI conversion).
+    pub fn select_spec(&mut self, spec: SelectSpec) -> &mut Self {
+        self.select = Some(spec);
         self
     }
     pub fn write<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -236,8 +242,8 @@ impl PipelineBuilder {
         }
 
         let select = self.select.clone();
-        if let Some(columns) = &select
-            && columns.is_empty()
+        if let Some(spec) = &select
+            && spec.is_empty()
         {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::SelectEmpty,
@@ -266,7 +272,7 @@ pub trait Pipeline: Any {
 pub struct DataFramePipeline {
     input_path: String,
     input_file_type: FileType,
-    select: Option<Vec<ColumnSpec>>,
+    select: Option<SelectSpec>,
     head: Option<usize>,
     output_path: String,
     output_file_type: FileType,
@@ -285,15 +291,17 @@ pub enum ColumnSpec {
     CaseInsensitive(String),
 }
 
-/// Macro to create a vector of ColumnSpec from a list of column names.
+/// Macro to build a [`SelectSpec`] of [`ColumnSpec::Exact`] entries from column names.
 #[macro_export]
-macro_rules! column_spec {
+macro_rules! select_spec {
     ( $($col:expr),+ $(,)? ) => {
-        vec![
-            $(
-                $crate::pipeline::ColumnSpec::Exact($col.to_string())
-            ),+
-        ]
+        $crate::pipeline::SelectSpec {
+            columns: vec![
+                $(
+                    $crate::pipeline::ColumnSpec::Exact($col.to_string())
+                ),+
+            ],
+        }
     };
 }
 
@@ -316,6 +324,46 @@ impl ColumnSpec {
                     ))
                 }),
         }
+    }
+}
+
+/// Column selection: ordered list of [`ColumnSpec`] entries (e.g. from CLI or REPL).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectSpec {
+    pub columns: Vec<ColumnSpec>,
+}
+
+impl SelectSpec {
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
+    /// Parses CLI `--select` values from `Option<Vec<String>>`: splits each string on commas,
+    /// trims, drops empties, maps to [`ColumnSpec::Exact`]. Returns `None` when `select` is `None`
+    /// or yields no column names.
+    pub fn from_cli_args(select: &Option<Vec<String>>) -> Option<Self> {
+        let inner = select.as_ref()?;
+        let mut columns = Vec::new();
+        for s in inner {
+            columns.extend(s.split(',').filter_map(|c| {
+                let c = c.trim();
+                if c.is_empty() {
+                    None
+                } else {
+                    Some(ColumnSpec::Exact(c.to_string()))
+                }
+            }));
+        }
+        if columns.is_empty() {
+            None
+        } else {
+            Some(Self { columns })
+        }
+    }
+
+    /// Resolves all column specs against `schema`, returning actual column names in order.
+    pub fn resolve_names(&self, schema: &Schema) -> crate::Result<Vec<String>> {
+        crate::pipeline::select::resolve_column_specs(schema, &self.columns)
     }
 }
 
@@ -370,14 +418,11 @@ impl Pipeline for DataFramePipeline {
                 }
             };
 
-            if let Some(columns) = &select
-                && !columns.is_empty()
+            if let Some(spec) = &select
+                && !spec.is_empty()
             {
                 let schema = df.schema();
-                let resolved: Vec<String> = columns
-                    .iter()
-                    .map(|c| c.resolve(schema.as_ref()))
-                    .collect::<crate::Result<_>>()?;
+                let resolved = spec.resolve_names(schema.as_ref())?;
                 let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
                 df = df
                     .select_columns(&col_refs)
@@ -652,7 +697,7 @@ impl RecordBatchReader for DataFrameToBatchReader {
 pub async fn read_to_batches(
     input_path: &str,
     input_file_type: FileType,
-    select: &Option<Vec<String>>,
+    select: &Option<SelectSpec>,
     limit: Option<usize>,
     csv_has_header: Option<bool>,
 ) -> eyre::Result<Vec<arrow::record_batch::RecordBatch>> {
@@ -839,6 +884,7 @@ mod tests {
 
     use super::*;
     use crate::pipeline::ColumnSpec;
+    use crate::pipeline::SelectSpec;
 
     #[test]
     fn test_pipeline_builder_read_select_write_parquet() {
@@ -853,7 +899,7 @@ mod tests {
             .downcast_ref::<DataFramePipeline>()
             .expect("pipeline is a DataFramePipeline");
         assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(column_spec!("one", "two")), pipeline.select);
+        assert_eq!(Some(select_spec!("one", "two")), pipeline.select);
         assert_eq!(FileType::Parquet, pipeline.output_file_type);
     }
 
@@ -871,7 +917,7 @@ mod tests {
             .downcast_ref::<DataFramePipeline>()
             .expect("pipeline is a DataFramePipeline");
         assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(column_spec!("one", "two")), pipeline.select);
+        assert_eq!(Some(select_spec!("one", "two")), pipeline.select);
         assert_eq!(FileType::Csv, pipeline.output_file_type);
     }
 
@@ -888,7 +934,7 @@ mod tests {
             .downcast_ref::<DataFramePipeline>()
             .expect("pipeline is a DataFramePipeline");
         assert_eq!(FileType::Orc, pipeline.input_file_type);
-        assert_eq!(Some(column_spec!("col")), pipeline.select);
+        assert_eq!(Some(select_spec!("col")), pipeline.select);
         assert_eq!(FileType::Csv, pipeline.output_file_type);
     }
 
@@ -905,7 +951,7 @@ mod tests {
             .downcast_ref::<DataFramePipeline>()
             .expect("pipeline is a DataFramePipeline");
         assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(column_spec!("one")), pipeline.select);
+        assert_eq!(Some(select_spec!("one")), pipeline.select);
         assert_eq!(FileType::Orc, pipeline.output_file_type);
     }
 
@@ -949,5 +995,45 @@ mod tests {
         let spec = ColumnSpec::CaseInsensitive("ONE".to_string());
         let name = spec.resolve(&schema).unwrap();
         assert_eq!(name, "one");
+    }
+
+    #[test]
+    fn test_select_spec_from_cli_args_none() {
+        assert!(SelectSpec::from_cli_args(&None).is_none());
+    }
+
+    #[test]
+    fn test_select_spec_from_cli_args_parsing() {
+        assert!(SelectSpec::from_cli_args(&Some(vec![])).is_none());
+        let spec = SelectSpec::from_cli_args(&Some(vec!["a".to_string(), "b".to_string()]))
+            .expect("non-empty");
+        assert_eq!(
+            spec.columns,
+            vec![ColumnSpec::Exact("a".into()), ColumnSpec::Exact("b".into()),]
+        );
+        let spec = SelectSpec::from_cli_args(&Some(vec!["a, b".to_string(), "c".to_string()]))
+            .expect("non-empty");
+        assert_eq!(
+            spec.columns,
+            vec![
+                ColumnSpec::Exact("a".into()),
+                ColumnSpec::Exact("b".into()),
+                ColumnSpec::Exact("c".into()),
+            ]
+        );
+        let spec =
+            SelectSpec::from_cli_args(&Some(vec![" one ,  two  ".to_string()])).expect("non-empty");
+        assert_eq!(
+            spec.columns,
+            vec![
+                ColumnSpec::Exact("one".into()),
+                ColumnSpec::Exact("two".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_select_spec_from_cli_args_empty_fragments() {
+        assert!(SelectSpec::from_cli_args(&Some(vec!["  ,  ".to_string()])).is_none());
     }
 }

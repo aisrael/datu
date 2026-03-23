@@ -9,6 +9,7 @@ use datafusion::prelude::ParquetReadOptions;
 
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::RecordBatchReaderSource;
+use crate::pipeline::SelectSpec;
 use crate::pipeline::VecRecordBatchReaderSource;
 
 /// Resolves column specs to actual schema column names.
@@ -19,16 +20,18 @@ pub fn resolve_column_specs(schema: &Schema, specs: &[ColumnSpec]) -> crate::Res
 /// Reads a Parquet file and selects columns using the DataFusion DataFrame API.
 pub async fn read_parquet_select(
     path: &str,
-    columns: &[String],
+    spec: &SelectSpec,
     limit: Option<usize>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let ctx = SessionContext::new();
-    let col_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
     let mut df = ctx
         .read_parquet(path, ParquetReadOptions::default())
         .await
         .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-    if !columns.is_empty() {
+    if !spec.is_empty() {
+        let schema = df.schema();
+        let resolved = spec.resolve_names(schema.as_ref())?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
         df = df
             .select_columns(&col_refs)
             .map_err(|e| crate::Error::GenericError(e.to_string()))?;
@@ -48,16 +51,18 @@ pub async fn read_parquet_select(
 /// Reads an Avro file and selects columns using the DataFusion DataFrame API.
 pub async fn read_avro_select(
     path: &str,
-    columns: &[String],
+    spec: &SelectSpec,
     limit: Option<usize>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let ctx = SessionContext::new();
-    let col_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
     let mut df = ctx
         .read_avro(path, AvroReadOptions::default())
         .await
         .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-    if !columns.is_empty() {
+    if !spec.is_empty() {
+        let schema = df.schema();
+        let resolved = spec.resolve_names(schema.as_ref())?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
         df = df
             .select_columns(&col_refs)
             .map_err(|e| crate::Error::GenericError(e.to_string()))?;
@@ -102,19 +107,24 @@ pub fn select_columns_to_batches(
 /// Applies column selection to record batches using the DataFusion DataFrame API.
 pub async fn select_columns_from_batches(
     batches: Vec<RecordBatch>,
-    columns: &[String],
+    spec: &SelectSpec,
 ) -> crate::Result<RecordBatchReaderSource> {
     if batches.is_empty() {
         return Ok(Box::new(VecRecordBatchReaderSource::new(batches)));
     }
     let ctx = SessionContext::new();
-    let col_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
     let df = ctx
         .read_batches(batches)
         .map_err(|e| crate::Error::GenericError(e.to_string()))?;
-    let df = df
-        .select_columns(&col_refs)
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let df = if spec.is_empty() {
+        df
+    } else {
+        let schema = df.schema();
+        let resolved = spec.resolve_names(schema.as_ref())?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+        df.select_columns(&col_refs)
+            .map_err(|e| crate::Error::GenericError(e.to_string()))?
+    };
     let result_batches = df
         .collect()
         .await

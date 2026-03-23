@@ -8,6 +8,7 @@ use datafusion::prelude::ParquetReadOptions;
 
 use crate::Error;
 use crate::FileType;
+use crate::pipeline::SelectSpec;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
@@ -16,7 +17,6 @@ use crate::pipeline::display;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
 use crate::pipeline::xlsx;
-use crate::utils::parse_select_columns;
 
 /// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl Step for DataFrameWriter {
 pub struct DataFrameReader {
     input_path: String,
     input_file_type: FileType,
-    select: Option<Vec<String>>,
+    select: Option<SelectSpec>,
     limit: Option<usize>,
     /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
     csv_has_header: Option<bool>,
@@ -137,7 +137,7 @@ impl DataFrameReader {
     pub fn new(
         input_path: &str,
         input_file_type: FileType,
-        select: Option<Vec<String>>,
+        select: Option<SelectSpec>,
         limit: Option<usize>,
         csv_has_header: Option<bool>,
     ) -> Self {
@@ -193,14 +193,15 @@ impl DataFrameReader {
             }
         };
 
-        if let Some(columns) = &self.select {
-            let parsed = parse_select_columns(columns);
-            if !parsed.is_empty() {
-                let col_refs: Vec<&str> = parsed.iter().map(String::as_str).collect();
-                df = df
-                    .select_columns(&col_refs)
-                    .map_err(|e| Error::GenericError(e.to_string()))?;
-            }
+        if let Some(spec) = &self.select
+            && !spec.is_empty()
+        {
+            let schema = df.schema();
+            let resolved = spec.resolve_names(schema.as_ref())?;
+            let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+            df = df
+                .select_columns(&col_refs)
+                .map_err(|e| Error::GenericError(e.to_string()))?;
         }
 
         if let Some(n) = self.limit {
@@ -234,6 +235,7 @@ mod tests {
     use futures::StreamExt;
 
     use crate::FileType;
+    use crate::pipeline::SelectSpec;
     use crate::pipeline::Source;
     use crate::pipeline::Step;
     use crate::pipeline::dataframe::DataFrameReader;
@@ -279,7 +281,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_with_select() {
-        let select = Some(vec!["one".to_string(), "two".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["one".to_string(), "two".to_string()]));
         let df = *DataFrameReader::new(
             "fixtures/table.parquet",
             FileType::Parquet,
@@ -317,7 +319,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_dataframe_with_select_and_limit() {
-        let select = Some(vec!["two".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["two".to_string()]));
         let df = *DataFrameReader::new(
             "fixtures/table.parquet",
             FileType::Parquet,
@@ -511,7 +513,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_avro() {
-        let select = Some(vec!["two".to_string(), "three".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["two".to_string(), "three".to_string()]));
         let source = DataFrameReader::new(
             "fixtures/table.parquet",
             FileType::Parquet,
@@ -541,7 +543,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_write_dataframe_to_orc() {
-        let select = Some(vec!["id".to_string(), "first_name".to_string()]);
+        let select =
+            SelectSpec::from_cli_args(&Some(vec!["id".to_string(), "first_name".to_string()]));
         let source = DataFrameReader::new(
             "fixtures/userdata5.avro",
             FileType::Avro,
@@ -609,7 +612,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_to_batches_with_select_and_limit() {
-        let select = Some(vec!["two".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["two".to_string()]));
         let batches = read_to_batches(
             "fixtures/table.parquet",
             FileType::Parquet,
@@ -719,7 +722,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_roundtrip_parquet_avro_parquet() {
-        let select = Some(vec!["two".to_string(), "three".to_string()]);
+        let select = SelectSpec::from_cli_args(&Some(vec!["two".to_string(), "three".to_string()]));
         let temp_dir = tempfile::tempdir().unwrap();
 
         let source = DataFrameReader::new(
@@ -759,7 +762,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_roundtrip_avro_orc_parquet() {
-        let select = Some(vec!["id".to_string(), "first_name".to_string()]);
+        let select =
+            SelectSpec::from_cli_args(&Some(vec!["id".to_string(), "first_name".to_string()]));
         let temp_dir = tempfile::tempdir().unwrap();
 
         let source = DataFrameReader::new(

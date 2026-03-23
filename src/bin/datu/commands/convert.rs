@@ -3,8 +3,8 @@ use std::time::Duration;
 use clap::Args;
 use datu::FileType;
 use datu::pipeline::PipelineBuilder;
+use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
-use datu::utils::parse_select_columns;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 
@@ -115,7 +115,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         }
     };
 
-    let parsed_select = args.select.as_ref().map(|cols| parse_select_columns(cols));
+    let select_spec = SelectSpec::from_cli_args(&args.select);
 
     let mut builder = PipelineBuilder::new();
     builder
@@ -128,11 +128,8 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         .json_pretty(args.json_pretty)
         .progress(Some(progress.clone()));
 
-    if let Some(ref cols) = parsed_select
-        && !cols.is_empty()
-    {
-        let refs: Vec<&str> = cols.iter().map(String::as_str).collect();
-        builder.select(&refs);
+    if let Some(spec) = select_spec {
+        builder.select_spec(spec);
     }
 
     if let Some(n) = args.limit {

@@ -1,21 +1,38 @@
+use std::sync::Arc;
+
 use arrow::array::RecordBatchReader;
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::NdJsonReadOptions;
 use datafusion::prelude::ParquetReadOptions;
+use futures::StreamExt;
+use indicatif::ProgressBar;
 
 use crate::Error;
 use crate::FileType;
+use crate::cli::DisplayOutputFormat;
+use crate::errors::PipelineExecutionError;
+use crate::pipeline::ConversionPipeline;
+use crate::pipeline::DisplayPipeline;
+use crate::pipeline::DisplaySlice;
+use crate::pipeline::ProgressVecRecordBatchReader;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro;
 use crate::pipeline::display;
+use crate::pipeline::display::DisplayWriterStep;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
+use crate::pipeline::reservoir_sample_from_reader;
+use crate::pipeline::sample_from_reader;
+use crate::pipeline::tail_batches;
 use crate::pipeline::xlsx;
 
 /// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
@@ -94,7 +111,7 @@ pub fn write_record_batches_from_reader(
         }
         FileType::Avro => avro::write_record_batches(output_path, reader)?,
         FileType::Orc => orc::write_record_batches(output_path, reader)?,
-        FileType::Xlsx => xlsx::write_record_batches(output_path, reader)?,
+        FileType::Xlsx => xlsx::write_record_batch_to_xlsx(output_path, reader)?,
     }
 
     Ok(())
@@ -228,6 +245,320 @@ impl Step for DataFrameReader {
 /// Limit is applied via DataFusion after reading.
 fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::RecordBatch>> {
     orc::read_orc_all_batches(path)
+}
+
+/// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming batches from the
+/// underlying DataFrame via `execute_stream()`.
+pub struct DataFrameToBatchReader {
+    schema: Arc<arrow::datatypes::Schema>,
+    stream: datafusion::physical_plan::SendableRecordBatchStream,
+    handle: tokio::runtime::Handle,
+}
+
+impl DataFrameToBatchReader {
+    pub async fn try_new(mut source: DataFrameSource) -> crate::Result<Self> {
+        let df = *source.get()?;
+        let stream = df
+            .execute_stream()
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let schema = stream.schema();
+        let handle = tokio::runtime::Handle::current();
+        Ok(Self {
+            schema,
+            stream,
+            handle,
+        })
+    }
+
+    pub fn into_batches(self) -> Vec<RecordBatch> {
+        self.filter_map(|r| r.ok()).collect()
+    }
+}
+
+impl Iterator for DataFrameToBatchReader {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let handle = self.handle.clone();
+        tokio::task::block_in_place(|| handle.block_on(self.stream.next()))
+            .map(|r| r.map_err(|e| arrow::error::ArrowError::ExternalError(Box::new(e))))
+    }
+}
+
+impl RecordBatchReader for DataFrameToBatchReader {
+    fn schema(&self) -> Arc<arrow::datatypes::Schema> {
+        self.schema.clone()
+    }
+}
+
+/// Reads via DataFusion (`SessionContext`), optional column select, prints to stdout.
+/// Used for Parquet, CSV, JSON, and Avro. ORC uses [`crate::pipeline::RecordBatchDisplayPipeline`].
+pub struct DataFrameDisplayPipeline {
+    pub(crate) input_path: String,
+    pub(crate) input_file_type: FileType,
+    pub(crate) select: Option<SelectSpec>,
+    pub(crate) slice: DisplaySlice,
+    pub(crate) csv_has_header: Option<bool>,
+    pub(crate) output_format: DisplayOutputFormat,
+    pub(crate) sparse: bool,
+    pub(crate) csv_stdout_headers: bool,
+}
+
+impl DisplayPipeline for DataFrameDisplayPipeline {
+    fn execute(&mut self) -> crate::Result<()> {
+        let input_path = self.input_path.clone();
+        let input_file_type = self.input_file_type;
+        let select = self.select.clone();
+        let slice = self.slice;
+        let csv_has_header = self.csv_has_header;
+        let output_format = self.output_format;
+        let sparse = self.sparse;
+        let csv_stdout_headers = self.csv_stdout_headers;
+
+        let fut = async move {
+            let ctx = SessionContext::new();
+            let has_header = csv_has_header.unwrap_or(true);
+
+            let mut df = match input_file_type {
+                FileType::Parquet => ctx
+                    .read_parquet(&input_path, ParquetReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Avro => ctx
+                    .read_avro(&input_path, AvroReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => ctx
+                    .read_csv(&input_path, CsvReadOptions::new().has_header(has_header))
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => ctx
+                    .read_json(&input_path, NdJsonReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                other => {
+                    return Err(Error::GenericError(format!(
+                        "DataFrameDisplayPipeline does not support input type: {other}"
+                    )));
+                }
+            };
+
+            if let Some(spec) = &select
+                && !spec.is_empty()
+            {
+                let schema = df.schema();
+                let resolved = spec.resolve_names(schema.as_ref())?;
+                let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+                df = df
+                    .select_columns(&col_refs)
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            let batches = match slice {
+                DisplaySlice::Head(n) => {
+                    let df = df
+                        .limit(0, Some(n))
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                    df.collect()
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?
+                }
+                DisplaySlice::Tail(tail_n) => match input_file_type {
+                    FileType::Parquet => {
+                        let total_rows =
+                            crate::get_total_rows_result(&input_path, FileType::Parquet)?;
+                        let number = tail_n.min(total_rows);
+                        let skip = total_rows.saturating_sub(number);
+                        let df = df
+                            .limit(skip, Some(number))
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        df.collect()
+                            .await
+                            .map_err(|e| Error::GenericError(e.to_string()))?
+                    }
+                    FileType::Csv | FileType::Json | FileType::Avro => {
+                        let all = df
+                            .collect()
+                            .await
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        tail_batches(all, tail_n)
+                    }
+                    other => {
+                        return Err(Error::GenericError(format!(
+                            "DataFrameDisplayPipeline tail unsupported for: {other}"
+                        )));
+                    }
+                },
+                DisplaySlice::Sample(n) => match input_file_type {
+                    FileType::Parquet => {
+                        let total_rows =
+                            crate::get_total_rows_result(&input_path, FileType::Parquet)?;
+                        let source = DataFrameSource::new(df);
+                        let batch_reader = DataFrameToBatchReader::try_new(source).await?;
+                        sample_from_reader(Box::new(batch_reader), total_rows, n)
+                    }
+                    FileType::Avro | FileType::Csv | FileType::Json => {
+                        let source = DataFrameSource::new(df);
+                        let batch_reader = DataFrameToBatchReader::try_new(source).await?;
+                        reservoir_sample_from_reader(Box::new(batch_reader), n)
+                    }
+                    other => {
+                        return Err(Error::GenericError(format!(
+                            "DataFrameDisplayPipeline sample unsupported for: {other}"
+                        )));
+                    }
+                },
+            };
+
+            let source = Box::new(VecRecordBatchReaderSource::new(batches));
+            let display_step = DisplayWriterStep {
+                output_format,
+                sparse,
+                headers: csv_stdout_headers,
+            };
+            display_step.execute(source).await
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            rt.block_on(fut)
+        }
+    }
+}
+
+pub struct DataFramePipeline {
+    pub(crate) input_path: String,
+    pub(crate) input_file_type: FileType,
+    pub(crate) select: Option<SelectSpec>,
+    pub(crate) head: Option<usize>,
+    pub(crate) output_path: String,
+    pub(crate) output_file_type: FileType,
+    pub(crate) csv_has_header: Option<bool>,
+    pub(crate) sparse: bool,
+    pub(crate) json_pretty: bool,
+    pub(crate) progress: Option<ProgressBar>,
+}
+
+impl ConversionPipeline for DataFramePipeline {
+    fn execute(&mut self) -> crate::Result<()> {
+        let input_path = self.input_path.clone();
+        let input_file_type = self.input_file_type;
+        let select = self.select.clone();
+        let head = self.head;
+        let output_path = self.output_path.clone();
+        let output_file_type = self.output_file_type;
+        let csv_has_header = self.csv_has_header;
+        let sparse = self.sparse;
+        let json_pretty = self.json_pretty;
+        let progress = self.progress.clone();
+
+        let fut = async move {
+            let ctx = SessionContext::new();
+            let has_header = csv_has_header.unwrap_or(true);
+
+            let mut df = match input_file_type {
+                FileType::Parquet => ctx
+                    .read_parquet(&input_path, ParquetReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Avro => ctx
+                    .read_avro(&input_path, AvroReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Csv => ctx
+                    .read_csv(&input_path, CsvReadOptions::new().has_header(has_header))
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Json => ctx
+                    .read_json(&input_path, NdJsonReadOptions::default())
+                    .await
+                    .map_err(|e| Error::GenericError(e.to_string()))?,
+                FileType::Orc => {
+                    let batches = orc::read_orc_all_batches(&input_path)?;
+                    if batches.is_empty() {
+                        return Err(Error::GenericError(
+                            "ORC file is empty or could not be read".to_string(),
+                        ));
+                    }
+                    ctx.read_batches(batches)
+                        .map_err(|e| Error::GenericError(e.to_string()))?
+                }
+                other => {
+                    return Err(Error::PipelineExecutionError(
+                        PipelineExecutionError::UnsupportedInputFileType(other),
+                    ));
+                }
+            };
+
+            if let Some(spec) = &select
+                && !spec.is_empty()
+            {
+                let schema = df.schema();
+                let resolved = spec.resolve_names(schema.as_ref())?;
+                let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+                df = df
+                    .select_columns(&col_refs)
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            if let Some(n) = head {
+                df = df
+                    .limit(0, Some(n))
+                    .map_err(|e| Error::GenericError(e.to_string()))?;
+            }
+
+            let write_opts = DataFrameWriteOptions::new();
+            match output_file_type {
+                FileType::Parquet => {
+                    df.write_parquet(&output_path, write_opts, None)
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                }
+                FileType::Csv => {
+                    df.write_csv(&output_path, write_opts, None)
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                }
+                FileType::Json
+                | FileType::Avro
+                | FileType::Orc
+                | FileType::Xlsx
+                | FileType::Yaml => {
+                    let batches = df
+                        .collect()
+                        .await
+                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                    let inner = VecRecordBatchReader::new(batches);
+                    let mut reader = ProgressVecRecordBatchReader { inner, progress };
+                    write_record_batches_from_reader(
+                        &mut reader,
+                        &output_path,
+                        output_file_type,
+                        sparse,
+                        json_pretty,
+                    )?;
+                }
+            }
+
+            Ok::<(), Error>(())
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            rt.block_on(fut)
+        }
+    }
 }
 
 #[cfg(test)]

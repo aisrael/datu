@@ -11,7 +11,7 @@ use saphyr::YamlEmitter;
 use crate::Error;
 use crate::Result;
 use crate::cli::DisplayOutputFormat;
-use crate::pipeline::record_batch_filter::SelectColumnsStep;
+use crate::pipeline::record_batch::SelectColumnsStep;
 
 /// Normalizes string values for YAML emission. Unicode line/paragraph separators (U+2028, U+2029)
 /// are replaced with newlines so that saphyr's emitter will quote and escape them, producing

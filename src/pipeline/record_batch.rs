@@ -1,11 +1,20 @@
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
 
+use crate::Error;
+use crate::FileType;
+use crate::cli::DisplayOutputFormat;
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::DisplayPipeline;
+use crate::pipeline::DisplaySlice;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
+use crate::pipeline::VecRecordBatchReaderSource;
+use crate::pipeline::build_reader;
+use crate::pipeline::display::apply_select_and_display;
+use crate::pipeline::sample_from_reader;
 use crate::pipeline::select::resolve_column_specs;
 
 /// A Source that wraps a single RecordBatchReader and yields it on get().
@@ -87,6 +96,98 @@ pub fn parse_select_step(select: &Option<SelectSpec>) -> Option<SelectColumnsSte
     Some(SelectColumnsStep {
         columns: spec.columns.clone(),
     })
+}
+
+/// ORC display via [`crate::pipeline::build_reader`] (DataFusion does not read ORC natively).
+pub struct RecordBatchDisplayPipeline {
+    pub(crate) input_path: String,
+    pub(crate) input_file_type: FileType,
+    pub(crate) select: Option<SelectSpec>,
+    pub(crate) slice: DisplaySlice,
+    pub(crate) csv_has_header: Option<bool>,
+    pub(crate) output_format: DisplayOutputFormat,
+    pub(crate) sparse: bool,
+    pub(crate) csv_stdout_headers: bool,
+}
+
+impl DisplayPipeline for RecordBatchDisplayPipeline {
+    fn execute(&mut self) -> crate::Result<()> {
+        if self.input_file_type != FileType::Orc {
+            return Err(Error::GenericError(format!(
+                "RecordBatchDisplayPipeline only supports ORC input, got {}",
+                self.input_file_type
+            )));
+        }
+
+        let input_path = self.input_path.clone();
+        let select = self.select.clone();
+        let slice = self.slice;
+        let csv_has_header = self.csv_has_header;
+        let output_format = self.output_format;
+        let sparse = self.sparse;
+        let csv_stdout_headers = self.csv_stdout_headers;
+
+        let fut = async move {
+            match slice {
+                DisplaySlice::Head(head_n) => {
+                    let reader = build_reader(
+                        &input_path,
+                        FileType::Orc,
+                        Some(head_n),
+                        Some(0),
+                        csv_has_header,
+                    )?;
+                    apply_select_and_display(
+                        reader,
+                        parse_select_step(&select),
+                        output_format,
+                        sparse,
+                        csv_stdout_headers,
+                    )
+                    .await
+                }
+                DisplaySlice::Tail(tail_n) => {
+                    let total_rows = crate::get_total_rows_result(&input_path, FileType::Orc)?;
+                    let number = tail_n.min(total_rows);
+                    let offset = total_rows.saturating_sub(number);
+                    let reader =
+                        build_reader(&input_path, FileType::Orc, Some(number), Some(offset), None)?;
+                    apply_select_and_display(
+                        reader,
+                        parse_select_step(&select),
+                        output_format,
+                        sparse,
+                        csv_stdout_headers,
+                    )
+                    .await
+                }
+                DisplaySlice::Sample(n) => {
+                    let total_rows = crate::get_total_rows_result(&input_path, FileType::Orc)?;
+                    let mut reader_step =
+                        build_reader(&input_path, FileType::Orc, None, None, csv_has_header)?;
+                    if let Some(select_step) = parse_select_step(&select) {
+                        reader_step = select_step.execute(reader_step).await?;
+                    }
+                    let reader = reader_step.get()?;
+                    let sampled = sample_from_reader(reader, total_rows, n);
+                    let out: RecordBatchReaderSource =
+                        Box::new(VecRecordBatchReaderSource::new(sampled));
+                    apply_select_and_display(out, None, output_format, sparse, csv_stdout_headers)
+                        .await
+                }
+            }
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            rt.block_on(fut)
+        }
+    }
 }
 
 #[cfg(test)]

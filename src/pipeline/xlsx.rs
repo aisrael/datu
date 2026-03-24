@@ -34,7 +34,7 @@ pub struct WriteXlsxStep {
 pub struct WriteXlsxResult {}
 
 /// Write record batches from a reader to an Excel (.xlsx) file.
-pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+pub fn write_record_batch_to_xlsx(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
     let schema = reader.schema();
@@ -68,7 +68,7 @@ impl Step for WriteXlsxStep {
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get()?;
-        write_record_batches(&self.args.path, &mut *reader)?;
+        write_record_batch_to_xlsx(&self.args.path, &mut *reader)?;
         Ok(WriteXlsxResult {})
     }
 }

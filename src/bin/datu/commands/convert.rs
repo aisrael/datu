@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
+use datu::pipeline::Pipeline;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
@@ -137,7 +138,12 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     }
 
     let result: Result<(), datu::Error> = match builder.build() {
-        Ok(mut pipeline) => pipeline.execute(),
+        Ok(mut built) => match &mut built {
+            Pipeline::Conversion(pipeline) => pipeline.execute(),
+            Pipeline::Display(_) => Err(datu::Error::GenericError(
+                "internal error: expected conversion pipeline for convert".to_string(),
+            )),
+        },
         Err(e) => Err(e),
     };
 

@@ -194,7 +194,7 @@ impl DisplayPipeline for RecordBatchDisplayPipeline {
 mod tests {
     use super::*;
     use crate::pipeline::ColumnSpec;
-    use crate::pipeline::ReadArgs;
+    use crate::pipeline::LegacyReadArgs;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::parquet::ReadParquetStep;
@@ -231,7 +231,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_select_columns() {
         // Use the parquet reader to inspect the file and verify column selection
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
             offset: None,

@@ -111,7 +111,7 @@ mod tests {
     use arrow::array::RecordBatchReader;
 
     use super::*;
-    use crate::pipeline::ReadArgs;
+    use crate::pipeline::LegacyReadArgs;
     use crate::pipeline::Source;
     use crate::pipeline::parquet::read_parquet;
 
@@ -128,7 +128,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_csv_writer() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
             offset: None,

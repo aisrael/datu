@@ -7,7 +7,7 @@ use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::ReadArgs;
+use crate::pipeline::LegacyReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
@@ -17,7 +17,7 @@ use crate::pipeline::batch_write::write_record_batches_with_sink;
 
 /// Pipeline step that reads an ORC file and produces a record batch reader.
 pub struct ReadOrcStep {
-    pub args: ReadArgs,
+    pub args: LegacyReadArgs,
 }
 
 impl Source<dyn RecordBatchReader + 'static> for ReadOrcStep {
@@ -30,7 +30,7 @@ impl Source<dyn RecordBatchReader + 'static> for ReadOrcStep {
 ///
 /// When both offset and limit are specified, uses ORC row selection for efficient
 /// seeking—only the requested rows are decoded, avoiding full file scans.
-pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
+pub fn read_orc(args: &LegacyReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let builder = ArrowReaderBuilder::try_new(file).map_err(Error::OrcError)?;
 
@@ -46,7 +46,7 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
 
 /// Read an entire ORC file into record batches (no row selection).
 pub(crate) fn read_orc_all_batches(path: &str) -> Result<Vec<RecordBatch>> {
-    let args = ReadArgs {
+    let args = LegacyReadArgs {
         path: path.to_string(),
         limit: None,
         offset: None,

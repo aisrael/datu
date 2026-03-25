@@ -472,7 +472,7 @@ mod tests {
         );
         assert!(output_path_buf.exists(), "Output file was not created");
 
-        let read_args = datu::pipeline::ReadArgs {
+        let read_args = datu::pipeline::LegacyReadArgs {
             path: output_path,
             limit: None,
             offset: None,

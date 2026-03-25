@@ -36,14 +36,27 @@ use crate::pipeline::tail_batches;
 use crate::pipeline::xlsx;
 
 /// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
-#[derive(Debug)]
 pub struct DataFrameSource {
+    session_context: SessionContext,
     df: Option<datafusion::dataframe::DataFrame>,
 }
 
+impl std::fmt::Debug for DataFrameSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DataFrameSource {{ session_context: {:p}, df: {:?} }}",
+            &self.session_context as *const SessionContext, self.df
+        )
+    }
+}
+
 impl DataFrameSource {
-    pub fn new(df: datafusion::dataframe::DataFrame) -> Self {
-        Self { df: Some(df) }
+    pub fn new(session_context: SessionContext, df: datafusion::dataframe::DataFrame) -> Self {
+        Self {
+            session_context,
+            df: Some(df),
+        }
     }
 }
 
@@ -227,7 +240,7 @@ impl DataFrameReader {
                 .map_err(|e| Error::GenericError(e.to_string()))?;
         }
 
-        Ok(DataFrameSource::new(df))
+        Ok(DataFrameSource::new(ctx, df))
     }
 }
 
@@ -394,12 +407,12 @@ impl DisplayPipeline for DataFrameDisplayPipeline {
                     FileType::Parquet => {
                         let total_rows =
                             crate::get_total_rows_result(&input_path, FileType::Parquet)?;
-                        let source = DataFrameSource::new(df);
+                        let source = DataFrameSource::new(ctx, df);
                         let batch_reader = DataFrameToBatchReader::try_new(source).await?;
                         sample_from_reader(Box::new(batch_reader), total_rows, n)
                     }
                     FileType::Avro | FileType::Csv | FileType::Json => {
-                        let source = DataFrameSource::new(df);
+                        let source = DataFrameSource::new(ctx, df);
                         let batch_reader = DataFrameToBatchReader::try_new(source).await?;
                         reservoir_sample_from_reader(Box::new(batch_reader), n)
                     }
@@ -714,13 +727,14 @@ mod tests {
             DataFrameReader::new("fixtures/table.parquet", FileType::Xlsx, None, None, None)
                 .execute(())
                 .await;
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Only Parquet, Avro, CSV, JSON, and ORC")
-        );
+        match result {
+            Ok(_) => panic!("Expected error, got Ok"),
+            Err(error) => assert!(
+                error
+                    .to_string()
+                    .contains("Only Parquet, Avro, CSV, JSON, and ORC")
+            ),
+        }
     }
 
     // --- write_dataframe tests ---

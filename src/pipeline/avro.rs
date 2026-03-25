@@ -14,7 +14,7 @@ use async_trait::async_trait;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::ReadArgs;
+use crate::pipeline::LegacyReadArgs;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Source;
 use crate::pipeline::Step;
@@ -89,7 +89,7 @@ impl Iterator for AvroCompatRecordBatchReader<'_> {
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
 pub struct ReadAvroStep {
-    pub args: ReadArgs,
+    pub args: LegacyReadArgs,
 }
 
 impl Source<dyn RecordBatchReader + 'static> for ReadAvroStep {
@@ -184,7 +184,7 @@ impl Iterator for LimitOffsetRecordBatchReader {
 }
 
 /// Read an Avro file and return a RecordBatchReader.
-pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
+pub fn read_avro(args: &LegacyReadArgs) -> Result<impl RecordBatchReader + 'static> {
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let reader = BufReader::new(file);
     let arrow_reader = ReaderBuilder::new()
@@ -278,7 +278,7 @@ mod tests {
 
     use super::*;
     use crate::Error;
-    use crate::pipeline::ReadArgs;
+    use crate::pipeline::LegacyReadArgs;
     use crate::pipeline::VecRecordBatchReader;
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_read_avro() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/userdata5.avro".to_string(),
             limit: None,
             offset: None,
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_limit() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/userdata5.avro".to_string(),
             limit: Some(1),
             offset: None,
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/userdata5.avro".to_string(),
             limit: None,
             offset: Some(1),
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset_and_limit() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/userdata5.avro".to_string(),
             limit: Some(5),
             offset: Some(10),

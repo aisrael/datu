@@ -7,6 +7,7 @@ pub mod dataframe;
 
 pub use dataframe::DataFrameDisplayPipeline;
 pub use dataframe::DataFramePipeline;
+pub use dataframe::DataFrameSource;
 pub use dataframe::DataFrameToBatchReader;
 pub use record_batch::RecordBatchDisplayPipeline;
 pub mod datasource;
@@ -44,7 +45,7 @@ use crate::pipeline::csv::ReadCsvStep;
 use crate::pipeline::dataframe::DataFrameReader;
 use crate::pipeline::orc::ReadOrcStep;
 use crate::pipeline::parquet::ReadParquetStep;
-pub use crate::pipeline::read::ReadArgs;
+pub use crate::pipeline::read::LegacyReadArgs;
 pub use crate::pipeline::write::WriteArgs;
 pub use crate::pipeline::write::WriteJsonArgs;
 pub use crate::pipeline::write::WriteYamlArgs;
@@ -563,7 +564,7 @@ pub fn build_reader(
 ) -> Result<RecordBatchReaderSource> {
     let reader: RecordBatchReaderSource = match file_type {
         FileType::Parquet => Box::new(ReadParquetStep {
-            args: ReadArgs {
+            args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
                 offset,
@@ -571,7 +572,7 @@ pub fn build_reader(
             },
         }),
         FileType::Avro => Box::new(ReadAvroStep {
-            args: ReadArgs {
+            args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
                 offset,
@@ -584,7 +585,7 @@ pub fn build_reader(
             limit,
         }),
         FileType::Orc => Box::new(ReadOrcStep {
-            args: ReadArgs {
+            args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
                 offset,
@@ -790,7 +791,7 @@ pub async fn write_batches(
     let ctx = datafusion::execution::context::SessionContext::new();
     let df = ctx.read_batches(batches).map_err(|e| eyre::eyre!("{e}"))?;
 
-    let source = crate::pipeline::dataframe::DataFrameSource::new(df);
+    let source = crate::pipeline::dataframe::DataFrameSource::new(ctx, df);
     let writer_step = crate::pipeline::dataframe::DataFrameWriter::new(
         output_path,
         output_file_type,

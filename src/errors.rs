@@ -33,6 +33,8 @@ pub enum Error {
     PipelinePlanningError(#[from] PipelinePlanningError),
     #[error(transparent)]
     PipelineExecutionError(#[from] PipelineExecutionError),
+    #[error(transparent)]
+    DatafusionError(#[from] datafusion::error::DataFusionError),
 }
 
 #[derive(Error, Debug)]
@@ -55,4 +57,6 @@ pub enum PipelineExecutionError {
     UnsupportedInputFileType(FileType),
     #[error("Datafusion-native pipeline does not support output file type: {0}")]
     UnsupportedOutputFileType(FileType),
+    #[error("DataFrame already taken")]
+    DataFrameAlreadyTaken,
 }

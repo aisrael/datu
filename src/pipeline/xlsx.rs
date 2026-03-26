@@ -22,7 +22,7 @@ use crate::Error;
 use crate::Result;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
-use crate::pipeline::WriteArgs;
+use crate::pipeline::write::WriteArgs;
 
 /// Pipeline step that writes record batches to an Excel (.xlsx) file.
 pub struct WriteXlsxStep {
@@ -67,7 +67,7 @@ impl Step for WriteXlsxStep {
     type Output = WriteXlsxResult;
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
-        let mut reader = self.source.get()?;
+        let mut reader = self.source.get().await?;
         write_record_batch_to_xlsx(&self.args.path, &mut *reader)?;
         Ok(WriteXlsxResult {})
     }

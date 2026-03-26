@@ -4,20 +4,14 @@
 //! and `schema_fields_from_arrow` for schema from in-memory batches (used by REPL).
 
 use std::fs::File;
-use std::io::BufReader;
-use std::sync::Arc;
 
 use arrow::array::RecordBatchReader;
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow_avro::reader::ReaderBuilder;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use eyre::Result;
 use eyre::bail;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
-use parquet::basic::ConvertedType;
-use parquet::file::metadata::ParquetMetaDataReader;
-use parquet::schema::types::ColumnDescriptor;
 use saphyr::Scalar;
 use saphyr::Yaml;
 use saphyr::YamlEmitter;
@@ -92,55 +86,6 @@ impl From<&SchemaField> for SchemaFieldFull {
     }
 }
 
-/// Internal representation of a schema column from Parquet metadata.
-struct SchemaOutput {
-    column_name: String,
-    data_type: String,
-    converted_type: Option<ConvertedType>,
-    nullable: bool,
-}
-
-impl SchemaOutput {
-    fn to_schema_field(&self) -> SchemaField {
-        SchemaField {
-            name: self.column_name.clone(),
-            data_type: self.data_type.clone(),
-            converted_type: self.converted_type.as_ref().map(|ct| format!("{ct:?}")),
-            nullable: self.nullable,
-        }
-    }
-}
-
-fn column_to_schema_output(column: &Arc<ColumnDescriptor>) -> SchemaOutput {
-    let path = column.path();
-    let physical_type = column.physical_type();
-    let logical_type = column.logical_type_ref();
-    let converted_type = column.converted_type();
-
-    let column_name = path.parts().join(".");
-
-    let data_type = if let Some(logical) = logical_type {
-        format!("{:?}", logical)
-    } else {
-        format!("{}", physical_type)
-    };
-
-    let converted_type = if matches!(converted_type, ConvertedType::NONE) {
-        None
-    } else {
-        Some(converted_type)
-    };
-
-    let nullable = column.max_def_level() > 0;
-
-    SchemaOutput {
-        column_name,
-        data_type,
-        converted_type,
-        nullable,
-    }
-}
-
 /// Extracts schema fields from an Arrow schema (e.g. from in-memory record batches).
 /// Used by the REPL when displaying schema of loaded data.
 pub fn schema_fields_from_arrow(schema: &ArrowSchema) -> Vec<SchemaField> {
@@ -164,36 +109,12 @@ pub fn get_schema_fields(
     csv_has_header: Option<bool>,
 ) -> Result<Vec<SchemaField>> {
     match file_type {
-        FileType::Parquet => get_schema_fields_parquet(path),
-        FileType::Avro => get_schema_fields_avro(path),
+        FileType::Parquet => crate::pipeline::parquet::get_schema_fields_parquet(path),
+        FileType::Avro => crate::pipeline::avro::get_schema_fields_avro(path),
         FileType::Csv => get_schema_fields_csv(path, csv_has_header.unwrap_or(true)),
         FileType::Orc => get_schema_fields_orc(path),
         _ => bail!("schema is only supported for Parquet, Avro, CSV, and ORC files"),
     }
-}
-
-fn get_schema_fields_parquet(path: &str) -> Result<Vec<SchemaField>> {
-    let file = File::open(path)?;
-    let metadata = ParquetMetaDataReader::new().parse_and_finish(&file)?;
-
-    let file_metadata = metadata.file_metadata();
-    let schema_descr = file_metadata.schema_descr();
-
-    let columns: Vec<SchemaOutput> = schema_descr
-        .columns()
-        .iter()
-        .map(column_to_schema_output)
-        .collect();
-
-    Ok(columns.iter().map(SchemaOutput::to_schema_field).collect())
-}
-
-fn get_schema_fields_avro(path: &str) -> Result<Vec<SchemaField>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let arrow_reader = ReaderBuilder::new().build(reader)?;
-    let schema = arrow_reader.schema();
-    Ok(schema_fields_from_arrow(schema.as_ref()))
 }
 
 fn get_schema_fields_csv(path: &str, has_header: bool) -> Result<Vec<SchemaField>> {

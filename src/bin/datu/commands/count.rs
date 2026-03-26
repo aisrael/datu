@@ -8,7 +8,7 @@ use datu::resolve_file_type;
 /// streams batches for Avro and CSV.
 pub async fn count(args: CountArgs) -> eyre::Result<()> {
     let file_type = resolve_file_type(args.input, &args.input_path)?;
-    let total = count_rows(&args.input_path, file_type, args.input_headers)?;
+    let total = count_rows(&args.input_path, file_type, args.input_headers).await?;
     println!("{total}");
     Ok(())
 }

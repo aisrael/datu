@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
-use datu::pipeline::Pipeline;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
@@ -138,12 +137,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     }
 
     let result: Result<(), datu::Error> = match builder.build() {
-        Ok(mut built) => match &mut built {
-            Pipeline::Conversion(pipeline) => pipeline.execute(),
-            Pipeline::Display(_) => Err(datu::Error::GenericError(
-                "internal error: expected conversion pipeline for convert".to_string(),
-            )),
-        },
+        Ok(mut built) => built.execute(),
         Err(e) => Err(e),
     };
 
@@ -168,6 +162,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
 mod tests {
     use arrow::array::RecordBatchReader;
     use datu::pipeline::avro;
+    use datu::pipeline::read::LegacyReadArgs;
 
     use super::*;
 
@@ -472,7 +467,7 @@ mod tests {
         );
         assert!(output_path_buf.exists(), "Output file was not created");
 
-        let read_args = datu::pipeline::LegacyReadArgs {
+        let read_args = LegacyReadArgs {
             path: output_path,
             limit: None,
             offset: None,

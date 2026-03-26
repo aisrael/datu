@@ -33,6 +33,7 @@ pub struct ReadArgs {
     pub csv_has_header: Option<bool>,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ReadResult {
     DataFrame(DataFrameSource),
     OrcReaderBuilder(ArrowReaderBuilder<File>),
@@ -54,11 +55,9 @@ pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
             read_to_dataframe(&args.path, args.file_type, args.csv_has_header).await
         }
         FileType::Orc => read_to_record_batches(args),
-        FileType::Xlsx | FileType::Yaml => {
-            return Err(Error::PipelinePlanningError(
-                PipelinePlanningError::UnsupportedInputFileType(args.file_type.to_string()),
-            ));
-        }
+        FileType::Xlsx | FileType::Yaml => Err(Error::PipelinePlanningError(
+            PipelinePlanningError::UnsupportedInputFileType(args.file_type.to_string()),
+        )),
     }
 }
 
@@ -73,24 +72,24 @@ pub async fn read_to_dataframe(
             let df = ctx
                 .read_parquet(input_path, ParquetReadOptions::default())
                 .await?;
-            DataFrameSource::new(ctx, df)
+            DataFrameSource::new(df)
         }
         FileType::Avro => {
             let df = ctx
                 .read_avro(input_path, AvroReadOptions::default())
                 .await?;
-            DataFrameSource::new(ctx, df)
+            DataFrameSource::new(df)
         }
         FileType::Json => {
             let df = ctx
                 .read_json(input_path, NdJsonReadOptions::default())
                 .await?;
-            DataFrameSource::new(ctx, df)
+            DataFrameSource::new(df)
         }
         FileType::Csv => {
             let csv_options = CsvReadOptions::new().has_header(csv_has_header.unwrap_or(true));
             let df = ctx.read_csv(input_path, csv_options).await?;
-            DataFrameSource::new(ctx, df)
+            DataFrameSource::new(df)
         }
         _ => {
             return Err(Error::PipelineExecutionError(
@@ -108,18 +107,16 @@ pub fn read_to_record_batches(args: &ReadArgs) -> Result<ReadResult> {
             let builder = ArrowReaderBuilder::try_new(file).map_err(Error::OrcError)?;
             Ok(ReadResult::OrcReaderBuilder(builder))
         }
-        _ => {
-            return Err(Error::PipelineExecutionError(
-                PipelineExecutionError::UnsupportedInputFileType(args.file_type),
-            ));
-        }
+        _ => Err(Error::PipelineExecutionError(
+            PipelineExecutionError::UnsupportedInputFileType(args.file_type),
+        )),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::Source as _;
+    use crate::pipeline::Producer as _;
 
     #[tokio::test]
     async fn test_read_parquet() {
@@ -135,7 +132,7 @@ mod tests {
         let ReadResult::DataFrame(mut source) = result else {
             panic!("expected DataFrame");
         };
-        source.get().expect("expected DataFrame");
+        source.get().await.expect("expected DataFrame");
     }
 
     #[tokio::test]
@@ -152,7 +149,7 @@ mod tests {
         let ReadResult::DataFrame(mut source) = result else {
             panic!("expected DataFrame");
         };
-        assert!(source.get().is_ok());
+        assert!(source.get().await.is_ok());
     }
 
     #[tokio::test]
@@ -169,7 +166,7 @@ mod tests {
         let ReadResult::DataFrame(mut source) = result else {
             panic!("expected DataFrame");
         };
-        assert!(source.get().is_ok());
+        assert!(source.get().await.is_ok());
     }
 
     #[tokio::test]
@@ -186,7 +183,7 @@ mod tests {
         let ReadResult::DataFrame(mut source) = result else {
             panic!("expected DataFrame");
         };
-        assert!(source.get().is_ok());
+        assert!(source.get().await.is_ok());
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
 
@@ -11,16 +12,81 @@ use arrow::record_batch::RecordBatch;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
 use async_trait::async_trait;
+use datafusion::prelude::AvroReadOptions;
+use datafusion::prelude::DataFrame;
+use datafusion::prelude::SessionContext;
+use eyre::Result as EyreResult;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::LegacyReadArgs;
-use crate::pipeline::RecordBatchReaderSource;
-use crate::pipeline::Source;
+use crate::pipeline::DataFrameSource;
+use crate::pipeline::Producer;
 use crate::pipeline::Step;
-use crate::pipeline::WriteArgs;
-use crate::pipeline::batch_write::BatchWriteSink;
-use crate::pipeline::batch_write::write_record_batches_with_sink;
+use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
+use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::read::ReadArgs;
+use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::write_record_batches_with_sink;
+use crate::pipeline::schema::SchemaField;
+use crate::pipeline::schema::schema_fields_from_arrow;
+use crate::pipeline::write::WriteArgs;
+
+pub struct DataframeAvroReader {
+    pub(crate) args: ReadArgs,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeAvroReader {
+    type Input = ();
+    type Output = DataFrameSource;
+
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+        let ctx = SessionContext::new();
+        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
+        Ok(DataFrameSource::new(df))
+    }
+}
+
+#[async_trait(?Send)]
+impl Producer<DataFrame> for DataframeAvroReader {
+    async fn get(&mut self) -> Result<Box<DataFrame>> {
+        let ctx = SessionContext::new();
+        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
+        Ok(Box::new(df))
+    }
+}
+
+pub struct DataframeAvroWriter {
+    pub(crate) args: WriteArgs,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeAvroWriter {
+    type Input = Box<dyn Producer<DataFrame>>;
+    type Output = ();
+
+    async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+        let df = input.get().await?;
+        let source = DataFrameSource::new(*df);
+        let mut producer = DataframeToRecordBatchProducer::new(source);
+        let mut reader = producer.get().await?;
+        write_record_batches(self.args.path.as_str(), &mut *reader)
+    }
+}
+
+async fn read_avro_to_dataframe(ctx: &SessionContext, path: &str) -> Result<DataFrame> {
+    let options = AvroReadOptions::default();
+    let df = ctx.read_avro(path, options).await?;
+    Ok(df)
+}
+
+pub fn get_schema_fields_avro(path: &str) -> EyreResult<Vec<SchemaField>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let arrow_reader = ReaderBuilder::new().build(reader)?;
+    let schema = arrow_reader.schema();
+    Ok(schema_fields_from_arrow(schema.as_ref()))
+}
 
 /// Returns true if the schema has any Int16 field (avro writer does not support Int16).
 fn schema_has_int16(schema: &Schema) -> bool {
@@ -88,12 +154,13 @@ impl Iterator for AvroCompatRecordBatchReader<'_> {
 }
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
-pub struct ReadAvroStep {
+pub struct RecordBatchAvroReader {
     pub args: LegacyReadArgs,
 }
 
-impl Source<dyn RecordBatchReader + 'static> for ReadAvroStep {
-    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+#[async_trait(?Send)]
+impl Producer<dyn RecordBatchReader + 'static> for RecordBatchAvroReader {
+    async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         read_avro(&self.args).map(|reader| Box::new(reader) as Box<dyn RecordBatchReader + 'static>)
     }
 }
@@ -207,9 +274,8 @@ pub fn read_avro(args: &LegacyReadArgs) -> Result<impl RecordBatchReader + 'stat
 }
 
 /// Pipeline step that writes record batches to an Avro file.
-pub struct WriteAvroStep {
+pub struct RecordBatchAvroWriter {
     pub args: WriteArgs,
-    pub source: RecordBatchReaderSource,
 }
 
 /// Result of successfully writing an Avro file.
@@ -255,12 +321,12 @@ impl BatchWriteSink for AvroSink {
 }
 
 #[async_trait(?Send)]
-impl Step for WriteAvroStep {
-    type Input = ();
+impl Step for RecordBatchAvroWriter {
+    type Input = Box<dyn Producer<dyn RecordBatchReader + 'static>>;
     type Output = WriteAvroResult;
 
-    async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
-        let mut reader = self.source.get()?;
+    async fn execute(mut self, mut input: Self::Input) -> Result<Self::Output> {
+        let mut reader = input.get().await?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteAvroResult {})
     }
@@ -275,11 +341,63 @@ mod tests {
     use arrow::datatypes::DataType;
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema;
+    use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::Error;
-    use crate::pipeline::LegacyReadArgs;
+    use crate::FileType;
     use crate::pipeline::VecRecordBatchReader;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_avro_step_dataframe() {
+        let args = ReadArgs {
+            path: "fixtures/userdata5.avro".to_string(),
+            file_type: FileType::Avro,
+            csv_has_header: None,
+        };
+        let mut step = DataframeAvroReader { args };
+        let df = step.get().await.expect("Failed to read Avro file");
+        assert_eq!(
+            df.count().await.expect("Failed to count rows"),
+            1000,
+            "Expected 1000 rows"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_and_write_avro_steps() {
+        let read_args = ReadArgs {
+            path: "fixtures/userdata5.avro".to_string(),
+            file_type: FileType::Avro,
+            csv_has_header: None,
+        };
+        let read_step = DataframeAvroReader { args: read_args };
+
+        let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
+        let args = WriteArgs {
+            path: tempfile
+                .path()
+                .to_str()
+                .expect("Failed to get path")
+                .to_string(),
+            file_type: FileType::Avro,
+            sparse: None,
+            pretty: None,
+        };
+        let step = DataframeAvroWriter { args };
+        step.execute(Box::new(read_step))
+            .await
+            .expect("Failed to write Avro file");
+        assert!(tempfile.path().exists());
+        let schema = get_schema_fields_avro(tempfile.path().to_str().expect("Failed to get path"))
+            .expect("Failed to get schema fields");
+        assert_eq!(schema.len(), 13, "Expected 13 columns");
+        assert_eq!(
+            schema[0].name, "registration_dttm",
+            "Expected first column name is 'registration_dttm'"
+        );
+        assert_eq!(schema[0].data_type, "Utf8", "Expected Utf8 data type");
+        assert!(!schema[0].nullable, "Expected non-nullable column");
+    }
 
     #[test]
     fn test_write_avro_int16_upcast_to_int32() {

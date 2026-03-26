@@ -1,16 +1,39 @@
 //! The `pipeline` module is the core of the datu crate.
 
 pub mod avro;
-pub mod batch_write;
 pub mod csv;
 pub mod dataframe;
 
-pub use dataframe::DataFrameDisplayPipeline;
+pub use avro::DataframeAvroReader;
+pub use avro::DataframeAvroWriter;
+pub use avro::RecordBatchAvroWriter;
+pub use csv::DataframeCsvReader;
+pub use csv::DataframeCsvWriter;
+pub use csv::RecordBatchCsvWriter;
 pub use dataframe::DataFramePipeline;
+pub use dataframe::DataFrameSink;
 pub use dataframe::DataFrameSource;
-pub use dataframe::DataFrameToBatchReader;
-pub use record_batch::RecordBatchDisplayPipeline;
-pub mod datasource;
+pub use dataframe::DataframeHead;
+pub use dataframe::DataframeSample;
+pub use dataframe::DataframeSelect;
+pub use dataframe::DataframeTail;
+pub use dataframe::DataframeToRecordBatch;
+pub use dataframe::DataframeToRecordBatchProducer;
+pub use json::DataframeJsonReader;
+pub use json::DataframeJsonWriter;
+pub use json::RecordBatchJsonWriter;
+pub use orc::OrcRecordBatchReader;
+pub use orc::RecordBatchOrcWriter;
+pub use parquet::DataframeParquetReader;
+pub use parquet::DataframeParquetWriter;
+pub use parquet::RecordBatchParquetWriter;
+pub use record_batch::RecordBatchHead;
+pub use record_batch::RecordBatchPipeline;
+pub use record_batch::RecordBatchSample;
+pub use record_batch::RecordBatchSelect;
+pub use record_batch::RecordBatchSink;
+pub use record_batch::RecordBatchTail;
+
 pub mod display;
 pub mod json;
 pub mod orc;
@@ -23,7 +46,6 @@ pub mod write;
 pub mod xlsx;
 pub mod yaml;
 
-use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -40,15 +62,25 @@ use crate::FileType;
 use crate::Result;
 use crate::cli::DisplayOutputFormat;
 use crate::errors::PipelinePlanningError;
-use crate::pipeline::avro::ReadAvroStep;
-use crate::pipeline::csv::ReadCsvStep;
-use crate::pipeline::dataframe::DataFrameReader;
-use crate::pipeline::orc::ReadOrcStep;
-use crate::pipeline::parquet::ReadParquetStep;
-pub use crate::pipeline::read::LegacyReadArgs;
-pub use crate::pipeline::write::WriteArgs;
-pub use crate::pipeline::write::WriteJsonArgs;
-pub use crate::pipeline::write::WriteYamlArgs;
+use crate::get_total_rows_result;
+use crate::pipeline;
+use crate::pipeline::avro::RecordBatchAvroReader;
+use crate::pipeline::csv::ReadCsvStepRecordBatch;
+use crate::pipeline::dataframe::LegacyDataFrameReader;
+use crate::pipeline::parquet::RecordBatchParquetReader;
+use crate::pipeline::read::LegacyReadArgs;
+use crate::resolve_file_type;
+
+fn slice_from_head_tail_sample(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+) -> Option<DisplaySlice> {
+    sample
+        .map(DisplaySlice::Sample)
+        .or_else(|| tail.map(DisplaySlice::Tail))
+        .or_else(|| head.map(DisplaySlice::Head))
+}
 
 pub struct PipelineBuilder {
     read: Option<String>,
@@ -192,7 +224,7 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn build(&mut self) -> crate::Result<Pipeline> {
+    pub fn build(&mut self) -> Result<Pipeline> {
         let input_path = self.read.as_ref().ok_or_else(|| {
             Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
                 "read(path)".to_string(),
@@ -220,19 +252,18 @@ impl PipelineBuilder {
         }
 
         if let Some(output_path) = &self.write {
-            if self.sample.is_some() {
+            let slice_count = usize::from(self.head.is_some())
+                + usize::from(self.tail.is_some())
+                + usize::from(self.sample.is_some());
+            if slice_count > 1 {
                 return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedStage("sample(n)".to_string()),
+                    PipelinePlanningError::UnsupportedStage(
+                        "only one of head(n), tail(n), or sample(n) may be set".to_string(),
+                    ),
                 ));
             }
-            if self.tail.is_some() {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedStage("tail(n)".to_string()),
-                ));
-            }
-            let input_file_type = crate::resolve_file_type(self.input_type_override, input_path)?;
-            let output_file_type =
-                crate::resolve_file_type(self.output_type_override, output_path)?;
+            let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+            let output_file_type = resolve_file_type(self.output_type_override, output_path)?;
 
             let is_input_native = matches!(
                 input_file_type,
@@ -260,18 +291,37 @@ impl PipelineBuilder {
                 ));
             }
 
-            Ok(Pipeline::Conversion(Box::new(DataFramePipeline {
-                input_path: input_path.to_string(),
-                input_file_type,
-                select,
-                head: self.head,
-                output_path: output_path.to_string(),
-                output_file_type,
-                csv_has_header: self.csv_has_header,
-                sparse: self.sparse,
-                json_pretty: self.json_pretty,
-                progress: self.progress.clone(),
-            })))
+            let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
+            if input_file_type == FileType::Orc {
+                Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+                    input_path: input_path.to_string(),
+                    input_file_type,
+                    select,
+                    slice,
+                    sparse: self.sparse,
+                    sink: RecordBatchSink::Write {
+                        output_path: output_path.to_string(),
+                        output_file_type,
+                        json_pretty: self.json_pretty,
+                        progress: self.progress.clone(),
+                    },
+                })))
+            } else {
+                Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+                    input_path: input_path.to_string(),
+                    input_file_type,
+                    select,
+                    slice,
+                    csv_has_header: self.csv_has_header,
+                    sparse: self.sparse,
+                    sink: DataFrameSink::Write {
+                        output_path: output_path.to_string(),
+                        output_file_type,
+                        json_pretty: self.json_pretty,
+                        progress: self.progress.clone(),
+                    },
+                })))
+            }
         } else {
             let stage_count = usize::from(self.head.is_some())
                 + usize::from(self.tail.is_some())
@@ -283,20 +333,14 @@ impl PipelineBuilder {
                     ),
                 ));
             }
-            let slice = if let Some(sample_n) = self.sample {
-                DisplaySlice::Sample(sample_n)
-            } else if let Some(tail_n) = self.tail {
-                DisplaySlice::Tail(tail_n)
-            } else if let Some(head_n) = self.head {
-                DisplaySlice::Head(head_n)
-            } else {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::MissingRequiredStage(
+            let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample).ok_or_else(
+                || {
+                    Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
                         "head(n), tail(n), or sample(n)".to_string(),
-                    ),
-                ));
-            };
-            let input_file_type = crate::resolve_file_type(self.input_type_override, input_path)?;
+                    ))
+                },
+            )?;
+            let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
             let is_display_input = matches!(
                 input_file_type,
                 FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
@@ -316,49 +360,50 @@ impl PipelineBuilder {
             let csv_has_header = self.csv_has_header;
             let sparse = self.sparse;
 
-            let display: Box<dyn DisplayPipeline + 'static> = if input_file_type == FileType::Orc {
-                Box::new(RecordBatchDisplayPipeline {
+            if input_file_type == FileType::Orc {
+                Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
                     input_path,
                     input_file_type,
                     select,
-                    slice,
-                    csv_has_header,
-                    output_format,
+                    slice: Some(slice),
                     sparse,
-                    csv_stdout_headers,
-                })
+                    sink: RecordBatchSink::Display {
+                        output_format,
+                        csv_stdout_headers,
+                    },
+                })))
             } else {
-                Box::new(DataFrameDisplayPipeline {
+                Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
                     input_path,
                     input_file_type,
                     select,
-                    slice,
+                    slice: Some(slice),
                     csv_has_header,
-                    output_format,
                     sparse,
-                    csv_stdout_headers,
-                })
-            };
-
-            Ok(Pipeline::Display(display))
+                    sink: DataFrameSink::Display {
+                        output_format,
+                        csv_stdout_headers,
+                    },
+                })))
+            }
         }
     }
 }
 
-/// Result of [`PipelineBuilder::build`]: either console display or file conversion.
+/// Result of [`PipelineBuilder::build`]: DataFusion path vs ORC record-batch path (see `PIPELINE.mermaid`).
 pub enum Pipeline {
-    Display(Box<dyn DisplayPipeline + 'static>),
-    Conversion(Box<dyn ConversionPipeline + 'static>),
+    DataFrame(Box<DataFramePipeline>),
+    RecordBatch(Box<RecordBatchPipeline>),
 }
 
-/// Pipeline that writes results to the console (stdout).
-pub trait DisplayPipeline: Any {
-    fn execute(&mut self) -> crate::Result<()>;
-}
-
-/// Pipeline that writes results to a file.
-pub trait ConversionPipeline: Any {
-    fn execute(&mut self) -> crate::Result<()>;
+impl Pipeline {
+    /// Runs read → select → head/tail/sample → sink (file or stdout).
+    pub fn execute(&mut self) -> Result<()> {
+        match self {
+            Pipeline::DataFrame(p) => p.execute(),
+            Pipeline::RecordBatch(p) => p.execute(),
+        }
+    }
 }
 
 /// Head, tail, or random sample of rows to send to stdout for a display pipeline.
@@ -394,19 +439,19 @@ macro_rules! select_spec {
 
 impl ColumnSpec {
     /// Resolves this spec against a schema, returning the actual column name.
-    pub fn resolve(&self, schema: &Schema) -> crate::Result<String> {
+    pub fn resolve(&self, schema: &Schema) -> Result<String> {
         match self {
             ColumnSpec::Exact(name) => schema
                 .index_of(name)
                 .map(|_| name.clone())
-                .map_err(|e| crate::Error::GenericError(format!("Column '{name}' not found: {e}"))),
+                .map_err(|e| Error::GenericError(format!("Column '{name}' not found: {e}"))),
             ColumnSpec::CaseInsensitive(name) => schema
                 .fields()
                 .iter()
                 .find(|f| f.name().eq_ignore_ascii_case(name))
                 .map(|f| f.name().clone())
                 .ok_or_else(|| {
-                    crate::Error::GenericError(format!(
+                    Error::GenericError(format!(
                         "Column '{name}' not found (case-insensitive match)"
                     ))
                 }),
@@ -449,8 +494,8 @@ impl SelectSpec {
     }
 
     /// Resolves all column specs against `schema`, returning actual column names in order.
-    pub fn resolve_names(&self, schema: &Schema) -> crate::Result<Vec<String>> {
-        crate::pipeline::select::resolve_column_specs(schema, &self.columns)
+    pub fn resolve_names(&self, schema: &Schema) -> Result<Vec<String>> {
+        pipeline::select::resolve_column_specs(schema, &self.columns)
     }
 }
 
@@ -465,14 +510,15 @@ pub trait Step {
     async fn execute(self, input: Self::Input) -> Result<Self::Output>;
 }
 
-/// A source that yields a value of type `T`.
-pub trait Source<T: ?Sized> {
+/// A producer produces a value of type `T`.
+#[async_trait(?Send)]
+pub trait Producer<T: ?Sized> {
     /// Produces the next value from this source; consumes the source on first call.
-    fn get(&mut self) -> Result<Box<T>>;
+    async fn get(&mut self) -> Result<Box<T>>;
 }
 
 /// Type alias for a boxed source of `RecordBatchReader`.
-pub type RecordBatchReaderSource = Box<dyn Source<dyn RecordBatchReader + 'static>>;
+pub type RecordBatchReaderSource = Box<dyn Producer<dyn RecordBatchReader + 'static>>;
 
 /// A RecordBatchReader that yields batches from a Vec.
 pub struct VecRecordBatchReader {
@@ -546,10 +592,11 @@ impl VecRecordBatchReaderSource {
     }
 }
 
-impl Source<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
-    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+#[async_trait(?Send)]
+impl Producer<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
+    async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         let batches = std::mem::take(&mut self.batches)
-            .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))?;
+            .ok_or_else(|| Error::GenericError("Reader already taken".to_string()))?;
         Ok(Box::new(VecRecordBatchReader { batches, index: 0 }))
     }
 }
@@ -563,7 +610,7 @@ pub fn build_reader(
     csv_has_header: Option<bool>,
 ) -> Result<RecordBatchReaderSource> {
     let reader: RecordBatchReaderSource = match file_type {
-        FileType::Parquet => Box::new(ReadParquetStep {
+        FileType::Parquet => Box::new(RecordBatchParquetReader {
             args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
@@ -571,7 +618,7 @@ pub fn build_reader(
                 csv_has_header: None,
             },
         }),
-        FileType::Avro => Box::new(ReadAvroStep {
+        FileType::Avro => Box::new(RecordBatchAvroReader {
             args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
@@ -579,12 +626,12 @@ pub fn build_reader(
                 csv_has_header: None,
             },
         }),
-        FileType::Csv => Box::new(ReadCsvStep {
+        FileType::Csv => Box::new(ReadCsvStepRecordBatch {
             path: path.to_string(),
             has_header: csv_has_header,
             limit,
         }),
-        FileType::Orc => Box::new(ReadOrcStep {
+        FileType::Orc => Box::new(OrcRecordBatchReader {
             args: LegacyReadArgs {
                 path: path.to_string(),
                 limit,
@@ -593,7 +640,7 @@ pub fn build_reader(
             },
         }),
         _ => {
-            return Err(crate::Error::GenericError(format!(
+            return Err(Error::GenericError(format!(
                 "Unsupported file type for reading: {file_type}"
             )));
         }
@@ -603,15 +650,19 @@ pub fn build_reader(
 
 /// Counts rows in a file. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
-pub fn count_rows(path: &str, file_type: FileType, csv_has_header: Option<bool>) -> Result<usize> {
+pub async fn count_rows(
+    path: &str,
+    file_type: FileType,
+    csv_has_header: Option<bool>,
+) -> Result<usize> {
     if matches!(file_type, FileType::Parquet | FileType::Orc) {
-        return crate::get_total_rows_result(path, file_type);
+        return get_total_rows_result(path, file_type);
     }
     let mut reader_step = build_reader(path, file_type, None, None, csv_has_header)?;
-    let reader = reader_step.get()?;
+    let reader = reader_step.get().await?;
     let mut total = 0usize;
     for batch in reader {
-        let batch = batch.map_err(crate::Error::from)?;
+        let batch = batch.map_err(Error::from)?;
         total += batch.num_rows();
     }
     Ok(total)
@@ -628,11 +679,11 @@ pub async fn read_to_batches(
 ) -> eyre::Result<Vec<arrow::record_batch::RecordBatch>> {
     let source = {
         let select = select.clone();
-        DataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
+        LegacyDataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
     }
     .execute(())
     .await?;
-    let reader = crate::pipeline::dataframe::DataFrameToBatchReader::try_new(source)
+    let reader = pipeline::dataframe::DataframeToRecordBatch::try_new(source)
         .await
         .map_err(|e| eyre::eyre!("{e}"))?;
     Ok(reader.into_batches())
@@ -791,8 +842,8 @@ pub async fn write_batches(
     let ctx = datafusion::execution::context::SessionContext::new();
     let df = ctx.read_batches(batches).map_err(|e| eyre::eyre!("{e}"))?;
 
-    let source = crate::pipeline::dataframe::DataFrameSource::new(ctx, df);
-    let writer_step = crate::pipeline::dataframe::DataFrameWriter::new(
+    let source = pipeline::dataframe::DataFrameSource::new(df);
+    let writer_step = pipeline::dataframe::DataFrameWriter::new(
         output_path,
         output_file_type,
         sparse,
@@ -806,10 +857,16 @@ pub async fn write_batches(
 mod tests {
     use arrow::datatypes::DataType;
     use arrow::datatypes::Field;
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::SelectSpec;
+    use crate::pipeline::avro::DataframeAvroWriter;
+    use crate::pipeline::avro::get_schema_fields_avro;
+    use crate::pipeline::parquet::DataframeParquetReader;
+    use crate::pipeline::read::ReadArgs;
+    use crate::pipeline::write::WriteArgs;
 
     #[test]
     fn test_pipeline_builder_read_select_write_parquet() {
@@ -819,16 +876,18 @@ mod tests {
             .select(&["one", "two"])
             .write("output.parquet");
         let built = builder.build().unwrap();
-        let Pipeline::Conversion(pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
-        let pipeline = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFramePipeline>()
-            .expect("pipeline is a DataFramePipeline");
-        assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(select_spec!("one", "two")), pipeline.select);
-        assert_eq!(FileType::Parquet, pipeline.output_file_type);
+        assert_eq!(FileType::Parquet, p.input_file_type);
+        assert_eq!(Some(select_spec!("one", "two")), p.select);
+        let DataFrameSink::Write {
+            output_file_type, ..
+        } = &p.sink
+        else {
+            panic!("expected write sink");
+        };
+        assert_eq!(FileType::Parquet, *output_file_type);
     }
 
     #[test]
@@ -840,16 +899,18 @@ mod tests {
             .write("output.csv");
 
         let built = builder.build().expect("Failed to build pipeline");
-        let Pipeline::Conversion(pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
-        let pipeline = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFramePipeline>()
-            .expect("pipeline is a DataFramePipeline");
-        assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(select_spec!("one", "two")), pipeline.select);
-        assert_eq!(FileType::Csv, pipeline.output_file_type);
+        assert_eq!(FileType::Parquet, p.input_file_type);
+        assert_eq!(Some(select_spec!("one", "two")), p.select);
+        let DataFrameSink::Write {
+            output_file_type, ..
+        } = &p.sink
+        else {
+            panic!("expected write sink");
+        };
+        assert_eq!(FileType::Csv, *output_file_type);
     }
 
     #[test]
@@ -860,16 +921,17 @@ mod tests {
             .select(&["col"])
             .write("output.csv");
         let built = builder.build().unwrap();
-        let Pipeline::Conversion(pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::RecordBatch(p) = built else {
+            panic!("expected RecordBatch pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
-        let pipeline = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFramePipeline>()
-            .expect("pipeline is a DataFramePipeline");
-        assert_eq!(FileType::Orc, pipeline.input_file_type);
-        assert_eq!(Some(select_spec!("col")), pipeline.select);
-        assert_eq!(FileType::Csv, pipeline.output_file_type);
+        assert_eq!(Some(select_spec!("col")), p.select);
+        let RecordBatchSink::Write {
+            output_file_type, ..
+        } = &p.sink
+        else {
+            panic!("expected write sink");
+        };
+        assert_eq!(FileType::Csv, *output_file_type);
     }
 
     #[test]
@@ -880,20 +942,22 @@ mod tests {
             .select(&["one"])
             .write("output.orc");
         let built = builder.build().unwrap();
-        let Pipeline::Conversion(pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFramePipeline>());
-        let pipeline = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFramePipeline>()
-            .expect("pipeline is a DataFramePipeline");
-        assert_eq!(FileType::Parquet, pipeline.input_file_type);
-        assert_eq!(Some(select_spec!("one")), pipeline.select);
-        assert_eq!(FileType::Orc, pipeline.output_file_type);
+        assert_eq!(FileType::Parquet, p.input_file_type);
+        assert_eq!(Some(select_spec!("one")), p.select);
+        let DataFrameSink::Write {
+            output_file_type, ..
+        } = &p.sink
+        else {
+            panic!("expected write sink");
+        };
+        assert_eq!(FileType::Orc, *output_file_type);
     }
 
     #[test]
-    fn test_dataframe_pipeline_execute_orc_to_csv() {
+    fn test_record_batch_pipeline_execute_orc_to_csv() {
         let temp = tempfile::tempdir().unwrap();
         let out = temp.path().join("out.csv");
         let mut builder = PipelineBuilder::new();
@@ -901,10 +965,10 @@ mod tests {
             .read("fixtures/userdata.orc")
             .write(out.to_str().expect("utf8 path"));
         let mut built = builder.build().expect("build pipeline");
-        let Pipeline::Conversion(ref mut pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::RecordBatch(ref mut p) = built else {
+            panic!("expected RecordBatch pipeline");
         };
-        pipeline.execute().expect("execute pipeline");
+        p.execute().expect("execute pipeline");
         assert!(out.is_file());
     }
 
@@ -918,10 +982,10 @@ mod tests {
             .select(&["id", "first_name"])
             .write(out.to_str().expect("utf8 path"));
         let mut built = builder.build().expect("build pipeline");
-        let Pipeline::Conversion(ref mut pipeline) = built else {
-            panic!("expected conversion pipeline");
+        let Pipeline::DataFrame(ref mut p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        pipeline.execute().expect("execute pipeline");
+        p.execute().expect("execute pipeline");
         assert!(out.is_file());
     }
 
@@ -930,16 +994,13 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").head(3);
         let built = builder.build().expect("build display pipeline");
-        let Pipeline::Display(pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFrameDisplayPipeline>());
-        let p = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFrameDisplayPipeline>()
-            .expect("DataFrameDisplayPipeline");
         assert_eq!(FileType::Parquet, p.input_file_type);
-        assert_eq!(p.slice, DisplaySlice::Head(3));
+        assert_eq!(p.slice, Some(DisplaySlice::Head(3)));
         assert!(p.select.is_none());
+        assert!(matches!(p.sink, DataFrameSink::Display { .. }));
     }
 
     #[test]
@@ -947,15 +1008,12 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/userdata.orc").head(3);
         let built = builder.build().expect("build display pipeline");
-        let Pipeline::Display(pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::RecordBatch(p) = built else {
+            panic!("expected RecordBatch pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<RecordBatchDisplayPipeline>());
-        let p = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<RecordBatchDisplayPipeline>()
-            .expect("RecordBatchDisplayPipeline");
         assert_eq!(FileType::Orc, p.input_file_type);
-        assert_eq!(p.slice, DisplaySlice::Head(3));
+        assert_eq!(p.slice, Some(DisplaySlice::Head(3)));
+        assert!(matches!(p.sink, RecordBatchSink::Display { .. }));
     }
 
     #[test]
@@ -963,15 +1021,11 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").sample(2);
         let built = builder.build().expect("build display pipeline");
-        let Pipeline::Display(pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<DataFrameDisplayPipeline>());
-        let p = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFrameDisplayPipeline>()
-            .expect("DataFrameDisplayPipeline");
         assert_eq!(FileType::Parquet, p.input_file_type);
-        assert_eq!(p.slice, DisplaySlice::Sample(2));
+        assert_eq!(p.slice, Some(DisplaySlice::Sample(2)));
     }
 
     #[test]
@@ -979,33 +1033,27 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/userdata.orc").sample(2);
         let built = builder.build().expect("build display pipeline");
-        let Pipeline::Display(pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::RecordBatch(p) = built else {
+            panic!("expected RecordBatch pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<RecordBatchDisplayPipeline>());
-        let p = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<RecordBatchDisplayPipeline>()
-            .expect("RecordBatchDisplayPipeline");
         assert_eq!(FileType::Orc, p.input_file_type);
-        assert_eq!(p.slice, DisplaySlice::Sample(2));
+        assert_eq!(p.slice, Some(DisplaySlice::Sample(2)));
     }
 
     #[test]
-    fn test_pipeline_builder_write_rejects_sample() {
-        use crate::Error;
-        use crate::errors::PipelinePlanningError;
-
+    fn test_pipeline_builder_read_sample_write_csv() {
         let mut builder = PipelineBuilder::new();
-        builder.read("input.parquet").write("out.csv").sample(3);
-        let err = match builder.build() {
-            Ok(_) => panic!("sample with write should fail"),
-            Err(e) => e,
+        builder
+            .read("fixtures/table.parquet")
+            .write("out.csv")
+            .sample(2);
+        let built = builder
+            .build()
+            .expect("conversion with sample should build");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        assert!(matches!(
-            err,
-            Error::PipelinePlanningError(PipelinePlanningError::UnsupportedStage(ref s))
-                if s == "sample(n)"
-        ));
+        assert_eq!(p.slice, Some(DisplaySlice::Sample(2)));
     }
 
     #[test]
@@ -1031,10 +1079,7 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").head(2);
         let mut built = builder.build().expect("build display pipeline");
-        let Pipeline::Display(ref mut pipeline) = built else {
-            panic!("expected display pipeline");
-        };
-        pipeline.execute().expect("execute display pipeline");
+        built.execute().expect("execute display pipeline");
     }
 
     #[test]
@@ -1042,13 +1087,10 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").tail(2);
         let built = builder.build().expect("build tail display pipeline");
-        let Pipeline::Display(pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
         };
-        let p = (pipeline.as_ref() as &dyn Any)
-            .downcast_ref::<DataFrameDisplayPipeline>()
-            .expect("DataFrameDisplayPipeline");
-        assert_eq!(p.slice, DisplaySlice::Tail(2));
+        assert_eq!(p.slice, Some(DisplaySlice::Tail(2)));
     }
 
     #[test]
@@ -1056,10 +1098,7 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").tail(2);
         let mut built = builder.build().expect("build tail display pipeline");
-        let Pipeline::Display(ref mut pipeline) = built else {
-            panic!("expected display pipeline");
-        };
-        pipeline.execute().expect("execute tail display pipeline");
+        built.execute().expect("execute tail display pipeline");
     }
 
     #[test]
@@ -1067,11 +1106,10 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/userdata.orc").head(2);
         let mut built = builder.build().expect("build orc display pipeline");
-        let Pipeline::Display(ref mut pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::RecordBatch(_) = &built else {
+            panic!("expected RecordBatch pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<RecordBatchDisplayPipeline>());
-        pipeline.execute().expect("execute orc display pipeline");
+        built.execute().expect("execute orc display pipeline");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1079,10 +1117,7 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/table.parquet").sample(2);
         let mut built = builder.build().expect("build sample display pipeline");
-        let Pipeline::Display(ref mut pipeline) = built else {
-            panic!("expected display pipeline");
-        };
-        pipeline.execute().expect("execute sample display pipeline");
+        built.execute().expect("execute sample display pipeline");
     }
 
     #[test]
@@ -1090,11 +1125,10 @@ mod tests {
         let mut builder = PipelineBuilder::new();
         builder.read("fixtures/userdata.orc").sample(2);
         let mut built = builder.build().expect("build orc sample display pipeline");
-        let Pipeline::Display(ref mut pipeline) = built else {
-            panic!("expected display pipeline");
+        let Pipeline::RecordBatch(_) = &built else {
+            panic!("expected RecordBatch pipeline");
         };
-        assert!((pipeline.as_ref() as &dyn Any).is::<RecordBatchDisplayPipeline>());
-        pipeline
+        built
             .execute()
             .expect("execute orc sample display pipeline");
     }
@@ -1152,5 +1186,38 @@ mod tests {
     #[test]
     fn test_select_spec_from_cli_args_empty_fragments() {
         assert!(SelectSpec::from_cli_args(&Some(vec!["  ,  ".to_string()])).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_parquet_write_avro_steps() {
+        let read_args = ReadArgs {
+            path: "fixtures/table.parquet".to_string(),
+            file_type: FileType::Parquet,
+            csv_has_header: None,
+        };
+        let read_step = DataframeParquetReader { args: read_args };
+        let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
+        let write_args = WriteArgs {
+            path: tempfile
+                .path()
+                .to_str()
+                .expect("Failed to get path")
+                .to_string(),
+            file_type: FileType::Avro,
+            sparse: None,
+            pretty: None,
+        };
+        let write_step = DataframeAvroWriter { args: write_args };
+        write_step
+            .execute(Box::new(read_step))
+            .await
+            .expect("Failed to write Avro file");
+        assert!(tempfile.path().exists());
+        let schema = get_schema_fields_avro(tempfile.path().to_str().expect("Failed to get path"))
+            .expect("Failed to get schema fields");
+        assert_eq!(schema.len(), 6, "Expected 6 columns");
+        assert_eq!(schema[0].name, "one", "Expected first column name is 'one'");
+        assert_eq!(schema[0].data_type, "Float64", "Expected Float64 data type");
+        assert!(schema[0].nullable, "Expected nullable column");
     }
 }

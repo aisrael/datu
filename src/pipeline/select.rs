@@ -80,7 +80,7 @@ pub async fn read_avro_select(
 }
 
 /// Applies column selection to record batches using the same resolution and projection
-/// as the streaming SelectColumnsStep: resolve_column_specs then Arrow project by indices.
+/// as the streaming [`RecordBatchSelect`](crate::pipeline::record_batch::RecordBatchSelect): resolve_column_specs then Arrow project by indices.
 pub fn select_columns_to_batches(
     batches: Vec<RecordBatch>,
     specs: &[ColumnSpec],

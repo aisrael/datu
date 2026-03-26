@@ -1,6 +1,5 @@
 use datu::FileType;
 use datu::cli::HeadsOrTails;
-use datu::pipeline::Pipeline;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
@@ -30,10 +29,5 @@ pub async fn head(args: HeadsOrTails) -> Result<()> {
     }
 
     let mut built = builder.build().map_err(eyre::Report::from)?;
-    match &mut built {
-        Pipeline::Display(pipeline) => pipeline.execute().map_err(eyre::Report::from),
-        Pipeline::Conversion(_) => {
-            bail!("internal error: expected display pipeline for head");
-        }
-    }
+    built.execute().map_err(eyre::Report::from)
 }

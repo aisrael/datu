@@ -13,7 +13,7 @@ use crate::Error;
 use crate::FileType;
 use crate::cli::DisplayOutputFormat;
 pub use crate::pipeline::ColumnSpec;
-use crate::pipeline::Source;
+use crate::pipeline::Producer;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::count_rows;
 use crate::pipeline::display::write_record_batches_as_csv;
@@ -203,11 +203,11 @@ impl ReplPipeline {
             PipelineStage::Head { n } => self.exec_head(n),
             PipelineStage::Tail { n } => self.exec_tail(n),
             PipelineStage::Sample { n } => self.exec_sample(n),
-            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p),
+            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p).await,
             PipelineStage::Count { path: None } => self.exec_count(),
             PipelineStage::Schema => self.exec_schema(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
-            PipelineStage::Print => self.print_batches(),
+            PipelineStage::Print => self.print_batches().await,
         }
     }
 
@@ -271,10 +271,11 @@ impl ReplPipeline {
     }
 
     /// Counts rows in a file directly (metadata for Parquet/ORC, streaming for Avro/CSV).
-    fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
+    async fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
         let file_type: FileType = path.try_into()?;
-        let total =
-            count_rows(path, file_type, None).map_err(|e| Error::GenericError(e.to_string()))?;
+        let total = count_rows(path, file_type, None)
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
         println!("{total}");
         Ok(())
     }
@@ -316,12 +317,12 @@ impl ReplPipeline {
     }
 
     /// Prints batches from the context as CSV to stdout (implicit `print(:csv)`).
-    fn print_batches(&mut self) -> crate::Result<()> {
+    async fn print_batches(&mut self) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("print requires batches in the context".to_string())
         })?;
         let mut source = VecRecordBatchReaderSource::new(batches);
-        let mut reader = source.get()?;
+        let mut reader = source.get().await?;
         write_record_batches_as_csv(&mut *reader, std::io::stdout(), true)
     }
 }

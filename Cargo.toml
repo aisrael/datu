@@ -33,7 +33,7 @@ serde_json = "1.0"
 rust_xlsxwriter = { version = "0.94", features = ["chrono"] }
 rustc-literal-escaper = "0.0.7"
 rustyline = "17"
-flt = "0.0.2"
+flt = "0.1"
 dirs = { version = "2.0", package = "dirs-next" }
 rand = "0.8"
 reservoir-sampling = "0.5.1"

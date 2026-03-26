@@ -62,100 +62,6 @@ Perform the same conversion and column filtering.
 
 ## Commands
 
-### `schema`
-
-Display the schema of a Parquet, Avro, CSV, or ORC file (column names, types, and nullability). Useful for inspecting file structure without reading data. CSV schema uses type inference from the data.
-
-**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
-
-**Usage (CLI):**
-
-```sh
-datu schema <FILE> [OPTIONS]
-```
-
-**Usage (REPL):**
-
-> `read("file") |> schema()`
->
-> Use `schema()` after a read to print the schema of the data in the pipeline. For a single file, `read("data.parquet") |> schema()` is equivalent.
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
-| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
-| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
-
-**Output formats:**
-
-- **csv** (default): One line per column, e.g. `name: String (UTF8), nullable`.
-- **json**: JSON array of objects with `name`, `data_type`, `nullable`, and optionally `converted_type` (Parquet).
-- **json-pretty**: Same as `json` but pretty-printed for readability.
-- **yaml**: YAML list of mappings with the same fields.
-
-**Examples:**
-
-```sh
-# Default CSV-style output
-datu schema data.parquet
-
-# JSON output
-datu schema data.parquet --output json
-
-# JSON pretty-printed
-datu schema data.parquet --output json-pretty
-
-# YAML output (e.g. for config or tooling)
-datu schema events.avro --output yaml
-datu schema events.avro -o YAML
-```
-
----
-
-### `count`
-
-Return the number of rows in a Parquet, Avro, CSV, or ORC file.
-
-**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
-
-**Usage (CLI):**
-
-```sh
-datu count <FILE> [OPTIONS]
-```
-
-**Usage (REPL):**
-
-> `count("file")`
->
-> Count rows in a file directly. Or use `read("file") |> count()` after other steps, e.g. `read("data.parquet") |> select(:id) |> count()`.
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
-| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
-
-**Examples:**
-
-```sh
-# Count rows in a Parquet file
-datu count data.parquet
-
-# Count rows in an Avro, CSV, or ORC file
-datu count events.avro
-datu count data.csv
-datu count data.orc
-
-# Count rows in a headerless CSV file
-datu count data.csv --input-headers=false
-```
-
----
-
 ### `convert`
 
 Convert data between supported formats. Input and output formats are inferred from file extensions, or can be specified explicitly with `--input` and `--output`.
@@ -172,9 +78,9 @@ datu convert <INPUT> <OUTPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-> `read("input") |> ... |> write("output")`
->
-> Example: `read("table.parquet") |> select(:id, :email) |> write("table.csv")`. Add `select(...)`, `head(n)`, `tail(n)`, or `sample(n)` as needed.
+```flt
+read("table.parquet") |> select(:id, :email) |> write("table.csv")
+```
 
 **Options:**
 
@@ -225,6 +131,104 @@ datu convert data.parquet data.json
 
 ---
 
+### `schema`
+
+Display the schema of a Parquet, Avro, CSV, or ORC file (column names, types, and nullability). Useful for inspecting file structure without reading data. CSV schema uses type inference from the data.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Usage (CLI):**
+
+```sh
+datu schema <FILE> [OPTIONS]
+```
+
+**Usage (REPL):**
+
+```flt
+read("file") |> schema()
+```
+
+Use `schema()` after a read to print the schema of the data in the pipeline. For a single file, `read("data.parquet") |> schema()` is equivalent.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
+
+**Output formats:**
+
+- **csv** (default): One line per column, e.g. `name: String (UTF8), nullable`.
+- **json**: JSON array of objects with `name`, `data_type`, `nullable`, and optionally `converted_type` (Parquet).
+- **json-pretty**: Same as `json` but pretty-printed for readability.
+- **yaml**: YAML list of mappings with the same fields.
+
+**Examples:**
+
+```sh
+# Default CSV-style output
+datu schema data.parquet
+
+# JSON output
+datu schema data.parquet --output json
+
+# JSON pretty-printed
+datu schema data.parquet --output json-pretty
+
+# YAML output (e.g. for config or tooling)
+datu schema events.avro --output yaml
+datu schema events.avro -o YAML
+```
+
+---
+
+### `count`
+
+Return the number of rows in a Parquet, Avro, CSV, or ORC file.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Usage (CLI):**
+
+```sh
+datu count <FILE> [OPTIONS]
+```
+
+**Usage (REPL):**
+
+```flt
+count("file")
+```
+
+Count rows in a file directly. Or use `read("file") |> count()`
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
+
+**Examples:**
+
+```sh
+# Count rows in a Parquet file
+datu count data.parquet
+
+# Count rows in an Avro, CSV, or ORC file
+datu count events.avro
+datu count data.csv
+datu count data.orc
+
+# Count rows in a headerless CSV file
+datu count data.csv --input-headers=false
+```
+
+---
+
 ### `sample`
 
 Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats). For Parquet and ORC, sampling uses file metadata to determine total row count and selects random indices; for Avro and CSV, reservoir sampling is used.
@@ -239,9 +243,11 @@ datu sample <INPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-> `read("file") |> sample(n)`
->
-> Prints _n_ random rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> sample(5) |> write("sample.csv")`.
+```flt
+read("file") |> sample(n)
+```
+
+Prints _n_ random rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> sample(5) |> write("sample.csv")`.
 
 **Options:**
 
@@ -286,9 +292,11 @@ datu head <INPUT> [OPTIONS]
 
 **Usage (REPL):**
 
-> `read("file") |> head(n)`
->
-> Prints the first _n_ rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> head(10) |> write("first10.csv")`.
+```flt
+read("file") |> head(n)
+```
+
+Prints the first _n_ rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> head(10) |> write("first10.csv")`.
 
 **Options:**
 
@@ -475,16 +483,15 @@ Functions can be chained in any order to build more complex pipelines:
 
 ## How it Works Internally
 
-Internally, `datu` constructs a pipeline based on the command and arguments.
+Internally, `datu` constructs a pipeline based on the command and arguments. When possible, it uses the [Datafusion DataFrame API](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html) for efficiency and performance. However, ORC, .XLSX, YAML, and JSON (pretty) aren't natively supported by Datafusion, and `datu` uses internal adapters for those file formats.
 
 
 For example, the following invocation
 
 ```sh
-datu convert input.parquet output.csv --select id,name,email
+datu convert input.parquet output.yaml --select id,name,email
 ```
 
 constructs a pipeline that's composed of:
-  - a parquet reader step that reads the `input.parquet` file then chains to
-  - a "select column" step that filters for only the `id`, `name`, and `email` columns, then finally
-  - a CSV writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`
+  - a (DataFrame) Parquet reader step that reads the `input.parquet` file and filters for only the `id`, `name`, and `email` columns, that chains to
+  - a YAML writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`

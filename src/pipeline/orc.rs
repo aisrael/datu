@@ -1,4 +1,5 @@
 use arrow::array::RecordBatchReader;
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use orc_rust::arrow_reader::ArrowReaderBuilder;
 use orc_rust::arrow_writer::ArrowWriterBuilder;
@@ -6,21 +7,22 @@ use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
 use crate::Result;
-use crate::pipeline::ReadArgs;
+use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
-use crate::pipeline::Source;
 use crate::pipeline::Step;
-use crate::pipeline::WriteArgs;
-use crate::pipeline::batch_write::BatchWriteSink;
-use crate::pipeline::batch_write::write_record_batches_with_sink;
+use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::write_record_batches_with_sink;
+use crate::pipeline::write::WriteArgs;
 
 /// Pipeline step that reads an ORC file and produces a record batch reader.
-pub struct ReadOrcStep {
-    pub args: ReadArgs,
+pub struct OrcRecordBatchReader {
+    pub args: LegacyReadArgs,
 }
 
-impl Source<dyn RecordBatchReader + 'static> for ReadOrcStep {
-    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+#[async_trait(?Send)]
+impl Producer<dyn RecordBatchReader + 'static> for OrcRecordBatchReader {
+    async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         read_orc(&self.args).map(|reader| Box::new(reader) as Box<dyn RecordBatchReader + 'static>)
     }
 }
@@ -29,7 +31,7 @@ impl Source<dyn RecordBatchReader + 'static> for ReadOrcStep {
 ///
 /// When both offset and limit are specified, uses ORC row selection for efficient
 /// seeking—only the requested rows are decoded, avoiding full file scans.
-pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
+pub fn read_orc(args: &LegacyReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let builder = ArrowReaderBuilder::try_new(file).map_err(Error::OrcError)?;
 
@@ -43,8 +45,21 @@ pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>>
     Ok(Box::new(arrow_reader))
 }
 
+/// Read an entire ORC file into record batches (no row selection).
+pub(crate) fn read_orc_all_batches(path: &str) -> Result<Vec<RecordBatch>> {
+    let args = LegacyReadArgs {
+        path: path.to_string(),
+        limit: None,
+        offset: None,
+        csv_has_header: None,
+    };
+    let reader = read_orc(&args)?;
+    let batches: Vec<RecordBatch> = reader.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(batches)
+}
+
 /// Pipeline step that writes record batches to an ORC file.
-pub struct WriteOrcStep {
+pub struct RecordBatchOrcWriter {
     pub args: WriteArgs,
     pub source: RecordBatchReaderSource,
 }
@@ -83,12 +98,12 @@ impl BatchWriteSink for OrcSink {
 }
 
 #[async_trait(?Send)]
-impl Step for WriteOrcStep {
+impl Step for RecordBatchOrcWriter {
     type Input = ();
     type Output = WriteOrcResult;
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
-        let mut reader = self.source.get()?;
+        let mut reader = self.source.get().await?;
         write_record_batches(&self.args.path, &mut *reader)?;
         Ok(WriteOrcResult {})
     }

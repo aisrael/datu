@@ -1,42 +1,95 @@
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::DataFrame;
 
 use crate::Error;
 use crate::Result;
+use crate::pipeline::DataFrameSource;
+use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
-use crate::pipeline::Source;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
-use crate::pipeline::WriteArgs;
-use crate::pipeline::batch_write::BatchWriteSink;
-use crate::pipeline::batch_write::write_record_batches_with_sink;
+use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::write_record_batches_with_sink;
+use crate::pipeline::write::WriteArgs;
+
+/// Pipeline step that reads a CSV file into a DataFusion [`DataFrame`].
+pub struct DataframeCsvReader {
+    pub path: String,
+    pub has_header: Option<bool>,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeCsvReader {
+    type Input = ();
+    type Output = DataFrameSource;
+
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+        let ctx = SessionContext::new();
+        let has_header = self.has_header.unwrap_or(true);
+        let df = ctx
+            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
+            .await?;
+        Ok(DataFrameSource::new(df))
+    }
+}
+
+#[async_trait(?Send)]
+impl Producer<DataFrame> for DataframeCsvReader {
+    async fn get(&mut self) -> Result<Box<DataFrame>> {
+        let ctx = SessionContext::new();
+        let has_header = self.has_header.unwrap_or(true);
+        let df = ctx
+            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
+            .await?;
+        Ok(Box::new(df))
+    }
+}
+
+/// Writes a [`DataFrame`] to CSV via DataFusion.
+pub struct DataframeCsvWriter {
+    pub(crate) args: WriteArgs,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeCsvWriter {
+    type Input = Box<dyn Producer<DataFrame>>;
+    type Output = ();
+
+    async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+        let df = input.get().await?;
+        df.write_csv(&self.args.path, DataFrameWriteOptions::default(), None)
+            .await?;
+        Ok(())
+    }
+}
 
 /// Pipeline step that reads a CSV file and produces a record batch reader.
 /// Uses DataFusion for schema inference and type detection.
-pub struct ReadCsvStep {
+pub struct ReadCsvStepRecordBatch {
     pub path: String,
     pub has_header: Option<bool>,
     /// Maximum number of rows to read. None means read all.
     pub limit: Option<usize>,
 }
 
-impl Source<dyn RecordBatchReader + 'static> for ReadCsvStep {
-    fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+#[async_trait(?Send)]
+impl Producer<dyn RecordBatchReader + 'static> for ReadCsvStepRecordBatch {
+    async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
         let has_header = self.has_header.unwrap_or(true);
         let ctx = SessionContext::new();
-        let df = tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(ctx.read_csv(&self.path, CsvReadOptions::new().has_header(has_header)))
-        })
-        .map_err(|e| Error::GenericError(e.to_string()))?;
+        let df = ctx
+            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
 
-        let mut batches = tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(df.collect())
-        })
-        .map_err(|e| Error::GenericError(e.to_string()))?;
+        let mut batches = df
+            .collect()
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
 
         if let Some(limit) = self.limit {
             let mut result = Vec::new();
@@ -57,7 +110,7 @@ impl Source<dyn RecordBatchReader + 'static> for ReadCsvStep {
 }
 
 /// Pipeline step that writes record batches to a CSV file.
-pub struct WriteCsvStep {
+pub struct RecordBatchCsvWriter {
     pub args: WriteArgs,
     pub source: RecordBatchReaderSource,
 }
@@ -94,13 +147,13 @@ impl BatchWriteSink for CsvSink {
 }
 
 #[async_trait(?Send)]
-impl Step for WriteCsvStep {
+impl Step for RecordBatchCsvWriter {
     type Input = ();
     type Output = WriteCsvResult;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let mut source = self.source;
-        let mut reader = source.get()?;
+        let mut reader = source.get().await?;
         write_record_batches(self.args.path.as_str(), &mut *reader)?;
         Ok(WriteCsvResult {})
     }
@@ -109,18 +162,21 @@ impl Step for WriteCsvStep {
 #[cfg(test)]
 mod tests {
     use arrow::array::RecordBatchReader;
+    use async_trait::async_trait;
 
     use super::*;
-    use crate::pipeline::ReadArgs;
-    use crate::pipeline::Source;
+    use crate::FileType;
+    use crate::pipeline::Producer;
     use crate::pipeline::parquet::read_parquet;
+    use crate::pipeline::read::LegacyReadArgs;
 
     struct TestRecordBatchReader {
         reader: Option<Box<dyn RecordBatchReader>>,
     }
 
-    impl Source<dyn RecordBatchReader + 'static> for TestRecordBatchReader {
-        fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
+    #[async_trait(?Send)]
+    impl Producer<dyn RecordBatchReader + 'static> for TestRecordBatchReader {
+        async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
             std::mem::take(&mut self.reader)
                 .ok_or(Error::GenericError("Reader already taken".to_string()))
         }
@@ -128,7 +184,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_csv_writer() {
-        let args = ReadArgs {
+        let args = LegacyReadArgs {
             path: "fixtures/table.parquet".to_string(),
             limit: None,
             offset: None,
@@ -148,8 +204,13 @@ mod tests {
             reader: Some(Box::new(reader)),
         });
 
-        let args = WriteArgs { path };
-        let writer = WriteCsvStep { args, source };
+        let args = WriteArgs {
+            path,
+            file_type: FileType::Csv,
+            sparse: None,
+            pretty: None,
+        };
+        let writer = RecordBatchCsvWriter { args, source };
         let result = writer.execute(()).await;
         assert!(result.is_ok());
         assert!(output_path.exists());

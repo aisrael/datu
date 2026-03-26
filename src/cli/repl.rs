@@ -1,13 +1,20 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
 use flt::ast::Literal;
+use flt::parser::parse_expr;
+use rustyline::Config;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 use crate::Error;
 use crate::FileType;
 use crate::cli::DisplayOutputFormat;
-use crate::pipeline::Source;
+/// Column selection in REPL expressions (re-export of [`crate::pipeline::ColumnSpec`]).
+pub use crate::pipeline::ColumnSpec;
+use crate::pipeline::Producer;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::count_rows;
 use crate::pipeline::display::write_record_batches_as_csv;
@@ -15,7 +22,6 @@ use crate::pipeline::read_to_batches;
 use crate::pipeline::sample_batches;
 use crate::pipeline::schema;
 use crate::pipeline::select;
-use crate::pipeline::select::ColumnSpec;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write_batches;
 
@@ -104,21 +110,22 @@ impl fmt::Display for PipelineStage {
     }
 }
 
-/// Builder for a REPL pipeline.
-pub struct ReplPipelineBuilder {
+/// A general REPL pipeline.
+pub struct ReplPipeline {
     pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
     pub statement_incomplete: bool,
     pending_exprs: Vec<Expr>,
 }
 
-impl Default for ReplPipelineBuilder {
+impl Default for ReplPipeline {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ReplPipelineBuilder {
+impl ReplPipeline {
+    /// Creates an empty pipeline with no batches loaded.
     pub fn new() -> Self {
         Self {
             batches: None,
@@ -147,6 +154,8 @@ impl ReplPipelineBuilder {
     ) -> crate::Result<Vec<PipelineStage>> {
         match op {
             BinaryOp::Pipe => {
+                // Flatten nested `|>` into a single ordered list (e.g. `a |> b |> c` is parsed as a
+                // binary tree); each leaf becomes one pipeline stage for planning.
                 let mut exprs = Vec::new();
                 collect_pipe_stages(*left, &mut exprs);
                 collect_pipe_stages(*right, &mut exprs);
@@ -196,11 +205,11 @@ impl ReplPipelineBuilder {
             PipelineStage::Head { n } => self.exec_head(n),
             PipelineStage::Tail { n } => self.exec_tail(n),
             PipelineStage::Sample { n } => self.exec_sample(n),
-            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p),
+            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p).await,
             PipelineStage::Count { path: None } => self.exec_count(),
             PipelineStage::Schema => self.exec_schema(),
             PipelineStage::Write { path } => self.exec_write(&path).await,
-            PipelineStage::Print => self.print_batches(),
+            PipelineStage::Print => self.print_batches().await,
         }
     }
 
@@ -264,10 +273,11 @@ impl ReplPipelineBuilder {
     }
 
     /// Counts rows in a file directly (metadata for Parquet/ORC, streaming for Avro/CSV).
-    fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
+    async fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
         let file_type: FileType = path.try_into()?;
-        let total =
-            count_rows(path, file_type, None).map_err(|e| Error::GenericError(e.to_string()))?;
+        let total = count_rows(path, file_type, None)
+            .await
+            .map_err(|e| Error::GenericError(e.to_string()))?;
         println!("{total}");
         Ok(())
     }
@@ -309,14 +319,121 @@ impl ReplPipelineBuilder {
     }
 
     /// Prints batches from the context as CSV to stdout (implicit `print(:csv)`).
-    fn print_batches(&mut self) -> crate::Result<()> {
+    async fn print_batches(&mut self) -> crate::Result<()> {
         let batches = self.batches.take().ok_or_else(|| {
             Error::GenericError("print requires batches in the context".to_string())
         })?;
         let mut source = VecRecordBatchReaderSource::new(batches);
-        let mut reader = source.get()?;
+        let mut reader = source.get().await?;
         write_record_batches_as_csv(&mut *reader, std::io::stdout(), true)
     }
+}
+
+// --- Interactive REPL -------------------------------------------------------
+
+/// Maximum number of inputs to keep in REPL history.
+const REPL_HISTORY_DEPTH: usize = 1000;
+
+fn repl_history_path() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("datu").join("history"))
+}
+
+fn load_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    if history_path.exists() {
+        println!("Loading REPL history from: {:?}", history_path);
+        editor.load_history(&history_path)?;
+    }
+    Ok(())
+}
+
+fn save_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = history_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    editor.save_history(&history_path)?;
+    Ok(())
+}
+
+/// Interactive REPL with its own line editor, history, and pipeline state.
+pub struct Repl {
+    editor: DefaultEditor,
+    pipeline: ReplPipeline,
+}
+
+impl Repl {
+    /// Creates a REPL with line editor config and loads history when available.
+    pub fn new() -> eyre::Result<Self> {
+        let config = Config::builder()
+            .max_history_size(REPL_HISTORY_DEPTH)?
+            .auto_add_history(true)
+            .build();
+        let mut editor = DefaultEditor::with_config(config)?;
+        let _ = load_repl_history(&mut editor);
+        Ok(Self {
+            editor,
+            pipeline: ReplPipeline::new(),
+        })
+    }
+
+    /// Runs the interactive prompt until EOF or error; persists history on exit.
+    pub async fn run(&mut self) -> eyre::Result<()> {
+        let loop_result = self.repl_loop().await;
+        let _ = save_repl_history(&mut self.editor);
+        loop_result
+    }
+
+    async fn repl_loop(&mut self) -> eyre::Result<()> {
+        loop {
+            let prompt = if self.pipeline.statement_incomplete {
+                "|> "
+            } else {
+                "> "
+            };
+            let line = match self.editor.readline(prompt) {
+                Ok(line) => line,
+                Err(ReadlineError::Eof) => break Ok(()),
+                Err(ReadlineError::Interrupted) => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match parse_expr(line) {
+                Ok((remainder, expr)) => {
+                    let remainder = remainder.trim();
+                    if remainder.is_empty() {
+                        if let Some(pipeline) = self.pipeline.eval_incremental(expr)? {
+                            let stages: Vec<String> =
+                                pipeline.iter().map(|s| s.to_string()).collect();
+                            println!("Pipeline: {}", stages.join(" |> "));
+                            self.pipeline.execute_pipeline(pipeline).await?;
+                        }
+                    } else {
+                        eprintln!(
+                            "parse error: unexpected input after expression: {:?}",
+                            remainder
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("parse error: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
+/// Runs the datu REPL.
+pub async fn run() -> eyre::Result<()> {
+    let mut repl = Repl::new()?;
+    repl.run().await
 }
 
 /// Collects pipeline stages from a pipe expression (e.g. a |> b |> c -> [a, b, c]).
@@ -437,13 +554,6 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
     }
 }
 
-/// Plans a full pipeline from a list of AST expressions.
-/// Automatically appends an implicit stage for terminal stages (head/tail).
-#[cfg(test)]
-fn plan_pipeline(exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
-    plan_pipeline_with_state(exprs).map(|(stages, _)| stages)
-}
-
 /// Plans a full pipeline and returns whether the statement is incomplete
 /// (the final explicit stage is non-terminal).
 fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStage>, bool)> {
@@ -515,11 +625,12 @@ fn extract_sample_n(args: &[Expr]) -> crate::Result<usize> {
 mod tests {
     use flt::ast::Identifier;
     use flt::parser::parse_expr;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
-    fn new_context() -> ReplPipelineBuilder {
-        ReplPipelineBuilder::new()
+    fn new_context() -> ReplPipeline {
+        ReplPipeline::new()
     }
 
     fn parse(input: &str) -> Expr {
@@ -604,14 +715,14 @@ mod tests {
         ));
     }
 
-    // ── plan_pipeline ─────────────────────────────────────────────
+    // ── plan_pipeline_with_state ──────────────────────────────────
 
     #[test]
     fn test_plan_pipeline_read_select_write() {
         let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -638,7 +749,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> head(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -655,7 +766,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> head(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }
@@ -987,17 +1098,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_exec_write_success() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("output.parquet");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let mut ctx = new_context();
         ctx.exec_read("fixtures/table.parquet").await.expect("read");
 
-        ctx.exec_write(&output_str).await.expect("write");
+        ctx.exec_write(output_path).await.expect("write");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1023,13 +1133,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_write() {
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let output_path = temp_dir.path().join("table.avro");
-        let output_str = output_path.to_str().expect("path to str").to_string();
+        let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1039,18 +1148,17 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_write_without_select() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("table.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1060,19 +1168,18 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_with_strings() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("out.parquet");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select("one", "three") |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path
         );
         let expr = parse(&pipeline);
 
@@ -1082,7 +1189,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
         let batches = ctx.batches.as_ref();
         assert!(batches.is_none(), "batches consumed by write");
     }
@@ -1193,13 +1300,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_head_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("headed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> head(2) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1209,20 +1315,19 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path.as_str()));
         assert!(ctx.batches.is_none(), "batches consumed by write");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_head_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("selected_headed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> head(1) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1232,7 +1337,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     // ── plan_stage: tail ─────────────────────────────────────────
@@ -1296,14 +1401,14 @@ mod tests {
         assert_eq!(PipelineStage::Print.to_string(), "print()");
     }
 
-    // ── plan_pipeline: tail auto-print ──────────────────────────
+    // ── plan_pipeline_with_state: tail auto-print ─────────────────
 
     #[test]
     fn test_plan_pipeline_auto_appends_print_after_tail() {
         let expr = parse(r#"read("a.parquet") |> tail(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1320,7 +1425,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> tail(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }
@@ -1441,14 +1546,14 @@ mod tests {
         ));
     }
 
-    // ── plan_pipeline: count does not auto-append print ─────────
+    // ── plan_pipeline_with_state: count does not auto-append print
 
     #[test]
     fn test_plan_pipeline_count_no_auto_print() {
         let expr = parse(r#"read("a.parquet") |> count()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         // read(path) |> count() is optimized to count(path) so Parquet/ORC use metadata
         assert_eq!(pipeline.len(), 1);
         assert_eq!(
@@ -1464,7 +1569,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> select(:x) |> count()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1579,14 +1684,14 @@ mod tests {
         assert_eq!(PipelineStage::Schema.to_string(), "schema()");
     }
 
-    // ── plan_pipeline: schema does not auto-append print ─────────
+    // ── plan_pipeline_with_state: schema does not auto-append print
 
     #[test]
     fn test_plan_pipeline_schema_no_auto_print() {
         let expr = parse(r#"read("a.parquet") |> schema()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 2);
         assert_eq!(
             pipeline[0],
@@ -1642,13 +1747,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_select_tail_write() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let output_path = temp_dir.path().join("selected_tailed.csv");
-        let output_str = output_path.to_str().unwrap().to_string();
+        let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_string_lossy().to_string();
 
         let pipeline = format!(
             r#"read("fixtures/table.parquet") |> select(:one, :two) |> tail(1) |> write("{}")"#,
-            output_str.replace('\\', "\\\\")
+            &output_path.replace('\\', "\\\\")
         );
         let expr = parse(&pipeline);
 
@@ -1658,7 +1762,7 @@ mod tests {
             .await
             .expect("execute");
 
-        assert!(output_path.exists());
+        assert!(tempfile.path().exists());
     }
 
     // ── plan_stage: sample ──────────────────────────────────────
@@ -1690,14 +1794,14 @@ mod tests {
         );
     }
 
-    // ── plan_pipeline: sample auto-print ────────────────────────
+    // ── plan_pipeline_with_state: sample auto-print ───────────────
 
     #[test]
     fn test_plan_pipeline_auto_appends_print_after_sample() {
         let expr = parse(r#"read("a.parquet") |> sample(5)"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert_eq!(
             pipeline[0],
@@ -1714,7 +1818,7 @@ mod tests {
         let expr = parse(r#"read("a.parquet") |> sample(5) |> write("b.csv")"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let pipeline = plan_pipeline(exprs).unwrap();
+        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
         assert_eq!(pipeline.len(), 3);
         assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
     }

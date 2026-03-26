@@ -11,7 +11,7 @@ use saphyr::YamlEmitter;
 use crate::Error;
 use crate::Result;
 use crate::cli::DisplayOutputFormat;
-use crate::pipeline::record_batch_filter::SelectColumnsStep;
+use crate::pipeline::record_batch::RecordBatchSelect;
 
 /// Normalizes string values for YAML emission. Unicode line/paragraph separators (U+2028, U+2029)
 /// are replaced with newlines so that saphyr's emitter will quote and escape them, producing
@@ -147,7 +147,7 @@ impl Step for DisplayWriterStep {
     type Output = ();
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
-        let mut reader = input.get()?;
+        let mut reader = input.get().await?;
         match self.output_format {
             DisplayOutputFormat::Csv => {
                 write_record_batches_as_csv(&mut *reader, std::io::stdout(), self.headers)?;
@@ -170,7 +170,7 @@ impl Step for DisplayWriterStep {
 /// If `select_step` is `Some`, filters to the specified columns before display.
 pub async fn apply_select_and_display(
     mut reader: RecordBatchReaderSource,
-    select_step: Option<SelectColumnsStep>,
+    select_step: Option<RecordBatchSelect>,
     output_format: DisplayOutputFormat,
     sparse: bool,
     headers: bool,
@@ -201,7 +201,7 @@ mod tests {
     use super::write_record_batches_as_json;
     use super::write_record_batches_as_json_pretty;
     use super::write_record_batches_as_yaml;
-    use crate::pipeline::Source;
+    use crate::pipeline::Producer as _;
     use crate::pipeline::VecRecordBatchReaderSource;
 
     fn make_test_batch() -> RecordBatch {
@@ -219,11 +219,11 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn test_write_record_batches_as_csv() {
+    #[tokio::test]
+    async fn test_write_record_batches_as_csv() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().unwrap();
+        let mut reader = source.get().await.unwrap();
         let mut out = Vec::new();
         write_record_batches_as_csv(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -232,11 +232,11 @@ mod tests {
         assert!(s.contains("2,bob"));
     }
 
-    #[test]
-    fn test_write_record_batches_as_csv_no_headers() {
+    #[tokio::test]
+    async fn test_write_record_batches_as_csv_no_headers() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().unwrap();
+        let mut reader = source.get().await.unwrap();
         let mut out = Vec::new();
         write_record_batches_as_csv(&mut *reader, &mut out, false).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -245,11 +245,11 @@ mod tests {
         assert!(s.contains("2,bob"));
     }
 
-    #[test]
-    fn test_write_record_batches_as_json() {
+    #[tokio::test]
+    async fn test_write_record_batches_as_json() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().unwrap();
+        let mut reader = source.get().await.unwrap();
         let mut out = Vec::new();
         write_record_batches_as_json(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -260,11 +260,11 @@ mod tests {
         assert!(s.contains("bob"));
     }
 
-    #[test]
-    fn test_write_record_batches_as_json_pretty() {
+    #[tokio::test]
+    async fn test_write_record_batches_as_json_pretty() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().unwrap();
+        let mut reader = source.get().await.unwrap();
         let mut out = Vec::new();
         write_record_batches_as_json_pretty(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();
@@ -276,11 +276,11 @@ mod tests {
         assert!(s.contains('\n'), "pretty output should contain newlines");
     }
 
-    #[test]
-    fn test_write_record_batches_as_yaml() {
+    #[tokio::test]
+    async fn test_write_record_batches_as_yaml() {
         let batch = make_test_batch();
         let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().unwrap();
+        let mut reader = source.get().await.unwrap();
         let mut out = Vec::new();
         write_record_batches_as_yaml(&mut *reader, &mut out, true).unwrap();
         let s = String::from_utf8(out).unwrap();

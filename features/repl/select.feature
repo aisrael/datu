@@ -61,7 +61,7 @@ Feature: Select
   Scenario: Select from ORC
     When the REPL is ran and the user types:
       ```
-      read("fixtures/userdata.orc") |> select(:_col1, :_col2) |> write("$TEMPDIR/select_orc.csv")
+      read("fixtures/userdata.orc") |> select("_col1", "_col2") |> write("$TEMPDIR/select_orc.csv")
       ```
     Then the file "$TEMPDIR/select_orc.csv" should exist
     And that file should be a CSV file

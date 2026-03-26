@@ -1,25 +1,10 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::RecordBatchReader;
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
 use clap::Args;
-use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::execution::context::SessionContext;
-use datafusion::prelude::AvroReadOptions;
-use datafusion::prelude::CsvReadOptions;
-use datafusion::prelude::NdJsonReadOptions;
-use datafusion::prelude::ParquetReadOptions;
-use datu::Error;
 use datu::FileType;
-use datu::pipeline::Source;
-use datu::pipeline::Step;
-use datu::pipeline::VecRecordBatchReader;
-use datu::pipeline::dataframe::DataFrameReader;
-use datu::pipeline::dataframe::write_record_batches_from_reader;
+use datu::pipeline::PipelineBuilder;
+use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
-use datu::utils::parse_select_columns;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 
@@ -73,8 +58,8 @@ pub struct ConvertArgs {
     pub input_headers: Option<bool>,
 }
 
-/// Returns true if the format is supported by DataFusion's DataFrame read/write API.
-fn is_datafusion_native(file_type: FileType) -> bool {
+/// Returns true if the format is supported by DataFusion's DataFrame read API for direct file read.
+fn is_datafusion_native_input(file_type: FileType) -> bool {
     matches!(
         file_type,
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
@@ -88,40 +73,15 @@ fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
         .map(|n| n as u64)
 }
 
-/// A `RecordBatchReader` wrapper that increments an `indicatif::ProgressBar` by
-/// the number of rows in each batch as it is yielded.
-struct ProgressRecordBatchReader {
-    inner: VecRecordBatchReader,
-    progress: ProgressBar,
-}
-
-impl Iterator for ProgressRecordBatchReader {
-    type Item = arrow::error::Result<RecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.inner.next()?;
-        if let Ok(ref batch) = item {
-            self.progress.inc(batch.num_rows() as u64);
-        }
-        Some(item)
-    }
-}
-
-impl RecordBatchReader for ProgressRecordBatchReader {
-    fn schema(&self) -> Arc<Schema> {
-        self.inner.schema()
-    }
-}
-
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
 pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     let output_file_type = resolve_file_type(args.output, &args.output_path)?;
 
-    let use_dataframe_api = is_datafusion_native(input_file_type)
+    let use_streaming_write = is_datafusion_native_input(input_file_type)
         && (output_file_type == FileType::Parquet || output_file_type == FileType::Csv);
 
-    let total_rows = if !use_dataframe_api || input_file_type == FileType::Parquet {
+    let total_rows = if !use_streaming_write || input_file_type == FileType::Parquet {
         get_total_rows(&args.input_path, input_file_type)
     } else {
         None
@@ -155,10 +115,30 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         }
     };
 
-    let result: Result<(), datu::Error> = if use_dataframe_api {
-        convert_via_dataframe_api(&args, input_file_type, output_file_type, &progress).await
-    } else {
-        convert_via_fallback(&args, input_file_type, output_file_type, &progress).await
+    let select_spec = SelectSpec::from_cli_args(&args.select);
+
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read(&args.input_path)
+        .write(&args.output_path)
+        .input_type(args.input)
+        .output_type(args.output)
+        .csv_has_header(args.input_headers)
+        .sparse(args.sparse)
+        .json_pretty(args.json_pretty)
+        .progress(Some(progress.clone()));
+
+    if let Some(spec) = select_spec {
+        builder.select_spec(spec);
+    }
+
+    if let Some(n) = args.limit {
+        builder.head(n);
+    }
+
+    let result: Result<(), datu::Error> = match builder.build() {
+        Ok(mut built) => built.execute(),
+        Err(e) => Err(e),
     };
 
     match result {
@@ -178,128 +158,11 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     }
 }
 
-/// Streamlined path: DataFusion DataFrame read → select/limit → write. No collect or RecordBatchReader.
-async fn convert_via_dataframe_api(
-    args: &ConvertArgs,
-    input_file_type: FileType,
-    output_file_type: FileType,
-    _progress: &ProgressBar,
-) -> Result<(), datu::Error> {
-    let ctx = SessionContext::new();
-
-    let mut df = match input_file_type {
-        FileType::Parquet => ctx
-            .read_parquet(&args.input_path, ParquetReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        FileType::Avro => ctx
-            .read_avro(&args.input_path, AvroReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        FileType::Csv => {
-            let has_header = args.input_headers.unwrap_or(true);
-            ctx.read_csv(
-                &args.input_path,
-                CsvReadOptions::new().has_header(has_header),
-            )
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?
-        }
-        FileType::Json => ctx
-            .read_json(&args.input_path, NdJsonReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        _ => {
-            return Err(Error::GenericError(
-                "Streamlined path only supports Parquet, Avro, CSV, JSON input".to_string(),
-            ));
-        }
-    };
-
-    if let Some(columns) = &args.select {
-        let parsed = parse_select_columns(columns);
-        if !parsed.is_empty() {
-            let col_refs: Vec<&str> = parsed.iter().map(String::as_str).collect();
-            df = df
-                .select_columns(&col_refs)
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-    }
-
-    if let Some(n) = args.limit {
-        df = df
-            .limit(0, Some(n))
-            .map_err(|e| Error::GenericError(e.to_string()))?;
-    }
-
-    let write_opts = DataFrameWriteOptions::new();
-
-    match output_file_type {
-        FileType::Parquet => {
-            df.write_parquet(&args.output_path, write_opts, None)
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-        FileType::Csv => {
-            df.write_csv(&args.output_path, write_opts, None)
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-        FileType::Json => {
-            df.write_json(&args.output_path, write_opts, None)
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-        _ => {
-            return Err(Error::GenericError(
-                "Streamlined path only supports Parquet, Avro, CSV, JSON output".to_string(),
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-/// Fallback path: DataFrameReader → collect → write_record_batches_from_reader.
-async fn convert_via_fallback(
-    args: &ConvertArgs,
-    input_file_type: FileType,
-    output_file_type: FileType,
-    progress: &ProgressBar,
-) -> Result<(), datu::Error> {
-    let reader_step = DataFrameReader::new(
-        &args.input_path,
-        input_file_type,
-        args.select.clone(),
-        args.limit,
-        args.input_headers,
-    );
-
-    let mut source = reader_step.execute(()).await?;
-    let df = source.get()?;
-
-    let handle = tokio::runtime::Handle::current();
-    let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
-        .map_err(|e| Error::GenericError(e.to_string()))?;
-
-    let mut reader = ProgressRecordBatchReader {
-        inner: VecRecordBatchReader::new(batches),
-        progress: progress.clone(),
-    };
-
-    write_record_batches_from_reader(
-        &mut reader,
-        &args.output_path,
-        output_file_type,
-        args.sparse,
-        args.json_pretty,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::array::RecordBatchReader;
     use datu::pipeline::avro;
+    use datu::pipeline::read::LegacyReadArgs;
 
     use super::*;
 
@@ -604,7 +467,7 @@ mod tests {
         );
         assert!(output_path_buf.exists(), "Output file was not created");
 
-        let read_args = datu::pipeline::ReadArgs {
+        let read_args = LegacyReadArgs {
             path: output_path,
             limit: None,
             offset: None,

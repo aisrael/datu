@@ -4,7 +4,6 @@ use clap::Parser;
 use clap::Subcommand;
 
 mod commands;
-mod repl;
 
 use commands::convert;
 use commands::count;
@@ -48,7 +47,7 @@ pub enum Command {
 async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => repl::run().await,
+        None => datu::cli::repl::run().await,
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
         Some(Command::Head(args)) => head(args).await,

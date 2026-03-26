@@ -1,98 +1,33 @@
 use datu::FileType;
 use datu::cli::HeadsOrTails;
-use datu::get_total_rows_result;
-use datu::pipeline::RecordBatchReaderSource;
-use datu::pipeline::Step;
-use datu::pipeline::VecRecordBatchReader;
-use datu::pipeline::VecRecordBatchReaderSource;
-use datu::pipeline::build_reader;
-use datu::pipeline::display::apply_select_and_display;
-use datu::pipeline::read_to_batches;
-use datu::pipeline::record_batch_filter::parse_select_step;
-use datu::pipeline::reservoir_sample_from_reader;
-use datu::pipeline::sample_from_reader;
+use datu::pipeline::PipelineBuilder;
+use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
 use eyre::Result;
 use eyre::bail;
 
-/// sample command implementation: print N random rows from an Avro, CSV, Parquet, or ORC file.
+/// sample command implementation: print N random rows from an Avro, CSV, JSON, Parquet, or ORC file.
 pub async fn sample(args: HeadsOrTails) -> Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     match input_file_type {
-        FileType::Parquet => sample_seekable_format(args, FileType::Parquet).await,
-        FileType::Avro => sample_avro(args).await,
-        FileType::Csv => sample_csv(args).await,
-        FileType::Orc => sample_seekable_format(args, FileType::Orc).await,
-        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for sample"),
+        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json => {}
+        _ => bail!("Only Parquet, Avro, CSV, JSON, and ORC are supported for sample"),
     }
-}
 
-/// Samples N random rows from a seekable format file (Parquet or ORC) using metadata for total row count.
-async fn sample_seekable_format(args: HeadsOrTails, file_type: FileType) -> Result<()> {
-    let total_rows = get_total_rows_result(&args.input_path, file_type)?;
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read(&args.input_path)
+        .input_type(args.input)
+        .sample(args.number)
+        .csv_has_header(args.input_headers)
+        .sparse(args.sparse)
+        .display_format(args.output)
+        .display_csv_headers(args.output_headers.unwrap_or(true));
 
-    let mut reader_step = build_reader(&args.input_path, file_type, None, None, None)?;
-    if let Some(select_step) = parse_select_step(&args.select) {
-        reader_step = select_step.execute(reader_step).await?;
+    if let Some(spec) = SelectSpec::from_cli_args(&args.select) {
+        builder.select_spec(spec);
     }
-    let reader = reader_step.get()?;
-    let sampled = sample_from_reader(reader, total_rows, args.number);
 
-    let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    apply_select_and_display(
-        reader_step,
-        None,
-        args.output,
-        args.sparse,
-        args.output_headers.unwrap_or(true),
-    )
-    .await
-    .map_err(Into::into)
-}
-
-/// Samples N random rows from an Avro file using reservoir sampling.
-async fn sample_avro(args: HeadsOrTails) -> Result<()> {
-    let mut reader_step = build_reader(&args.input_path, FileType::Avro, None, None, None)?;
-    if let Some(select_step) = parse_select_step(&args.select) {
-        reader_step = select_step.execute(reader_step).await?;
-    }
-    let reader = reader_step.get()?;
-    let sampled = reservoir_sample_from_reader(reader, args.number);
-
-    let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    apply_select_and_display(
-        reader_step,
-        None,
-        args.output,
-        args.sparse,
-        args.output_headers.unwrap_or(true),
-    )
-    .await
-    .map_err(Into::into)
-}
-
-/// Samples N random rows from a CSV file using reservoir sampling.
-async fn sample_csv(args: HeadsOrTails) -> Result<()> {
-    let batches = read_to_batches(
-        &args.input_path,
-        FileType::Csv,
-        &args.select,
-        None,
-        args.input_headers,
-    )
-    .await?;
-    let reader: Box<dyn arrow::array::RecordBatchReader + 'static> =
-        Box::new(VecRecordBatchReader::new(batches));
-    let sampled = reservoir_sample_from_reader(reader, args.number);
-
-    let reader_step: RecordBatchReaderSource = Box::new(VecRecordBatchReaderSource::new(sampled));
-    apply_select_and_display(
-        reader_step,
-        None,
-        args.output,
-        args.sparse,
-        args.output_headers.unwrap_or(true),
-    )
-    .await
-    .map_err(Into::into)
+    let mut built = builder.build().map_err(eyre::Report::from)?;
+    built.execute().map_err(eyre::Report::from)
 }

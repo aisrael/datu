@@ -27,6 +27,7 @@ use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::write::WriteArgs;
 
+/// Pipeline step that reads a Parquet file into a DataFusion [`DataFrame`].
 pub struct DataframeParquetReader {
     pub(crate) args: ReadArgs,
 }
@@ -58,6 +59,7 @@ async fn read_parquet_to_dataframe(ctx: &SessionContext, path: &str) -> Result<D
     Ok(df)
 }
 
+/// Pipeline step that writes a [`DataFrame`] to Parquet.
 pub struct DataframeParquetWriter {
     pub(crate) args: WriteArgs,
 }

@@ -12,6 +12,7 @@ use rustyline::error::ReadlineError;
 use crate::Error;
 use crate::FileType;
 use crate::cli::DisplayOutputFormat;
+/// Column selection in REPL expressions (re-export of [`crate::pipeline::ColumnSpec`]).
 pub use crate::pipeline::ColumnSpec;
 use crate::pipeline::Producer;
 use crate::pipeline::VecRecordBatchReaderSource;
@@ -124,6 +125,7 @@ impl Default for ReplPipeline {
 }
 
 impl ReplPipeline {
+    /// Creates an empty pipeline with no batches loaded.
     pub fn new() -> Self {
         Self {
             batches: None,
@@ -365,6 +367,7 @@ pub struct Repl {
 }
 
 impl Repl {
+    /// Creates a REPL with line editor config and loads history when available.
     pub fn new() -> eyre::Result<Self> {
         let config = Config::builder()
             .max_history_size(REPL_HISTORY_DEPTH)?
@@ -378,6 +381,7 @@ impl Repl {
         })
     }
 
+    /// Runs the interactive prompt until EOF or error; persists history on exit.
     pub async fn run(&mut self) -> eyre::Result<()> {
         let loop_result = self.repl_loop().await;
         let _ = save_repl_history(&mut self.editor);

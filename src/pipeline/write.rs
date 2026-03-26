@@ -35,6 +35,7 @@ pub struct WriteYamlArgs {
     pub sparse: bool,
 }
 
+/// Writes a [`DataFrame`] using DataFusion native writers (Parquet, CSV, JSON only).
 pub async fn write_dataframe(mut source: DataFrameSource, args: WriteArgs) -> Result<()> {
     let write_opts = DataFrameWriteOptions::new();
     let df = source
@@ -60,6 +61,7 @@ pub async fn write_dataframe(mut source: DataFrameSource, args: WriteArgs) -> Re
     Ok(())
 }
 
+/// Writes record batches for formats that need a record-batch path (Avro, ORC, XLSX, YAML).
 pub async fn write_record_batches(
     mut source: RecordBatchReaderSource,
     args: WriteArgs,

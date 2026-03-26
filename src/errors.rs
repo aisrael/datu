@@ -37,6 +37,7 @@ pub enum Error {
     DatafusionError(#[from] datafusion::error::DataFusionError),
 }
 
+/// Errors produced while validating or constructing a pipeline plan.
 #[derive(Error, Debug)]
 pub enum PipelinePlanningError {
     #[error("select(...) cannot be empty")]
@@ -51,6 +52,7 @@ pub enum PipelinePlanningError {
     UnsupportedOutputFileType(String),
 }
 
+/// Errors produced while running a pipeline (wrong format, consumed state, etc.).
 #[derive(Error, Debug)]
 pub enum PipelineExecutionError {
     #[error("Datafusion-native pipeline does not support input file type: {0}")]

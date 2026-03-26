@@ -50,6 +50,7 @@ impl std::fmt::Debug for DataFrameSource {
 }
 
 impl DataFrameSource {
+    /// Wraps `df` as a one-shot [`Producer`].
     pub fn new(df: datafusion::dataframe::DataFrame) -> Self {
         Self { df: Some(df) }
     }
@@ -75,6 +76,7 @@ pub struct DataFrameWriter {
 }
 
 impl DataFrameWriter {
+    /// Configures output path, format, and JSON/YAML emission options.
     pub fn new<S: Into<String>>(
         output_path: S,
         output_file_type: FileType,
@@ -160,6 +162,7 @@ pub struct LegacyDataFrameReader {
 }
 
 impl LegacyDataFrameReader {
+    /// Builds a reader for `input_path` with optional projection and row limit.
     pub fn new(
         input_path: &str,
         input_file_type: FileType,
@@ -265,6 +268,7 @@ pub struct DataframeToRecordBatch {
 }
 
 impl DataframeToRecordBatch {
+    /// Streams record batches from the [`DataFrame`] in `source`.
     pub async fn try_new(mut source: DataFrameSource) -> crate::Result<Self> {
         let df = *source.get().await?;
         let stream = df
@@ -280,6 +284,7 @@ impl DataframeToRecordBatch {
         })
     }
 
+    /// Collects all batches from the stream (errors are dropped).
     pub fn into_batches(self) -> Vec<RecordBatch> {
         self.filter_map(|r| r.ok()).collect()
     }
@@ -307,6 +312,7 @@ pub struct DataframeToRecordBatchProducer {
 }
 
 impl DataframeToRecordBatchProducer {
+    /// Wraps `source` for a single [`DataframeToRecordBatch`] from [`Producer::get`].
     pub fn new(source: DataFrameSource) -> Self {
         Self {
             inner: Some(source),
@@ -350,7 +356,7 @@ pub fn dataframe_apply_head(df: DataFrame, n: usize) -> crate::Result<DataFrame>
         .map_err(|e| Error::GenericError(e.to_string()))
 }
 
-/// Keeps the last `n` rows; strategy matches [`DataFramePipeline`] display mode.
+/// Keeps the last `n` rows using metadata or full collection depending on `input_file_type`.
 pub async fn dataframe_apply_tail(
     df: DataFrame,
     input_path: &str,
@@ -383,7 +389,7 @@ pub async fn dataframe_apply_tail(
     }
 }
 
-/// Random sample of `n` rows; strategy matches [`DataFramePipeline`] display mode.
+/// Random sample of `n` rows using index sampling or reservoir sampling by input format.
 pub async fn dataframe_apply_sample(
     df: DataFrame,
     input_path: &str,

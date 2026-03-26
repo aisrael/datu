@@ -31,6 +31,7 @@ use crate::pipeline::schema::SchemaField;
 use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::write::WriteArgs;
 
+/// Pipeline step that reads an Avro file into a DataFusion [`DataFrame`].
 pub struct DataframeAvroReader {
     pub(crate) args: ReadArgs,
 }
@@ -56,6 +57,7 @@ impl Producer<DataFrame> for DataframeAvroReader {
     }
 }
 
+/// Pipeline step that writes a [`DataFrame`] to an Avro file.
 pub struct DataframeAvroWriter {
     pub(crate) args: WriteArgs,
 }
@@ -80,6 +82,7 @@ async fn read_avro_to_dataframe(ctx: &SessionContext, path: &str) -> Result<Data
     Ok(df)
 }
 
+/// Reads the Arrow schema from an Avro file at `path` and returns [`SchemaField`] descriptions.
 pub fn get_schema_fields_avro(path: &str) -> EyreResult<Vec<SchemaField>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);

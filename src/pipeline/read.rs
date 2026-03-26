@@ -33,6 +33,7 @@ pub struct ReadArgs {
     pub csv_has_header: Option<bool>,
 }
 
+/// Outcome of [`read`](read): a DataFusion source or an ORC reader builder.
 #[allow(clippy::large_enum_variant)]
 pub enum ReadResult {
     DataFrame(DataFrameSource),
@@ -61,6 +62,7 @@ pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
     }
 }
 
+/// Loads supported formats into a [`DataFrameSource`] via DataFusion (not ORC).
 pub async fn read_to_dataframe(
     input_path: &str,
     file_type: FileType,
@@ -100,6 +102,7 @@ pub async fn read_to_dataframe(
     Ok(ReadResult::DataFrame(source))
 }
 
+/// Opens ORC for record-batch reading; errors for other file types.
 pub fn read_to_record_batches(args: &ReadArgs) -> Result<ReadResult> {
     match args.file_type {
         FileType::Orc => {

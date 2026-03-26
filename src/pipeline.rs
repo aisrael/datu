@@ -82,6 +82,7 @@ fn slice_from_head_tail_sample(
         .or_else(|| head.map(DisplaySlice::Head))
 }
 
+/// Fluent builder for a [`Pipeline`] (file conversion or head/tail/sample display).
 pub struct PipelineBuilder {
     read: Option<String>,
     select: Option<SelectSpec>,
@@ -125,16 +126,19 @@ impl Default for PipelineBuilder {
 }
 
 impl PipelineBuilder {
+    /// Returns a builder with default options (no paths set).
     pub fn new() -> Self {
         Self::default()
     }
 }
 
 impl PipelineBuilder {
+    /// Sets the input file path (required before [`build`](PipelineBuilder::build)).
     pub fn read(&mut self, path: &str) -> &mut Self {
         self.read = Some(path.to_string());
         self
     }
+    /// Sets column selection as exact name matches.
     pub fn select(&mut self, columns: &[&str]) -> &mut Self {
         self.select = Some(SelectSpec {
             columns: columns
@@ -150,26 +154,32 @@ impl PipelineBuilder {
         self.select = Some(spec);
         self
     }
+    /// Sets the output path for conversion (mutually exclusive with display-only mode).
     pub fn write<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.write = Some(path.as_ref().to_string_lossy().to_string());
         self
     }
+    /// Keeps the first `n` rows (with write or stdout display).
     pub fn head(&mut self, n: usize) -> &mut Self {
         self.head = Some(n);
         self
     }
+    /// Keeps the last `n` rows (with write or stdout display).
     pub fn tail(&mut self, n: usize) -> &mut Self {
         self.tail = Some(n);
         self
     }
+    /// Random sample of `n` rows (with write or stdout display).
     pub fn sample(&mut self, n: usize) -> &mut Self {
         self.sample = Some(n);
         self
     }
+    /// Sets a row-count path (not supported by [`build`](PipelineBuilder::build); use the CLI).
     pub fn count(&mut self, path: &str) -> &mut Self {
         self.count = Some(path.to_string());
         self
     }
+    /// Requests schema output (not supported by [`build`](PipelineBuilder::build); use the CLI).
     pub fn schema(&mut self) -> &mut Self {
         self.schema = true;
         self
@@ -224,6 +234,7 @@ impl PipelineBuilder {
         self
     }
 
+    /// Consumes configuration and returns a [`Pipeline`] or a planning error.
     pub fn build(&mut self) -> Result<Pipeline> {
         let input_path = self.read.as_ref().ok_or_else(|| {
             Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
@@ -466,6 +477,7 @@ pub struct SelectSpec {
 }
 
 impl SelectSpec {
+    /// Returns true when the selection has no columns.
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty()
     }
@@ -527,6 +539,7 @@ pub struct VecRecordBatchReader {
 }
 
 impl VecRecordBatchReader {
+    /// Creates a reader that iterates `batches` in order.
     pub fn new(batches: Vec<arrow::record_batch::RecordBatch>) -> Self {
         Self { batches, index: 0 }
     }
@@ -585,6 +598,7 @@ pub struct VecRecordBatchReaderSource {
 }
 
 impl VecRecordBatchReaderSource {
+    /// Wraps `batches` in a one-shot [`Producer`] of [`VecRecordBatchReader`].
     pub fn new(batches: Vec<arrow::record_batch::RecordBatch>) -> Self {
         Self {
             batches: Some(batches),

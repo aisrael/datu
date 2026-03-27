@@ -15,6 +15,7 @@ use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
+use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that reads a CSV file into a DataFusion [`DataFrame`].
 pub struct DataframeCsvReader {
@@ -115,9 +116,6 @@ pub struct RecordBatchCsvWriter {
     pub source: RecordBatchReaderSource,
 }
 
-/// Result of successfully writing a CSV file.
-pub struct WriteCsvResult {}
-
 /// Write record batches from a reader to a CSV file.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
     write_record_batches_with_sink(path, reader, CsvSink::new)
@@ -149,13 +147,13 @@ impl BatchWriteSink for CsvSink {
 #[async_trait(?Send)]
 impl Step for RecordBatchCsvWriter {
     type Input = ();
-    type Output = WriteCsvResult;
+    type Output = WriteResult;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let mut source = self.source;
         let mut reader = source.get().await?;
         write_record_batches(self.args.path.as_str(), &mut *reader)?;
-        Ok(WriteCsvResult {})
+        Ok(WriteResult)
     }
 }
 

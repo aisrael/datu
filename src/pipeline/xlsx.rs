@@ -23,15 +23,13 @@ use crate::Result;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::write::WriteArgs;
+use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that writes record batches to an Excel (.xlsx) file.
 pub struct WriteXlsxStep {
     pub args: WriteArgs,
     pub source: RecordBatchReaderSource,
 }
-
-/// Result of successfully writing an XLSX file.
-pub struct WriteXlsxResult {}
 
 /// Write record batches from a reader to an Excel (.xlsx) file.
 pub fn write_record_batch_to_xlsx(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
@@ -64,12 +62,12 @@ pub fn write_record_batch_to_xlsx(path: &str, reader: &mut dyn RecordBatchReader
 #[async_trait(?Send)]
 impl Step for WriteXlsxStep {
     type Input = ();
-    type Output = WriteXlsxResult;
+    type Output = WriteResult;
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get().await?;
         write_record_batch_to_xlsx(&self.args.path, &mut *reader)?;
-        Ok(WriteXlsxResult {})
+        Ok(WriteResult)
     }
 }
 

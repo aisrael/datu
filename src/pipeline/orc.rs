@@ -14,6 +14,7 @@ use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
+use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that reads an ORC file and produces a record batch reader.
 pub struct OrcRecordBatchReader {
@@ -64,9 +65,6 @@ pub struct RecordBatchOrcWriter {
     pub source: RecordBatchReaderSource,
 }
 
-/// Result of successfully writing an ORC file.
-pub struct WriteOrcResult {}
-
 /// Write record batches from a reader to an ORC file.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
     write_record_batches_with_sink(path, reader, OrcSink::new)
@@ -100,11 +98,11 @@ impl BatchWriteSink for OrcSink {
 #[async_trait(?Send)]
 impl Step for RecordBatchOrcWriter {
     type Input = ();
-    type Output = WriteOrcResult;
+    type Output = WriteResult;
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get().await?;
         write_record_batches(&self.args.path, &mut *reader)?;
-        Ok(WriteOrcResult {})
+        Ok(WriteResult)
     }
 }

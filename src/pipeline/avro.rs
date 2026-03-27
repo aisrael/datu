@@ -30,6 +30,7 @@ use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::write::WriteArgs;
+use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that reads an Avro file into a DataFusion [`DataFrame`].
 pub struct DataframeAvroReader {
@@ -281,9 +282,6 @@ pub struct RecordBatchAvroWriter {
     pub args: WriteArgs,
 }
 
-/// Result of successfully writing an Avro file.
-pub struct WriteAvroResult {}
-
 /// Write record batches from a reader to an Avro file.
 /// Int16 columns are upcast to Int32 so the arrow-avro writer can write them.
 pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
@@ -326,12 +324,12 @@ impl BatchWriteSink for AvroSink {
 #[async_trait(?Send)]
 impl Step for RecordBatchAvroWriter {
     type Input = Box<dyn Producer<dyn RecordBatchReader + 'static>>;
-    type Output = WriteAvroResult;
+    type Output = WriteResult;
 
     async fn execute(mut self, mut input: Self::Input) -> Result<Self::Output> {
         let mut reader = input.get().await?;
         write_record_batches(&self.args.path, &mut *reader)?;
-        Ok(WriteAvroResult {})
+        Ok(WriteResult)
     }
 }
 

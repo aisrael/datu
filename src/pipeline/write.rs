@@ -35,6 +35,9 @@ pub struct WriteYamlArgs {
     pub sparse: bool,
 }
 
+/// Marker returned by record-batch write pipeline steps after a successful write.
+pub struct WriteResult;
+
 /// Writes a [`DataFrame`] using DataFusion native writers (Parquet, CSV, JSON only).
 pub async fn write_dataframe(mut source: DataFrameSource, args: WriteArgs) -> Result<()> {
     let write_opts = DataFrameWriteOptions::new();

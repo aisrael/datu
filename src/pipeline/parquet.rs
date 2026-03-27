@@ -26,6 +26,7 @@ use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::write::WriteArgs;
+use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that reads a Parquet file into a DataFusion [`DataFrame`].
 pub struct DataframeParquetReader {
@@ -178,18 +179,15 @@ pub struct RecordBatchParquetWriter {
     pub source: RecordBatchReaderSource,
 }
 
-/// Result of successfully writing a Parquet file.
-pub struct WriteParquetResult {}
-
 #[async_trait(?Send)]
 impl Step for RecordBatchParquetWriter {
     type Input = ();
-    type Output = WriteParquetResult;
+    type Output = WriteResult;
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get().await?;
         write_record_batches(&self.args.path, &mut *reader)?;
-        Ok(WriteParquetResult {})
+        Ok(WriteResult)
     }
 }
 

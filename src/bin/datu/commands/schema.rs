@@ -7,7 +7,7 @@ use eyre::Result;
 
 /// The `datu schema` command
 pub async fn schema(args: SchemaArgs) -> Result<()> {
-    resolve_file_type(args.input, &args.input_path).map_err(eyre::Report::from)?;
+    resolve_file_type(args.input, &args.input_path)?;
     let mut builder = PipelineBuilder::new();
     builder
         .read(&args.input_path)
@@ -16,6 +16,6 @@ pub async fn schema(args: SchemaArgs) -> Result<()> {
         .sparse(args.sparse)
         .display_format(args.output)
         .schema();
-    let mut built = builder.build().map_err(eyre::Report::from)?;
-    built.execute().map_err(eyre::Report::from)
+    let mut pipeline = builder.build()?;
+    Ok(pipeline.execute()?)
 }

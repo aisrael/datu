@@ -59,6 +59,6 @@ pub async fn heads_or_tails(args: HeadsOrTails, cmd: HeadsOrTailsCmd) -> Result<
         builder.select_spec(spec);
     }
 
-    let mut built = builder.build().map_err(eyre::Report::from)?;
-    built.execute().map_err(eyre::Report::from)
+    let mut pipeline = builder.build()?;
+    Ok(pipeline.execute()?)
 }

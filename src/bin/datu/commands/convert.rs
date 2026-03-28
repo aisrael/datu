@@ -84,10 +84,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         builder.head(n);
     }
 
-    let result: Result<(), datu::Error> = match builder.build() {
-        Ok(mut built) => built.execute(),
-        Err(e) => Err(e),
-    };
+    let result = builder.build().and_then(|mut pipeline| pipeline.execute());
 
     match result {
         Ok(()) => {

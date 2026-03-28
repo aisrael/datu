@@ -200,12 +200,6 @@ impl Step for LegacyDataFrameReader {
     }
 }
 
-/// Reads an ORC file into record batches (ORC is not natively supported by DataFusion).
-/// Limit is applied via DataFusion after reading.
-fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::RecordBatch>> {
-    orc::read_orc_all_batches(path)
-}
-
 /// Reads a [`DataFrame`] from disk (DataFusion-native formats or ORC via in-memory batches).
 pub(crate) async fn read_dataframe_from_path(
     input_path: &str,
@@ -225,7 +219,7 @@ pub(crate) async fn read_dataframe_from_path(
         }
         FileType::Orc => {
             let ctx = SessionContext::new();
-            let batches = read_orc_to_batches(input_path)?;
+            let batches = orc::read_orc_all_batches(input_path)?;
             if batches.is_empty() {
                 return Err(Error::GenericError(
                     "ORC file is empty or could not be read".to_string(),

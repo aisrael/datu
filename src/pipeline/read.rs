@@ -201,64 +201,32 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_read_parquet() {
-        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        source.get().await.expect("expected DataFrame");
-    }
-
-    #[tokio::test]
-    async fn test_read_avro() {
-        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_read_csv() {
-        let args = ReadArgs::new("fixtures/table.csv", FileType::Csv);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_read_json() {
-        let args = ReadArgs::new("fixtures/table.json", FileType::Json);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
+    async fn test_read_datafusion_formats_yield_dataframe() {
+        let cases = [
+            ("fixtures/table.parquet", FileType::Parquet),
+            ("fixtures/userdata5.avro", FileType::Avro),
+            ("fixtures/table.csv", FileType::Csv),
+            ("fixtures/table.json", FileType::Json),
+        ];
+        for (path, file_type) in cases {
+            let args = ReadArgs::new(path, file_type);
+            let result = read(&args)
+                .await
+                .unwrap_or_else(|e| panic!("read {path} ({file_type}): {e}"));
+            let ReadResult::DataFrame(mut source) = result else {
+                panic!("expected DataFrame for {path}, got {result:?}");
+            };
+            source
+                .get()
+                .await
+                .unwrap_or_else(|e| panic!("get DataFrame {path}: {e}"));
+        }
     }
 
     #[tokio::test]
     async fn test_read_orc() {
         let args = ReadArgs::new("fixtures/userdata.orc", FileType::Orc);
-        let result = read(&args).await;
-        println!("result: {:?}", result);
-        assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = read(&args).await.expect("read ORC");
         assert!(matches!(result, ReadResult::OrcReaderBuilder(_)));
     }
 }

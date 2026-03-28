@@ -44,8 +44,8 @@ impl Step for DataframeParquetWriter {
     }
 }
 
-/// Pipeline step that reads a Parquet file and produces a record batch reader.
-/// TODO: Deprecate this and use Dataframe
+/// Parquet input for the record-batch pipeline ([`crate::pipeline::build_reader`]): uses the native
+/// Arrow Parquet reader so `offset` / `limit` apply without loading the file through DataFusion first.
 pub struct RecordBatchParquetReader {
     pub args: ReadArgs,
 }

@@ -4,7 +4,6 @@ mod execute;
 mod from_path;
 mod source;
 mod steps;
-mod to_record_batch;
 mod transform;
 mod writer;
 
@@ -18,7 +17,7 @@ pub use steps::DataframeHead;
 pub use steps::DataframeSample;
 pub use steps::DataframeSelect;
 pub use steps::DataframeTail;
-pub use to_record_batch::DataframeToRecordBatch;
+pub use transform::DataframeToRecordBatch;
 pub use transform::dataframe_apply_head;
 pub use transform::dataframe_apply_sample;
 pub use transform::dataframe_apply_tail;

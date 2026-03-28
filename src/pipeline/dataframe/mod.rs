@@ -19,7 +19,6 @@ pub use steps::DataframeSample;
 pub use steps::DataframeSelect;
 pub use steps::DataframeTail;
 pub use to_record_batch::DataframeToRecordBatch;
-pub use to_record_batch::DataframeToRecordBatchProducer;
 pub use transform::dataframe_apply_head;
 pub use transform::dataframe_apply_sample;
 pub use transform::dataframe_apply_tail;

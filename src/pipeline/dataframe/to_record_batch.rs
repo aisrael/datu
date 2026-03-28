@@ -55,29 +55,3 @@ impl RecordBatchReader for DataframeToRecordBatch {
         self.schema.clone()
     }
 }
-
-/// Yields a [`DataframeToRecordBatch`] once from a [`DataFrameSource`] (for chaining to [`crate::pipeline::avro::RecordBatchAvroWriter`]).
-pub struct DataframeToRecordBatchProducer {
-    inner: Option<DataFrameSource>,
-}
-
-impl DataframeToRecordBatchProducer {
-    /// Wraps `source` for a single [`DataframeToRecordBatch`] from [`Producer::get`].
-    pub fn new(source: DataFrameSource) -> Self {
-        Self {
-            inner: Some(source),
-        }
-    }
-}
-
-#[async_trait(?Send)]
-impl Producer<dyn RecordBatchReader + 'static> for DataframeToRecordBatchProducer {
-    async fn get(&mut self) -> crate::Result<Box<dyn RecordBatchReader + 'static>> {
-        let source = self
-            .inner
-            .take()
-            .ok_or_else(|| Error::GenericError("DataFrame source already taken".to_string()))?;
-        let reader = DataframeToRecordBatch::try_new(source).await?;
-        Ok(Box::new(reader) as Box<dyn RecordBatchReader + 'static>)
-    }
-}

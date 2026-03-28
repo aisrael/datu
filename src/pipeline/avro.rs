@@ -21,7 +21,7 @@ use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
-use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
+use crate::pipeline::dataframe::DataframeToRecordBatch;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::read::expect_file_type;
 use crate::pipeline::record_batch::BatchWriteSink;
@@ -45,9 +45,8 @@ impl Step for DataframeAvroWriter {
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
         let source = DataFrameSource::new(*df);
-        let mut producer = DataframeToRecordBatchProducer::new(source);
-        let mut reader = producer.get().await?;
-        write_record_batches(self.args.path.as_str(), &mut *reader)
+        let mut reader = DataframeToRecordBatch::try_new(source).await?;
+        write_record_batches(self.args.path.as_str(), &mut reader)
     }
 }
 
@@ -203,12 +202,11 @@ impl BatchWriteSink for AvroSink {
 
 #[async_trait(?Send)]
 impl Step for RecordBatchAvroWriter {
-    type Input = Box<dyn Producer<dyn RecordBatchReader + 'static>>;
+    type Input = Box<DataframeToRecordBatch>;
     type Output = WriteResult;
 
     async fn execute(mut self, mut input: Self::Input) -> Result<Self::Output> {
-        let mut reader = input.get().await?;
-        write_record_batches(&self.args.path, &mut *reader)?;
+        write_record_batches(&self.args.path, &mut input)?;
         Ok(WriteResult)
     }
 }

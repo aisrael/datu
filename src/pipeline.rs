@@ -16,7 +16,6 @@ pub use dataframe::DataframeSample;
 pub use dataframe::DataframeSelect;
 pub use dataframe::DataframeTail;
 pub use dataframe::DataframeToRecordBatch;
-pub use dataframe::DataframeToRecordBatchProducer;
 pub use json::DataframeJsonPrettyWriter;
 pub use json::DataframeJsonReader;
 pub use json::DataframeJsonWriter;

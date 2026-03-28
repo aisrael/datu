@@ -1,8 +1,8 @@
 use super::DataframeSelect;
 use super::DataframeTail;
-use super::DataframeToRecordBatchProducer;
 use crate::FileType;
 use crate::pipeline::DataframeParquetReader;
+use crate::pipeline::DataframeToRecordBatch;
 use crate::pipeline::RecordBatchAvroWriter;
 use crate::pipeline::Step;
 use crate::pipeline::csv::DataframeCsvWriter;
@@ -58,7 +58,7 @@ async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
         .execute(())
         .await
         .unwrap();
-    let producer = DataframeToRecordBatchProducer::new(source);
+    let reader = DataframeToRecordBatch::try_new(source).await.unwrap();
     let temp_dir = tempfile::tempdir().unwrap();
     let output = temp_path(&temp_dir, "out.avro");
     let write_args = WriteArgs {
@@ -68,7 +68,7 @@ async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
         pretty: None,
     };
     RecordBatchAvroWriter { args: write_args }
-        .execute(Box::new(producer))
+        .execute(Box::new(reader))
         .await
         .unwrap();
     assert!(std::path::Path::new(&output).exists());

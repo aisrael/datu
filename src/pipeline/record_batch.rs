@@ -11,6 +11,7 @@ use crate::cli::DisplayOutputFormat;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
+use crate::pipeline::ProgressRecordBatchReader;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
@@ -283,7 +284,6 @@ pub enum RecordBatchSink {
         output_path: String,
         output_file_type: FileType,
         json_pretty: bool,
-        #[allow(dead_code)]
         progress: Option<ProgressBar>,
     },
     Display {
@@ -421,20 +421,35 @@ impl RecordBatchPipeline {
                     output_path,
                     output_file_type,
                     json_pretty,
-                    progress: _progress,
+                    progress,
                 } => {
                     let mut source =
                         orc_source_after_select_and_slice(input_path.clone(), &select, slice)
                             .await?;
 
-                    let mut reader = source.get().await?;
-                    write_record_batches_from_reader(
-                        &mut *reader,
-                        output_path.as_str(),
-                        output_file_type,
-                        sparse,
-                        json_pretty,
-                    )?;
+                    let reader = source.get().await?;
+                    if let Some(pb) = progress {
+                        let mut wrapped = ProgressRecordBatchReader {
+                            inner: reader,
+                            progress: pb,
+                        };
+                        write_record_batches_from_reader(
+                            &mut wrapped,
+                            output_path.as_str(),
+                            output_file_type,
+                            sparse,
+                            json_pretty,
+                        )?;
+                    } else {
+                        let mut reader = reader;
+                        write_record_batches_from_reader(
+                            &mut *reader,
+                            output_path.as_str(),
+                            output_file_type,
+                            sparse,
+                            json_pretty,
+                        )?;
+                    }
                     Ok::<(), Error>(())
                 }
                 RecordBatchSink::Display {

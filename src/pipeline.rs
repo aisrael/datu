@@ -732,6 +732,31 @@ impl RecordBatchReader for ProgressVecRecordBatchReader {
     }
 }
 
+/// Wraps any [`RecordBatchReader`] and increments [`ProgressBar`] by row count per batch.
+/// Used for streaming readers (e.g. ORC) where [`ProgressVecRecordBatchReader`] does not apply.
+pub(crate) struct ProgressRecordBatchReader {
+    inner: Box<dyn RecordBatchReader + 'static>,
+    progress: ProgressBar,
+}
+
+impl Iterator for ProgressRecordBatchReader {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        if let Ok(ref batch) = item {
+            self.progress.inc(batch.num_rows() as u64);
+        }
+        Some(item)
+    }
+}
+
+impl RecordBatchReader for ProgressRecordBatchReader {
+    fn schema(&self) -> Arc<Schema> {
+        self.inner.schema()
+    }
+}
+
 /// A concrete implementation of Source<dyn RecordBatchReader + 'static> that yiedls a VecRecordBatchReader.
 pub struct VecRecordBatchReaderSource {
     batches: Option<Vec<arrow::record_batch::RecordBatch>>,

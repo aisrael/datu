@@ -92,13 +92,9 @@ impl Producer<dyn RecordBatchReader + 'static> for ReadCsvStepRecordBatch {
                 &self.args.path,
                 CsvReadOptions::new().has_header(has_header),
             )
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+            .await?;
 
-        let batches = df
-            .collect()
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let batches = df.collect().await?;
 
         let reader = Box::new(VecRecordBatchReader::new(batches));
         Ok(apply_offset_limit(

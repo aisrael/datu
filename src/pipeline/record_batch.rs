@@ -37,7 +37,7 @@ struct RecordBatchReaderHolder {
 impl Producer<dyn RecordBatchReader + 'static> for RecordBatchReaderHolder {
     async fn get(&mut self) -> crate::Result<Box<dyn RecordBatchReader + 'static>> {
         std::mem::take(&mut self.reader)
-            .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))
+            .ok_or_else(|| Error::GenericError("Reader already taken".to_string()))
     }
 }
 
@@ -58,9 +58,9 @@ impl Step for RecordBatchSelect {
         let indices: Vec<usize> = column_names
             .iter()
             .map(|col| {
-                schema.index_of(col).map_err(|e| {
-                    crate::Error::GenericError(format!("Column '{col}' not found: {e}"))
-                })
+                schema
+                    .index_of(col)
+                    .map_err(|e| Error::GenericError(format!("Column '{col}' not found: {e}")))
             })
             .collect::<crate::Result<Vec<_>>>()?;
         let projected_schema = reader.schema().project(&indices)?;
@@ -403,9 +403,7 @@ impl RecordBatchPipeline {
                 }
                 RecordBatchSink::Count => {
                     if select.is_none() {
-                        let total = count_rows(&input_path, FileType::Orc, None)
-                            .await
-                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        let total = count_rows(&input_path, FileType::Orc, None).await?;
                         println!("{total}");
                     } else {
                         let mut source =

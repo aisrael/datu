@@ -75,9 +75,8 @@ pub fn write_record_batches_as_yaml<W>(
 where
     W: Write,
 {
-    let batches: Vec<RecordBatch> = reader
-        .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
-        .map_err(Error::ArrowError)?;
+    let batches: Vec<RecordBatch> =
+        reader.collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
     let yaml_rows: Vec<Yaml<'static>> = batches
         .iter()
         .flat_map(|batch| record_batch_to_yaml_rows(batch, sparse))
@@ -89,7 +88,7 @@ where
         .dump(&doc)
         .map_err(|e| Error::GenericError(format!("Failed to emit YAML: {e}")))?;
     let to_write = out.strip_prefix("---\n").unwrap_or(&out);
-    write!(w, "{to_write}").map_err(|e| Error::GenericError(format!("Write failed: {e}")))?;
+    write!(w, "{to_write}")?;
     Ok(())
 }
 

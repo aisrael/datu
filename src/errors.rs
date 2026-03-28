@@ -54,6 +54,8 @@ pub enum PipelinePlanningError {
     UnsupportedInputFileType(String),
     #[error("Pipeline planner does not support output file type: {0}")]
     UnsupportedOutputFileType(String),
+    #[error("Column '{0}' not found (case-insensitive match)")]
+    ColumnNotFound(String),
 }
 
 /// Errors produced while running a pipeline (wrong format, consumed state, etc.).

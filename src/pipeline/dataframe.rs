@@ -133,8 +133,7 @@ impl Step for DataFrameWriter {
         let df = input.get().await?;
 
         let handle = tokio::runtime::Handle::current();
-        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))?;
 
         let mut reader = VecRecordBatchReader::new(batches);
         write_record_batches_from_reader(
@@ -215,9 +214,7 @@ pub(crate) async fn read_dataframe_from_path(
 ) -> crate::Result<DataFrame> {
     match input_file_type {
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
-            let result = read_to_dataframe(input_path, input_file_type, csv_has_header)
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
+            let result = read_to_dataframe(input_path, input_file_type, csv_has_header).await?;
             let ReadResult::DataFrame(mut source) = result else {
                 unreachable!()
             };
@@ -234,8 +231,7 @@ pub(crate) async fn read_dataframe_from_path(
                     "ORC file is empty or could not be read".to_string(),
                 ));
             }
-            ctx.read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(ctx.read_batches(batches)?)
         }
         _ => Err(Error::GenericError(
             "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types".to_string(),
@@ -255,10 +251,7 @@ impl DataframeToRecordBatch {
     /// Streams record batches from the [`DataFrame`] in `source`.
     pub async fn try_new(mut source: DataFrameSource) -> crate::Result<Self> {
         let df = *source.get().await?;
-        let stream = df
-            .execute_stream()
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let stream = df.execute_stream().await?;
         let schema = stream.schema();
         let handle = tokio::runtime::Handle::current();
         Ok(Self {
@@ -327,17 +320,14 @@ pub fn dataframe_apply_select(
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df
-            .select_columns(&col_refs)
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        df = df.select_columns(&col_refs)?;
     }
     Ok(df)
 }
 
 /// Keeps the first `n` rows (same semantics as [`DataFrame::limit`] with offset 0).
 pub fn dataframe_apply_head(df: DataFrame, n: usize) -> crate::Result<DataFrame> {
-    df.limit(0, Some(n))
-        .map_err(|e| Error::GenericError(e.to_string()))
+    Ok(df.limit(0, Some(n))?)
 }
 
 /// Keeps the last `n` rows using metadata or full collection depending on `input_file_type`.
@@ -352,20 +342,12 @@ pub async fn dataframe_apply_tail(
             let total_rows = crate::get_total_rows_result(input_path, FileType::Parquet)?;
             let number = tail_n.min(total_rows);
             let skip = total_rows.saturating_sub(number);
-            let df = df
-                .limit(skip, Some(number))
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            Ok(df)
+            Ok(df.limit(skip, Some(number))?)
         }
         FileType::Csv | FileType::Json | FileType::Avro | FileType::Orc => {
-            let all = df
-                .collect()
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
+            let all = df.collect().await?;
             let batches = tail_batches(all, tail_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         other => Err(Error::GenericError(format!(
             "DataFrame tail is not supported for input type: {other}"
@@ -386,17 +368,13 @@ pub async fn dataframe_apply_sample(
             let source = DataFrameSource::new(df);
             let batch_reader = DataframeToRecordBatch::try_new(source).await?;
             let batches = sample_from_reader(Box::new(batch_reader), total_rows, sample_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc => {
             let source = DataFrameSource::new(df);
             let batch_reader = DataframeToRecordBatch::try_new(source).await?;
             let batches = reservoir_sample_from_reader(Box::new(batch_reader), sample_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         other => Err(Error::GenericError(format!(
             "DataFrame sample is not supported for input type: {other}"
@@ -636,9 +614,7 @@ impl DataFramePipeline {
                         let df = source.df.take().ok_or_else(|| {
                             Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                         })?;
-                        df.count()
-                            .await
-                            .map_err(|e| Error::GenericError(e.to_string()))?
+                        df.count().await?
                     };
                     println!("{total}");
                     Ok::<(), Error>(())
@@ -678,10 +654,7 @@ impl DataFramePipeline {
                             let df = source.df.take().ok_or_else(|| {
                                 Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                             })?;
-                            let batches = df
-                                .collect()
-                                .await
-                                .map_err(|e| Error::GenericError(e.to_string()))?;
+                            let batches = df.collect().await?;
                             let inner = VecRecordBatchReader::new(batches);
                             let mut reader = ProgressVecRecordBatchReader { inner, progress };
                             write_record_batches_from_reader(
@@ -710,10 +683,7 @@ impl DataFramePipeline {
                     let df = source.df.take().ok_or_else(|| {
                         Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                     })?;
-                    let batches = df
-                        .collect()
-                        .await
-                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                    let batches = df.collect().await?;
                     let source = Box::new(VecRecordBatchReaderSource::new(batches));
                     let display_step = DisplayWriterStep {
                         output_format,

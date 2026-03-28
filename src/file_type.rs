@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::str::FromStr;
 
+use crate::Error;
+
 /// A supported input or output file type
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FileType {
@@ -48,7 +50,7 @@ impl FromStr for FileType {
 
 /// Try to determine the FileType from a filename
 impl TryFrom<&str> for FileType {
-    type Error = crate::Error;
+    type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let path = Path::new(s);
@@ -64,12 +66,12 @@ impl TryFrom<&str> for FileType {
                 "avro" => FileType::Avro,
                 "xlsx" => FileType::Xlsx,
                 "yaml" | "yml" => FileType::Yaml,
-                _ => return Err(crate::Error::UnknownFileType(s.to_owned())),
+                _ => return Err(Error::UnknownFileType(s.to_owned())),
             };
             return Ok(file_type);
         };
 
-        Err(crate::Error::UnknownFileType(s.to_owned()))
+        Err(Error::UnknownFileType(s.to_owned()))
     }
 }
 
@@ -129,6 +131,7 @@ pub fn resolve_file_type(input_override: Option<FileType>, path: &str) -> crate:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Error;
 
     #[test]
     fn test_valid_extensions() {
@@ -157,13 +160,13 @@ mod tests {
     #[test]
     fn test_unknown_extension() {
         let result = FileType::try_from("image.png");
-        assert!(matches!(result, Err(crate::Error::UnknownFileType(s)) if s == "png"));
+        assert!(matches!(result, Err(Error::UnknownFileType(s)) if s == "png"));
     }
 
     #[test]
     fn test_no_extension() {
         let result = FileType::try_from("README");
-        assert!(matches!(result, Err(crate::Error::UnknownFileType(s)) if s == "README"));
+        assert!(matches!(result, Err(Error::UnknownFileType(s)) if s == "README"));
     }
 
     #[test]

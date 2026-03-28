@@ -95,8 +95,7 @@ where
     } else {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+            .build()?;
         rt.block_on(fut)
     }
 }
@@ -593,18 +592,18 @@ impl ColumnSpec {
     /// Resolves this spec against a schema, returning the actual column name.
     pub fn resolve(&self, schema: &Schema) -> Result<String> {
         match self {
-            ColumnSpec::Exact(name) => schema
-                .index_of(name)
-                .map(|_| name.clone())
-                .map_err(|e| Error::GenericError(format!("Column '{name}' not found: {e}"))),
+            ColumnSpec::Exact(name) => {
+                schema.index_of(name)?;
+                Ok(name.clone())
+            }
             ColumnSpec::CaseInsensitive(name) => schema
                 .fields()
                 .iter()
                 .find(|f| f.name().eq_ignore_ascii_case(name))
                 .map(|f| f.name().clone())
                 .ok_or_else(|| {
-                    Error::GenericError(format!(
-                        "Column '{name}' not found (case-insensitive match)"
+                    Error::PipelinePlanningError(PipelinePlanningError::ColumnNotFound(
+                        name.clone(),
                     ))
                 }),
         }
@@ -789,7 +788,7 @@ pub async fn count_rows(
     let reader = reader_step.get().await?;
     let mut total = 0usize;
     for batch in reader {
-        let batch = batch.map_err(Error::from)?;
+        let batch = batch?;
         total += batch.num_rows();
     }
     Ok(total)
@@ -987,6 +986,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::Error;
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::avro::DataframeAvroWriter;
@@ -1186,7 +1186,6 @@ mod tests {
 
     #[test]
     fn test_pipeline_builder_display_rejects_head_and_sample() {
-        use crate::Error;
         use crate::errors::PipelinePlanningError;
 
         let mut builder = PipelineBuilder::new();

@@ -10,47 +10,21 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
 use crate::Error;
-use crate::FileType;
 use crate::cli::DisplayOutputFormat;
 /// Column selection in REPL expressions (re-export of [`crate::pipeline::ColumnSpec`]).
 pub use crate::pipeline::ColumnSpec;
-use crate::pipeline::Producer;
-use crate::pipeline::VecRecordBatchReaderSource;
-use crate::pipeline::count_rows;
-use crate::pipeline::display::write_record_batches_as_csv;
-use crate::pipeline::read_to_batches;
-use crate::pipeline::sample_batches;
-use crate::pipeline::schema;
-use crate::pipeline::select;
-use crate::pipeline::tail_batches;
-use crate::pipeline::write_batches;
+use crate::pipeline::PipelineBuilder;
+use crate::pipeline::SelectSpec;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum PipelineStage {
-    Read {
-        path: String,
-    },
-    Select {
-        columns: Vec<ColumnSpec>,
-    },
-    Head {
-        n: usize,
-    },
-    Tail {
-        n: usize,
-    },
-    Sample {
-        n: usize,
-    },
-    /// Count rows. `Some(path)` = count file directly (efficient); `None` = sum batches in context.
-    Count {
-        path: Option<String>,
-    },
-    Schema,
-    Write {
-        path: String,
-    },
+    Read { path: String },
+    Select { columns: Vec<ColumnSpec> },
+    Head { n: usize },
+    Tail { n: usize },
+    Sample { n: usize },
+    Write { path: String },
     Print,
 }
 
@@ -59,11 +33,9 @@ impl PipelineStage {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            PipelineStage::Count { .. }
-                | PipelineStage::Head { .. }
+            PipelineStage::Head { .. }
                 | PipelineStage::Tail { .. }
                 | PipelineStage::Sample { .. }
-                | PipelineStage::Schema
                 | PipelineStage::Write { .. }
         )
     }
@@ -101,9 +73,6 @@ impl fmt::Display for PipelineStage {
             PipelineStage::Head { n } => write!(f, "head({n})"),
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
             PipelineStage::Sample { n } => write!(f, "sample({n})"),
-            PipelineStage::Count { path: Some(p) } => write!(f, r#"count("{p}")"#),
-            PipelineStage::Count { path: None } => write!(f, "count()"),
-            PipelineStage::Schema => write!(f, "schema()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
             PipelineStage::Print => write!(f, "print()"),
         }
@@ -112,7 +81,6 @@ impl fmt::Display for PipelineStage {
 
 /// A general REPL pipeline.
 pub struct ReplPipeline {
-    pub batches: Option<Vec<arrow::record_batch::RecordBatch>>,
     pub writer: Option<String>,
     pub statement_incomplete: bool,
     pending_exprs: Vec<Expr>,
@@ -125,10 +93,9 @@ impl Default for ReplPipeline {
 }
 
 impl ReplPipeline {
-    /// Creates an empty pipeline with no batches loaded.
+    /// Creates an empty pipeline (output path tracked after `write` only).
     pub fn new() -> Self {
         Self {
-            batches: None,
             writer: None,
             statement_incomplete: false,
             pending_exprs: Vec::new(),
@@ -168,6 +135,9 @@ impl ReplPipeline {
     fn eval_exprs(&mut self, exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
         let (stages, statement_incomplete) = plan_pipeline_with_state(exprs)?;
         self.statement_incomplete = statement_incomplete;
+        if !statement_incomplete {
+            validate_repl_pipeline_stages(&stages)?;
+        }
         Ok(stages)
     }
 
@@ -186,146 +156,30 @@ impl ReplPipeline {
 
         let planned = plan_pipeline_with_state(std::mem::take(&mut self.pending_exprs))?;
         self.statement_incomplete = planned.1;
+        validate_repl_pipeline_stages(&planned.0)?;
         Ok(Some(planned.0))
     }
 
-    /// Executes a planned pipeline.
+    /// Executes a planned pipeline via [`PipelineBuilder`] (same path as CLI `head` / `convert`).
     pub async fn execute_pipeline(&mut self, stages: Vec<PipelineStage>) -> crate::Result<()> {
-        for stage in stages {
-            self.execute_stage(stage).await?;
+        validate_repl_pipeline_stages(&stages)?;
+        let mut builder = repl_stages_to_pipeline_builder(&stages)?;
+        builder
+            .sparse(true)
+            // Pretty JSON forces the Arrow/record-batch writer so output is one parseable JSON
+            // value (matches legacy REPL `write_batches`); DataFusion's compact JSON is NDJSON.
+            .json_pretty(true)
+            .display_format(DisplayOutputFormat::Csv)
+            .display_csv_headers(true);
+        let mut pipeline = builder.build()?;
+        pipeline.execute()?;
+        if let Some(PipelineStage::Write { path }) = stages
+            .iter()
+            .find(|s| matches!(s, PipelineStage::Write { .. }))
+        {
+            self.writer = Some(path.clone());
         }
         Ok(())
-    }
-
-    /// Dispatches a single planned stage to the appropriate execution method.
-    async fn execute_stage(&mut self, stage: PipelineStage) -> crate::Result<()> {
-        match stage {
-            PipelineStage::Read { path } => self.exec_read(&path).await,
-            PipelineStage::Select { columns } => self.exec_select(&columns).await,
-            PipelineStage::Head { n } => self.exec_head(n),
-            PipelineStage::Tail { n } => self.exec_tail(n),
-            PipelineStage::Sample { n } => self.exec_sample(n),
-            PipelineStage::Count { path: Some(p) } => self.exec_count_path(&p).await,
-            PipelineStage::Count { path: None } => self.exec_count(),
-            PipelineStage::Schema => self.exec_schema(),
-            PipelineStage::Write { path } => self.exec_write(&path).await,
-            PipelineStage::Print => self.print_batches().await,
-        }
-    }
-
-    /// Reads a file into record batches.
-    async fn exec_read(&mut self, path: &str) -> crate::Result<()> {
-        let file_type: FileType = path.try_into()?;
-        let batches = read_to_batches(path, file_type, &None, None, None)
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
-        self.batches = Some(batches);
-        Ok(())
-    }
-
-    /// Selects columns from the batches in context.
-    async fn exec_select(&mut self, columns: &[ColumnSpec]) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("select requires a preceding read in the pipe".to_string())
-        })?;
-        let selected = select::select_columns_to_batches(batches, columns)?;
-        self.batches = Some(selected);
-        Ok(())
-    }
-
-    /// Takes the first N rows from the batches in context.
-    fn exec_head(&mut self, n: usize) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("head requires a preceding read in the pipe".to_string())
-        })?;
-        let mut result = Vec::new();
-        let mut remaining = n;
-        for batch in batches {
-            if remaining == 0 {
-                break;
-            }
-            let rows = batch.num_rows().min(remaining);
-            result.push(batch.slice(0, rows));
-            remaining -= rows;
-        }
-        self.batches = Some(result);
-        Ok(())
-    }
-
-    /// Takes the last N rows from the batches in context.
-    fn exec_tail(&mut self, n: usize) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("tail requires a preceding read in the pipe".to_string())
-        })?;
-        let result = tail_batches(batches, n);
-        self.batches = Some(result);
-        Ok(())
-    }
-
-    /// Samples N random rows from the batches in context.
-    fn exec_sample(&mut self, n: usize) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("sample requires a preceding read in the pipe".to_string())
-        })?;
-        let result = sample_batches(batches, n);
-        self.batches = Some(result);
-        Ok(())
-    }
-
-    /// Counts rows in a file directly (metadata for Parquet/ORC, streaming for Avro/CSV).
-    async fn exec_count_path(&mut self, path: &str) -> crate::Result<()> {
-        let file_type: FileType = path.try_into()?;
-        let total = count_rows(path, file_type, None)
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
-        println!("{total}");
-        Ok(())
-    }
-
-    /// Counts the total number of rows across all batches and prints the result.
-    fn exec_count(&mut self) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("count requires a preceding read in the pipe".to_string())
-        })?;
-        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-        println!("{total}");
-        Ok(())
-    }
-
-    /// Prints the schema of the batches in context.
-    fn exec_schema(&mut self) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("schema requires a preceding read in the pipe".to_string())
-        })?;
-        let first = batches
-            .first()
-            .ok_or_else(|| Error::GenericError("schema requires non-empty batches".to_string()))?;
-        let fields = schema::schema_fields_from_arrow(first.schema().as_ref());
-        schema::print_schema_fields(&fields, DisplayOutputFormat::Csv, true)
-            .map_err(|e| Error::GenericError(e.to_string()))
-    }
-
-    /// Writes the batches in context to an output file.
-    async fn exec_write(&mut self, output_path: &str) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("write requires a preceding read in the pipe".to_string())
-        })?;
-        let output_file_type: FileType = output_path.try_into()?;
-        write_batches(batches, output_path, output_file_type, true, false)
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
-        self.writer = Some(output_path.to_string());
-        Ok(())
-    }
-
-    /// Prints batches from the context as CSV to stdout (implicit `print(:csv)`).
-    async fn print_batches(&mut self) -> crate::Result<()> {
-        let batches = self.batches.take().ok_or_else(|| {
-            Error::GenericError("print requires batches in the context".to_string())
-        })?;
-        let mut source = VecRecordBatchReaderSource::new(batches);
-        let mut reader = source.get().await?;
-        write_record_batches_as_csv(&mut *reader, std::io::stdout(), true)
     }
 }
 
@@ -409,11 +263,17 @@ impl Repl {
                 Ok((remainder, expr)) => {
                     let remainder = remainder.trim();
                     if remainder.is_empty() {
-                        if let Some(pipeline) = self.pipeline.eval_incremental(expr)? {
-                            let stages: Vec<String> =
-                                pipeline.iter().map(|s| s.to_string()).collect();
-                            println!("Pipeline: {}", stages.join(" |> "));
-                            self.pipeline.execute_pipeline(pipeline).await?;
+                        match self.pipeline.eval_incremental(expr) {
+                            Ok(Some(pipeline)) => {
+                                let stages: Vec<String> =
+                                    pipeline.iter().map(|s| s.to_string()).collect();
+                                println!("Pipeline: {}", stages.join(" |> "));
+                                if let Err(e) = self.pipeline.execute_pipeline(pipeline).await {
+                                    eprintln!("error: {e}");
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("error: {e}"),
                         }
                     } else {
                         eprintln!(
@@ -523,25 +383,21 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                     let n = extract_sample_n(&args)?;
                     Ok(PipelineStage::Sample { n })
                 }
-                "count" => {
-                    let path = match args.as_slice() {
-                        [] => None,
-                        [Expr::Literal(Literal::String(s))] => Some(s.clone()),
-                        _ => {
-                            return Err(Error::UnsupportedFunctionCall(
-                                "count takes no arguments or a single path string".to_string(),
-                            ));
-                        }
-                    };
-                    Ok(PipelineStage::Count { path })
-                }
+                "count" => match args.as_slice() {
+                    [] | [Expr::Literal(Literal::String(_))] => {
+                        Err(Error::ReplNotImplemented("count"))
+                    }
+                    _ => Err(Error::UnsupportedFunctionCall(
+                        "count takes no arguments or a single path string".to_string(),
+                    )),
+                },
                 "schema" => {
                     if !args.is_empty() {
                         return Err(Error::UnsupportedFunctionCall(
                             "schema takes no arguments".to_string(),
                         ));
                     }
-                    Ok(PipelineStage::Schema)
+                    Err(Error::ReplNotImplemented("schema"))
                 }
                 "write" => {
                     let path = extract_path_from_args("write", &args)?;
@@ -561,7 +417,6 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
         .into_iter()
         .map(plan_stage)
         .collect::<crate::Result<Vec<_>>>()?;
-    optimize_read_then_count(&mut stages);
     let statement_incomplete = stages.last().is_some_and(PipelineStage::is_non_terminal);
     if let Some(implicit_stage) = stages
         .last()
@@ -572,18 +427,143 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
     Ok((stages, statement_incomplete))
 }
 
-/// Replaces [Read { path }, Count { path: None }] with [Count { path: Some(path) }]
-/// so Parquet/ORC use metadata without loading the file.
-fn optimize_read_then_count(stages: &mut Vec<PipelineStage>) {
-    if let [
-        PipelineStage::Read { path },
-        PipelineStage::Count { path: None },
-    ] = stages.as_slice()
-    {
-        *stages = vec![PipelineStage::Count {
-            path: Some(path.clone()),
-        }];
+/// Validates that stages match `read` → optional `select` → optional slice → optional `write`,
+/// with optional trailing `print` only after head/tail/sample.
+fn validate_repl_pipeline_stages(stages: &[PipelineStage]) -> crate::Result<()> {
+    if stages.is_empty() {
+        return Err(Error::InvalidReplPipeline("empty pipeline".to_string()));
     }
+
+    let body = match stages.last() {
+        Some(PipelineStage::Print) if stages.len() >= 2 => &stages[..stages.len() - 1],
+        _ => stages,
+    };
+
+    if !matches!(body.first(), Some(PipelineStage::Read { .. })) {
+        return Err(Error::InvalidReplPipeline(
+            "pipeline must start with read(path)".to_string(),
+        ));
+    }
+
+    let mut i = 1usize;
+    if matches!(body.get(i), Some(PipelineStage::Select { .. })) {
+        i += 1;
+    }
+    if matches!(body.get(i), Some(PipelineStage::Select { .. })) {
+        return Err(Error::InvalidReplPipeline(
+            "only one select(...) is allowed in a pipeline".to_string(),
+        ));
+    }
+
+    if matches!(
+        body.get(i),
+        Some(
+            PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Sample { .. },
+        )
+    ) {
+        i += 1;
+    }
+    if matches!(
+        body.get(i),
+        Some(
+            PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Sample { .. },
+        )
+    ) {
+        return Err(Error::InvalidReplPipeline(
+            "only one of head(...), tail(...), or sample(...) is allowed".to_string(),
+        ));
+    }
+
+    if matches!(body.get(i), Some(PipelineStage::Write { .. })) {
+        i += 1;
+    }
+
+    if i != body.len() {
+        return Err(Error::InvalidReplPipeline(
+            "invalid pipeline stage order (expected read, optional select, optional head|tail|sample, optional write)".to_string(),
+        ));
+    }
+
+    if matches!(stages.last(), Some(PipelineStage::Print)) {
+        if !matches!(
+            body.last(),
+            Some(
+                PipelineStage::Head { .. }
+                    | PipelineStage::Tail { .. }
+                    | PipelineStage::Sample { .. },
+            )
+        ) {
+            return Err(Error::InvalidReplPipeline(
+                "print may only follow head, tail, or sample".to_string(),
+            ));
+        }
+    } else {
+        match body.last() {
+            Some(PipelineStage::Write { .. })
+            | Some(
+                PipelineStage::Head { .. }
+                | PipelineStage::Tail { .. }
+                | PipelineStage::Sample { .. },
+            ) => {}
+            _ => {
+                return Err(Error::InvalidReplPipeline(
+                    "pipeline must end with write, head, tail, or sample".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Maps validated REPL stages to a [`PipelineBuilder`] (caller sets display defaults if needed).
+fn repl_stages_to_pipeline_builder(stages: &[PipelineStage]) -> crate::Result<PipelineBuilder> {
+    let body = match stages.last() {
+        Some(PipelineStage::Print) if stages.len() >= 2 => &stages[..stages.len() - 1],
+        _ => stages,
+    };
+
+    let path = match body.first() {
+        Some(PipelineStage::Read { path }) => path.as_str(),
+        _ => {
+            return Err(Error::InvalidReplPipeline(
+                "pipeline must start with read(path)".to_string(),
+            ));
+        }
+    };
+
+    let mut builder = PipelineBuilder::new();
+    builder.read(path);
+
+    let mut i = 1usize;
+    if let Some(PipelineStage::Select { columns }) = body.get(i) {
+        builder.select_spec(SelectSpec {
+            columns: columns.clone(),
+        });
+        i += 1;
+    }
+
+    match body.get(i) {
+        Some(PipelineStage::Head { n }) => {
+            builder.head(*n);
+            i += 1;
+        }
+        Some(PipelineStage::Tail { n }) => {
+            builder.tail(*n);
+            i += 1;
+        }
+        Some(PipelineStage::Sample { n }) => {
+            builder.sample(*n);
+            i += 1;
+        }
+        _ => {}
+    }
+
+    if let Some(PipelineStage::Write { path }) = body.get(i) {
+        builder.write(path);
+    }
+
+    Ok(builder)
 }
 
 /// Extracts a single positive integer argument from a function call's args.
@@ -1017,17 +997,7 @@ mod tests {
         assert!(ctx.pending_exprs.is_empty());
     }
 
-    // ── exec_read / extract_path_from_args ──────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_read_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet")
-            .await
-            .expect("exec_read");
-        assert!(ctx.batches.is_some());
-        assert!(!ctx.batches.as_ref().unwrap().is_empty());
-    }
+    // ── extract_path_from_args ──────────────────────────────────────
 
     #[test]
     fn test_extract_path_from_args_read_bad_args() {
@@ -1056,33 +1026,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── exec_select ─────────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_select_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        let columns = vec![
-            ColumnSpec::CaseInsensitive("one".into()),
-            ColumnSpec::CaseInsensitive("two".into()),
-        ];
-        ctx.exec_select(&columns).await.expect("select");
-        let batches = ctx.batches.as_ref().expect("batches after select");
-        let schema = batches[0].schema();
-        let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(col_names, vec!["one", "two"]);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_select_no_preceding_read() {
-        let mut ctx = new_context();
-        let columns = vec![ColumnSpec::CaseInsensitive("one".into())];
-        let result = ctx.exec_select(&columns).await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
     #[test]
     fn test_plan_stage_select_empty_columns_rejected() {
         let expr = parse("select()");
@@ -1092,30 +1035,6 @@ mod tests {
             result.unwrap_err(),
             Error::UnsupportedFunctionCall(_)
         ));
-    }
-
-    // ── exec_write ──────────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_write_success() {
-        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
-        let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_write(output_path).await.expect("write");
-
-        assert!(tempfile.path().exists());
-        assert_eq!(ctx.writer.as_deref(), Some(output_path));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_write_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_write("out.csv").await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
     }
 
     #[test]
@@ -1190,50 +1109,138 @@ mod tests {
             .expect("execute");
 
         assert!(tempfile.path().exists());
-        let batches = ctx.batches.as_ref();
-        assert!(batches.is_none(), "batches consumed by write");
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_select_symbol_case_insensitive() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
+    async fn test_repl_pipeline_select_one_column_write_parquet() {
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
 
-        let columns = vec![
-            ColumnSpec::CaseInsensitive("ONE".into()),
-            ColumnSpec::CaseInsensitive("TWO".into()),
-        ];
-        ctx.exec_select(&columns).await.expect("select");
-        let batches = ctx.batches.as_ref().expect("batches after select");
-        let schema = batches[0].schema();
-        let col_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(col_names, vec!["one", "two"]);
-    }
+        let pipeline = format!(
+            r#"read("fixtures/table.parquet") |> select(:one) |> write("{}")"#,
+            &output_path
+        );
+        let expr = parse(&pipeline);
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_select_string_exact_match_fails_on_wrong_case() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        let columns = vec![ColumnSpec::Exact("ONE".into())];
-        let result = ctx.exec_select(&columns).await;
-        assert!(result.is_err());
-    }
-
-    // ── eval_pipe ───────────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_eval_pipe_single_read() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one)"#);
         let mut ctx = new_context();
         let pipeline_stages = ctx.eval(expr).expect("eval");
         ctx.execute_pipeline(pipeline_stages)
             .await
             .expect("execute");
-        let batches = ctx.batches.as_ref().expect("batches");
-        let schema = batches[0].schema();
-        assert_eq!(schema.fields().len(), 1);
-        assert_eq!(schema.field(0).name(), "one");
+
+        assert!(tempfile.path().exists());
+        assert_eq!(ctx.writer.as_deref(), Some(output_path));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_select_exact_column_case_errors_at_execute() {
+        let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
+        let output_path = tempfile.path().to_str().expect("Failed to get path");
+
+        let pipeline = format!(
+            r#"read("fixtures/table.parquet") |> select("ONE") |> write("{}")"#,
+            &output_path
+        );
+        let expr = parse(&pipeline);
+
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        let result = ctx.execute_pipeline(pipeline_stages).await;
+        assert!(result.is_err());
+    }
+
+    // ── validate_repl_pipeline_stages / plan not implemented ──────
+
+    #[test]
+    fn test_validate_rejects_second_select() {
+        let stages = vec![
+            PipelineStage::Read {
+                path: "a.parquet".into(),
+            },
+            PipelineStage::Select {
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            },
+            PipelineStage::Select {
+                columns: vec![ColumnSpec::CaseInsensitive("y".into())],
+            },
+            PipelineStage::Head { n: 1 },
+            PipelineStage::Print,
+        ];
+        let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+        assert!(matches!(err, Error::InvalidReplPipeline(_)));
+    }
+
+    #[test]
+    fn test_validate_rejects_head_before_select() {
+        let stages = vec![
+            PipelineStage::Read {
+                path: "a.parquet".into(),
+            },
+            PipelineStage::Head { n: 1 },
+            PipelineStage::Select {
+                columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            },
+        ];
+        let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+        assert!(matches!(err, Error::InvalidReplPipeline(_)));
+    }
+
+    #[test]
+    fn test_plan_stage_count_not_implemented() {
+        let expr = parse("count()");
+        let err = plan_stage(expr).unwrap_err();
+        assert!(matches!(err, Error::ReplNotImplemented("count")));
+    }
+
+    #[test]
+    fn test_plan_stage_schema_not_implemented() {
+        let expr = parse("schema()");
+        let err = plan_stage(expr).unwrap_err();
+        assert!(matches!(err, Error::ReplNotImplemented("schema")));
+    }
+
+    #[test]
+    fn test_plan_pipeline_with_count_errors() {
+        let expr = parse(r#"read("a.parquet") |> count()"#);
+        let mut exprs = Vec::new();
+        collect_pipe_stages(expr, &mut exprs);
+        let result = plan_pipeline_with_state(exprs);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::ReplNotImplemented("count")
+        ));
+    }
+
+    #[test]
+    fn test_plan_stage_count_rejects_invalid_args() {
+        let expr = Expr::FunctionCall(
+            Identifier("count".into()),
+            vec![
+                Expr::Literal(Literal::String("a".into())),
+                Expr::Literal(Literal::String("b".into())),
+            ],
+        );
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedFunctionCall(_)
+        ));
+    }
+
+    #[test]
+    fn test_plan_stage_schema_rejects_args() {
+        let expr = Expr::FunctionCall(
+            Identifier("schema".into()),
+            vec![Expr::Literal(Literal::String("extra".into()))],
+        );
+        let result = plan_stage(expr);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::UnsupportedFunctionCall(_)
+        ));
     }
 
     // ── is_head_call ───────────────────────────────────────────────
@@ -1255,48 +1262,12 @@ mod tests {
         assert!(!is_head_call(None));
     }
 
-    // ── exec_head ──────────────────────────────────────────────────
-
     fn parse_fn_args(input: &str) -> Vec<Expr> {
         match parse(input) {
             Expr::FunctionCall(_, args) => args,
             other => panic!("expected FunctionCall, got {other:?}"),
         }
     }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_head_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_head(2).expect("head");
-
-        let batches = ctx.batches.as_ref().expect("batches after head");
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_head_preserves_schema() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        ctx.exec_head(1).expect("head");
-
-        let batches = ctx.batches.as_ref().expect("batches");
-        assert_eq!(batches[0].schema(), original_schema);
-    }
-
-    #[test]
-    fn test_exec_head_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_head(5);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
-    // ── exec_head: pipeline integration ──────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_head_write() {
@@ -1317,7 +1288,6 @@ mod tests {
 
         assert!(tempfile.path().exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_path.as_str()));
-        assert!(ctx.batches.is_none(), "batches consumed by write");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1390,10 +1360,6 @@ mod tests {
             .implicit_followup_stage(),
             None
         );
-        assert_eq!(
-            PipelineStage::Count { path: None }.implicit_followup_stage(),
-            None
-        );
     }
 
     #[test]
@@ -1449,42 +1415,6 @@ mod tests {
         assert!(extract_tail_n(&[]).is_err());
     }
 
-    // ── exec_tail ───────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_tail_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_tail(2).expect("tail");
-
-        let batches = ctx.batches.as_ref().expect("batches after tail");
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_tail_preserves_schema() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        ctx.exec_tail(1).expect("tail");
-
-        let batches = ctx.batches.as_ref().expect("batches");
-        assert_eq!(batches[0].schema(), original_schema);
-    }
-
-    #[test]
-    fn test_exec_tail_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_tail(5);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
-    // ── exec_tail: pipeline integration ──────────────────────────
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_tail_write() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1505,244 +1435,6 @@ mod tests {
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
-        assert!(ctx.batches.is_none(), "batches consumed by write");
-    }
-
-    // ── plan_stage: count ────────────────────────────────────────
-
-    #[test]
-    fn test_plan_stage_count() {
-        let expr = parse("count()");
-        let stage = plan_stage(expr).unwrap();
-        assert_eq!(stage, PipelineStage::Count { path: None });
-    }
-
-    #[test]
-    fn test_plan_stage_count_with_path() {
-        let expr = parse(r#"count("fixtures/table.parquet")"#);
-        let stage = plan_stage(expr).unwrap();
-        assert_eq!(
-            stage,
-            PipelineStage::Count {
-                path: Some("fixtures/table.parquet".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn test_plan_stage_count_rejects_invalid_args() {
-        let expr = Expr::FunctionCall(
-            Identifier("count".into()),
-            vec![
-                Expr::Literal(Literal::String("a".into())),
-                Expr::Literal(Literal::String("b".into())),
-            ],
-        );
-        let result = plan_stage(expr);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    // ── plan_pipeline_with_state: count does not auto-append print
-
-    #[test]
-    fn test_plan_pipeline_count_no_auto_print() {
-        let expr = parse(r#"read("a.parquet") |> count()"#);
-        let mut exprs = Vec::new();
-        collect_pipe_stages(expr, &mut exprs);
-        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-        // read(path) |> count() is optimized to count(path) so Parquet/ORC use metadata
-        assert_eq!(pipeline.len(), 1);
-        assert_eq!(
-            pipeline[0],
-            PipelineStage::Count {
-                path: Some("a.parquet".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn test_plan_pipeline_read_select_count_not_optimized() {
-        let expr = parse(r#"read("a.parquet") |> select(:x) |> count()"#);
-        let mut exprs = Vec::new();
-        collect_pipe_stages(expr, &mut exprs);
-        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-        assert_eq!(pipeline.len(), 3);
-        assert_eq!(
-            pipeline[0],
-            PipelineStage::Read {
-                path: "a.parquet".to_string()
-            }
-        );
-        assert!(matches!(&pipeline[1], PipelineStage::Select { .. }));
-        assert_eq!(pipeline[2], PipelineStage::Count { path: None });
-    }
-
-    // ── exec_count ─────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_count_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_count().expect("count");
-        assert!(ctx.batches.is_none(), "batches consumed by count");
-    }
-
-    #[test]
-    fn test_exec_count_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_count();
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
-    // ── exec_count: pipeline integration ────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_read_count() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "batches consumed by count");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_read_select_count() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> count()"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "batches consumed by count");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_read_head_count() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> head(2) |> count()"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "batches consumed by count");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_count_path_uses_efficient_path() {
-        let expr = parse(r#"count("fixtures/table.parquet")"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "count(path) does not use batches");
-    }
-
-    // ── plan_stage: schema ────────────────────────────────────────
-
-    #[test]
-    fn test_plan_stage_schema() {
-        let expr = parse("schema()");
-        let stage = plan_stage(expr).unwrap();
-        assert_eq!(stage, PipelineStage::Schema);
-    }
-
-    #[test]
-    fn test_plan_stage_schema_rejects_args() {
-        let expr = Expr::FunctionCall(
-            Identifier("schema".into()),
-            vec![Expr::Literal(Literal::String("extra".into()))],
-        );
-        let result = plan_stage(expr);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::UnsupportedFunctionCall(_)
-        ));
-    }
-
-    #[test]
-    fn test_schema_is_terminal() {
-        assert!(PipelineStage::Schema.is_terminal());
-    }
-
-    #[test]
-    fn test_schema_no_implicit_followup() {
-        assert_eq!(PipelineStage::Schema.implicit_followup_stage(), None);
-    }
-
-    #[test]
-    fn test_display_schema_stage() {
-        assert_eq!(PipelineStage::Schema.to_string(), "schema()");
-    }
-
-    // ── plan_pipeline_with_state: schema does not auto-append print
-
-    #[test]
-    fn test_plan_pipeline_schema_no_auto_print() {
-        let expr = parse(r#"read("a.parquet") |> schema()"#);
-        let mut exprs = Vec::new();
-        collect_pipe_stages(expr, &mut exprs);
-        let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-        assert_eq!(pipeline.len(), 2);
-        assert_eq!(
-            pipeline[0],
-            PipelineStage::Read {
-                path: "a.parquet".to_string()
-            }
-        );
-        assert_eq!(pipeline[1], PipelineStage::Schema);
-    }
-
-    // ── exec_schema ─────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_schema_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_schema().expect("schema");
-        assert!(ctx.batches.is_none(), "batches consumed by schema");
-    }
-
-    #[test]
-    fn test_exec_schema_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_schema();
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
-    // ── exec_schema: pipeline integration ────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_read_schema() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> schema()"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "batches consumed by schema");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_repl_pipeline_read_select_schema() {
-        let expr = parse(r#"read("fixtures/table.parquet") |> select(:one, :two) |> schema()"#);
-        let mut ctx = new_context();
-        let pipeline_stages = ctx.eval(expr).expect("eval");
-        ctx.execute_pipeline(pipeline_stages)
-            .await
-            .expect("execute");
-        assert!(ctx.batches.is_none(), "batches consumed by schema");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1842,54 +1534,6 @@ mod tests {
         assert!(extract_sample_n(&args).is_err());
     }
 
-    // ── exec_sample ─────────────────────────────────────────────
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_sample_success() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_sample(2).expect("sample");
-
-        let batches = ctx.batches.as_ref().expect("batches after sample");
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_sample_default_n() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        ctx.exec_sample(10).expect("sample with n=10");
-
-        let batches = ctx.batches.as_ref().expect("batches after sample");
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert!(total_rows <= 10);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_exec_sample_preserves_schema() {
-        let mut ctx = new_context();
-        ctx.exec_read("fixtures/table.parquet").await.expect("read");
-
-        let original_schema = ctx.batches.as_ref().unwrap()[0].schema();
-        ctx.exec_sample(1).expect("sample");
-
-        let batches = ctx.batches.as_ref().expect("batches");
-        assert_eq!(batches[0].schema(), original_schema);
-    }
-
-    #[test]
-    fn test_exec_sample_no_preceding_read() {
-        let mut ctx = new_context();
-        let result = ctx.exec_sample(5);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::GenericError(_)));
-    }
-
-    // ── exec_sample: pipeline integration ────────────────────────
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_repl_pipeline_read_sample_write() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1910,7 +1554,6 @@ mod tests {
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
-        assert!(ctx.batches.is_none(), "batches consumed by write");
     }
 
     #[tokio::test(flavor = "multi_thread")]

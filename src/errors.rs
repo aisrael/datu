@@ -29,6 +29,10 @@ pub enum Error {
     UnsupportedOperator(String),
     #[error("Unsupported function call: {0}")]
     UnsupportedFunctionCall(String),
+    #[error("{0} is not implemented in the REPL")]
+    ReplNotImplemented(&'static str),
+    #[error("Invalid REPL pipeline: {0}")]
+    InvalidReplPipeline(String),
     #[error(transparent)]
     PipelinePlanningError(#[from] PipelinePlanningError),
     #[error(transparent)]

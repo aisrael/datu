@@ -1,17 +1,20 @@
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::DataFrame;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::dataframe::write_dataframe_pipeline_output;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
@@ -29,24 +32,22 @@ impl Step for DataframeCsvReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let has_header = self.has_header.unwrap_or(true);
-        let df = ctx
-            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
-            .await?;
-        Ok(DataFrameSource::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Csv, self.has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeCsvReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let has_header = self.has_header.unwrap_or(true);
-        let df = ctx
-            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
-            .await?;
-        Ok(Box::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Csv, self.has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
 }
 
@@ -62,9 +63,8 @@ impl Step for DataframeCsvWriter {
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
-        df.write_csv(&self.args.path, DataFrameWriteOptions::default(), None)
-            .await?;
-        Ok(())
+        let source = DataFrameSource::new(*df);
+        write_dataframe_pipeline_output(source, self.args).await
     }
 }
 

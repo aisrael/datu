@@ -3,10 +3,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::ParquetReadOptions;
-use datafusion::prelude::SessionContext;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -15,13 +12,17 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::schema::types::ColumnDescriptor;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
+use crate::pipeline::dataframe::write_dataframe_pipeline_output;
 use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
@@ -39,25 +40,25 @@ impl Step for DataframeParquetReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let df = read_parquet_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(DataFrameSource::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeParquetReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let df = read_parquet_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(Box::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
-}
-
-async fn read_parquet_to_dataframe(ctx: &SessionContext, path: &str) -> Result<DataFrame> {
-    let options = ParquetReadOptions::default();
-    let df = ctx.read_parquet(path, options).await?;
-    Ok(df)
 }
 
 /// Pipeline step that writes a [`DataFrame`] to Parquet.
@@ -72,9 +73,8 @@ impl Step for DataframeParquetWriter {
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
-        df.write_parquet(&self.args.path, DataFrameWriteOptions::default(), None)
-            .await?;
-        Ok(())
+        let source = DataFrameSource::new(*df);
+        write_dataframe_pipeline_output(source, self.args).await
     }
 }
 

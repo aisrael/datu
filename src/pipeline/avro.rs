@@ -12,12 +12,11 @@ use arrow::record_batch::RecordBatch;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
 use async_trait::async_trait;
-use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::SessionContext;
 use eyre::Result as EyreResult;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
@@ -25,6 +24,8 @@ use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
 use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
@@ -43,18 +44,24 @@ impl Step for DataframeAvroReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(DataFrameSource::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeAvroReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(Box::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
 }
 
@@ -75,12 +82,6 @@ impl Step for DataframeAvroWriter {
         let mut reader = producer.get().await?;
         write_record_batches(self.args.path.as_str(), &mut *reader)
     }
-}
-
-async fn read_avro_to_dataframe(ctx: &SessionContext, path: &str) -> Result<DataFrame> {
-    let options = AvroReadOptions::default();
-    let df = ctx.read_avro(path, options).await?;
-    Ok(df)
 }
 
 /// Reads the Arrow schema from an Avro file at `path` and returns [`SchemaField`] descriptions.

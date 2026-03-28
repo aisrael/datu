@@ -3,8 +3,6 @@ use arrow_json::writer::JsonArray;
 use arrow_json::writer::WriterBuilder;
 use async_trait::async_trait;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::NdJsonReadOptions;
-use datafusion::prelude::SessionContext;
 
 use crate::Error;
 use crate::FileType;
@@ -13,8 +11,9 @@ use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
-use crate::pipeline::VecRecordBatchReader;
-use crate::pipeline::dataframe::write_record_batches_from_reader;
+use crate::pipeline::dataframe::write_dataframe_pipeline_output;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteJsonArgs;
 
@@ -29,22 +28,22 @@ impl Step for DataframeJsonReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let df = ctx
-            .read_json(&self.path, NdJsonReadOptions::default())
-            .await?;
-        Ok(DataFrameSource::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Json, None).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeJsonReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let df = ctx
-            .read_json(&self.path, NdJsonReadOptions::default())
-            .await?;
-        Ok(Box::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Json, None).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
 }
 
@@ -60,17 +59,8 @@ impl Step for DataframeJsonWriter {
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
-        let batches = df.collect().await?;
-        let mut reader = VecRecordBatchReader::new(batches);
-        let sparse = self.args.sparse.unwrap_or(true);
-        let json_pretty = self.args.pretty.unwrap_or(false);
-        write_record_batches_from_reader(
-            &mut reader,
-            &self.args.path,
-            FileType::Json,
-            sparse,
-            json_pretty,
-        )
+        let source = DataFrameSource::new(*df);
+        write_dataframe_pipeline_output(source, self.args).await
     }
 }
 

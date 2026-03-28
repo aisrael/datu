@@ -1,5 +1,3 @@
-use datafusion::dataframe::DataFrameWriteOptions;
-
 use crate::Error;
 use crate::FileType;
 use crate::Result;
@@ -7,6 +5,7 @@ use crate::errors::PipelineExecutionError;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::avro;
+use crate::pipeline::dataframe::write_dataframe_pipeline_output;
 use crate::pipeline::display::write_record_batches_as_yaml;
 use crate::pipeline::orc;
 use crate::pipeline::xlsx;
@@ -38,30 +37,9 @@ pub struct WriteYamlArgs {
 /// Marker returned by record-batch write pipeline steps after a successful write.
 pub struct WriteResult;
 
-/// Writes a [`DataFrame`] using DataFusion native writers (Parquet, CSV, JSON only).
-pub async fn write_dataframe(mut source: DataFrameSource, args: WriteArgs) -> Result<()> {
-    let write_opts = DataFrameWriteOptions::new();
-    let df = source
-        .df
-        .take()
-        .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
-    match args.file_type {
-        FileType::Parquet => {
-            let _ = df.write_parquet(&args.path, write_opts, None).await?;
-        }
-        FileType::Csv => {
-            let _ = df.write_csv(&args.path, write_opts, None).await?;
-        }
-        FileType::Json => {
-            df.write_json(&args.path, write_opts, None).await?;
-        }
-        FileType::Avro | FileType::Orc | FileType::Xlsx | FileType::Yaml => {
-            return Err(Error::PipelineExecutionError(
-                PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
-            ));
-        }
-    }
-    Ok(())
+/// Writes a [`DataFrame`] to Parquet, CSV, or JSON using [`write_dataframe_pipeline_output`].
+pub async fn write_dataframe(source: DataFrameSource, args: WriteArgs) -> Result<()> {
+    write_dataframe_pipeline_output(source, args).await
 }
 
 /// Writes record batches for formats that need a record-batch path (Avro, ORC, XLSX, YAML).

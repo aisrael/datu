@@ -63,35 +63,31 @@ pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
 }
 
 /// Loads supported formats into a [`DataFrameSource`] via DataFusion (not ORC).
+///
+/// Supported: [`FileType::Parquet`], [`FileType::Avro`], [`FileType::Csv`], [`FileType::Json`].
+/// For CSV, `csv_has_header` defaults to `true` when `None`.
 pub async fn read_to_dataframe(
     input_path: &str,
     file_type: FileType,
     csv_has_header: Option<bool>,
 ) -> Result<ReadResult> {
     let ctx = SessionContext::new();
-    let source = match file_type {
+    let df = match file_type {
         FileType::Parquet => {
-            let df = ctx
-                .read_parquet(input_path, ParquetReadOptions::default())
-                .await?;
-            DataFrameSource::new(df)
+            ctx.read_parquet(input_path, ParquetReadOptions::default())
+                .await?
         }
         FileType::Avro => {
-            let df = ctx
-                .read_avro(input_path, AvroReadOptions::default())
-                .await?;
-            DataFrameSource::new(df)
+            ctx.read_avro(input_path, AvroReadOptions::default())
+                .await?
         }
         FileType::Json => {
-            let df = ctx
-                .read_json(input_path, NdJsonReadOptions::default())
-                .await?;
-            DataFrameSource::new(df)
+            ctx.read_json(input_path, NdJsonReadOptions::default())
+                .await?
         }
         FileType::Csv => {
             let csv_options = CsvReadOptions::new().has_header(csv_has_header.unwrap_or(true));
-            let df = ctx.read_csv(input_path, csv_options).await?;
-            DataFrameSource::new(df)
+            ctx.read_csv(input_path, csv_options).await?
         }
         _ => {
             return Err(Error::PipelineExecutionError(
@@ -99,7 +95,7 @@ pub async fn read_to_dataframe(
             ));
         }
     };
-    Ok(ReadResult::DataFrame(source))
+    Ok(ReadResult::DataFrame(DataFrameSource::new(df)))
 }
 
 /// Opens ORC for record-batch reading; errors for other file types.

@@ -737,6 +737,7 @@ mod tests {
     use super::DataframeTail;
     use super::DataframeToRecordBatchProducer;
     use crate::FileType;
+    use crate::pipeline::DataframeParquetReader;
     use crate::pipeline::Producer;
     use crate::pipeline::RecordBatchAvroWriter;
     use crate::pipeline::SelectSpec;
@@ -744,7 +745,6 @@ mod tests {
     use crate::pipeline::csv::DataframeCsvWriter;
     use crate::pipeline::dataframe::DataFrameWriter;
     use crate::pipeline::dataframe::LegacyDataFrameReader;
-    use crate::pipeline::parquet::DataframeParquetReader;
     use crate::pipeline::read::ReadArgs;
     use crate::pipeline::read_to_batches;
     use crate::pipeline::write::WriteArgs;

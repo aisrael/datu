@@ -23,9 +23,7 @@ use crate::pipeline::Producer;
 use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
 use crate::pipeline::read::ReadArgs;
-use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::expect_file_type;
-use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::apply_offset_limit;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
@@ -33,38 +31,6 @@ use crate::pipeline::schema::SchemaField;
 use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteResult;
-
-/// Pipeline step that reads an Avro file into a DataFusion [`DataFrame`].
-pub struct DataframeAvroReader {
-    pub(crate) args: ReadArgs,
-}
-
-#[async_trait(?Send)]
-impl Step for DataframeAvroReader {
-    type Input = ();
-    type Output = DataFrameSource;
-
-    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let result =
-            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
-        let ReadResult::DataFrame(source) = result else {
-            unreachable!()
-        };
-        Ok(source)
-    }
-}
-
-#[async_trait(?Send)]
-impl Producer<DataFrame> for DataframeAvroReader {
-    async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let result =
-            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
-        let ReadResult::DataFrame(mut source) = result else {
-            unreachable!()
-        };
-        source.get().await
-    }
-}
 
 /// Pipeline step that writes a [`DataFrame`] to an Avro file.
 pub struct DataframeAvroWriter {
@@ -260,6 +226,7 @@ mod tests {
 
     use super::*;
     use crate::FileType;
+    use crate::pipeline::DataframeAvroReader;
     use crate::pipeline::VecRecordBatchReader;
 
     #[tokio::test(flavor = "multi_thread")]

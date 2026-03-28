@@ -4,10 +4,8 @@ pub mod avro;
 pub mod csv;
 pub mod dataframe;
 
-pub use avro::DataframeAvroReader;
 pub use avro::DataframeAvroWriter;
 pub use avro::RecordBatchAvroWriter;
-pub use csv::DataframeCsvReader;
 pub use csv::DataframeCsvWriter;
 pub use csv::RecordBatchCsvWriter;
 pub use dataframe::DataFramePipeline;
@@ -25,7 +23,6 @@ pub use json::DataframeJsonWriter;
 pub use json::RecordBatchJsonWriter;
 pub use orc::OrcRecordBatchReader;
 pub use orc::RecordBatchOrcWriter;
-pub use parquet::DataframeParquetReader;
 pub use parquet::DataframeParquetWriter;
 pub use parquet::RecordBatchParquetWriter;
 pub use record_batch::RecordBatchHead;
@@ -40,6 +37,15 @@ pub mod json;
 pub mod orc;
 pub mod parquet;
 pub mod read;
+pub use read::DataframeFormatReader;
+
+/// Type alias for [`DataframeFormatReader`] when used for Parquet input.
+pub type DataframeParquetReader = DataframeFormatReader;
+/// Type alias for [`DataframeFormatReader`] when used for Avro input.
+pub type DataframeAvroReader = DataframeFormatReader;
+/// Type alias for [`DataframeFormatReader`] when used for CSV input.
+pub type DataframeCsvReader = DataframeFormatReader;
+
 pub mod record_batch;
 pub mod schema;
 pub mod select;
@@ -1013,11 +1019,11 @@ mod tests {
     use super::*;
     use crate::Error;
     use crate::pipeline::ColumnSpec;
+    use crate::pipeline::DataframeParquetReader;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::avro::DataframeAvroWriter;
     use crate::pipeline::avro::get_schema_fields_avro;
     use crate::pipeline::dataframe::DataFrameSink;
-    use crate::pipeline::parquet::DataframeParquetReader;
     use crate::pipeline::read::ReadArgs;
     use crate::pipeline::write::WriteArgs;
 

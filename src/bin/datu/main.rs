@@ -10,6 +10,7 @@ use commands::convert;
 use commands::count;
 use commands::heads_or_tails;
 use commands::schema;
+use datu::cli::repl::Repl;
 
 use crate::commands::convert::ConvertArgs;
 
@@ -46,7 +47,7 @@ pub enum Command {
 async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => datu::cli::repl::run().await,
+        None => run_repl().await,
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
         Some(Command::Head(args)) => heads_or_tails(args, HeadsOrTailsCmd::Head).await,
@@ -58,4 +59,10 @@ async fn main() -> eyre::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Runs the datu REPL.
+pub async fn run_repl() -> eyre::Result<()> {
+    let mut repl = Repl::new()?;
+    repl.run().await
 }

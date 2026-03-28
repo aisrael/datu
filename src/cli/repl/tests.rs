@@ -6,7 +6,7 @@ use flt::parser::parse_expr;
 use tempfile::NamedTempFile;
 
 use super::ColumnSpec;
-use super::pipeline::ReplPipeline;
+use super::pipeline::ReplPipelinePlanner;
 use super::plan::collect_pipe_stages;
 use super::plan::extract_column_specs;
 use super::plan::extract_head_n;
@@ -19,10 +19,6 @@ use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::PipelineStage;
 use crate::Error;
-
-fn new_context() -> ReplPipeline {
-    ReplPipeline::new()
-}
 
 fn parse(input: &str) -> Expr {
     let (remainder, expr) = parse_expr(input).expect("parse");
@@ -314,7 +310,7 @@ fn test_extract_column_specs_unsupported_expr() {
 
 #[test]
 fn test_eval_unsupported_expression() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = Expr::Literal(Literal::Boolean(true));
     let result = ctx.eval(expr);
     assert!(result.is_err());
@@ -326,7 +322,7 @@ fn test_eval_unsupported_expression() {
 
 #[test]
 fn test_eval_unsupported_binary_operator() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = Expr::BinaryExpr(
         Box::new(Expr::Ident("a".into())),
         BinaryOp::Add,
@@ -339,7 +335,7 @@ fn test_eval_unsupported_binary_operator() {
 
 #[test]
 fn test_eval_sets_statement_incomplete_for_non_terminal_final_stage() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = parse(r#"read("fixtures/table.parquet")"#);
     let _ = ctx.eval(expr).expect("eval");
     assert!(ctx.statement_incomplete);
@@ -347,7 +343,7 @@ fn test_eval_sets_statement_incomplete_for_non_terminal_final_stage() {
 
 #[test]
 fn test_eval_clears_statement_incomplete_for_terminal_final_stage() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = parse(r#"read("fixtures/table.parquet") |> head(1)"#);
     let _ = ctx.eval(expr).expect("eval");
     assert!(!ctx.statement_incomplete);
@@ -355,7 +351,7 @@ fn test_eval_clears_statement_incomplete_for_terminal_final_stage() {
 
 #[test]
 fn test_eval_clears_statement_incomplete_for_write_final_stage() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
     let _ = ctx.eval(expr).expect("eval");
     assert!(!ctx.statement_incomplete);
@@ -363,7 +359,7 @@ fn test_eval_clears_statement_incomplete_for_write_final_stage() {
 
 #[test]
 fn test_eval_incremental_non_terminal_accumulates_state() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = parse(r#"read("fixtures/table.parquet")"#);
     let pipeline = ctx.eval_incremental(expr).expect("eval_incremental");
     assert!(pipeline.is_none());
@@ -373,7 +369,7 @@ fn test_eval_incremental_non_terminal_accumulates_state() {
 
 #[test]
 fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let first = parse(r#"read("fixtures/table.parquet")"#);
     let second = parse(r#"head(2)"#);
 
@@ -395,7 +391,7 @@ fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
 
 #[test]
 fn test_eval_incremental_terminal_single_input_executes_immediately() {
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
     let pipeline = ctx
         .eval_incremental(expr)
@@ -472,7 +468,7 @@ async fn test_repl_pipeline_read_select_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -492,14 +488,13 @@ async fn test_repl_pipeline_read_write_without_select() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
         .expect("execute");
 
     assert!(tempfile.path().exists());
-    assert_eq!(ctx.writer.as_deref(), Some(output_path));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -513,7 +508,7 @@ async fn test_repl_pipeline_read_select_with_strings() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -533,14 +528,13 @@ async fn test_repl_pipeline_select_one_column_write_parquet() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
         .expect("execute");
 
     assert!(tempfile.path().exists());
-    assert_eq!(ctx.writer.as_deref(), Some(output_path));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -554,7 +548,7 @@ async fn test_repl_pipeline_select_exact_column_case_errors_at_execute() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     let result = ctx.execute_pipeline(pipeline_stages).await;
     assert!(result.is_err());
@@ -695,14 +689,13 @@ async fn test_repl_pipeline_read_head_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
         .expect("execute");
 
     assert!(tempfile.path().exists());
-    assert_eq!(ctx.writer.as_deref(), Some(output_path.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -716,7 +709,7 @@ async fn test_repl_pipeline_read_select_head_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -846,14 +839,13 @@ async fn test_repl_pipeline_read_tail_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
         .expect("execute");
 
     assert!(output_path.exists());
-    assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -867,7 +859,7 @@ async fn test_repl_pipeline_read_select_tail_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -965,20 +957,19 @@ async fn test_repl_pipeline_read_sample_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
         .expect("execute");
 
     assert!(output_path.exists());
-    assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_repl_pipeline_read_schema() {
     let expr = parse(r#"read("fixtures/table.parquet") |> schema()"#);
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -988,7 +979,7 @@ async fn test_repl_pipeline_read_schema() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_repl_pipeline_read_count() {
     let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await
@@ -1007,7 +998,7 @@ async fn test_repl_pipeline_read_select_sample_write() {
     );
     let expr = parse(&pipeline);
 
-    let mut ctx = new_context();
+    let mut ctx = ReplPipelinePlanner::new();
     let pipeline_stages = ctx.eval(expr).expect("eval");
     ctx.execute_pipeline(pipeline_stages)
         .await

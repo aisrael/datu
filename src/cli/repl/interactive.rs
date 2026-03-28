@@ -7,41 +7,15 @@ use rustyline::Config;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
-use super::pipeline::ReplPipeline;
+use super::pipeline::ReplPipelinePlanner;
 
 /// Maximum number of inputs to keep in REPL history.
 const REPL_HISTORY_DEPTH: usize = 1000;
 
-fn repl_history_path() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|dir| dir.join("datu").join("history"))
-}
-
-fn load_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
-    let Some(history_path) = repl_history_path() else {
-        return Ok(());
-    };
-    if history_path.exists() {
-        println!("Loading REPL history from: {:?}", history_path);
-        editor.load_history(&history_path)?;
-    }
-    Ok(())
-}
-
-fn save_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
-    let Some(history_path) = repl_history_path() else {
-        return Ok(());
-    };
-    if let Some(parent) = history_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    editor.save_history(&history_path)?;
-    Ok(())
-}
-
 /// Interactive REPL with its own line editor, history, and pipeline state.
 pub struct Repl {
     editor: DefaultEditor,
-    pipeline: ReplPipeline,
+    pipeline: ReplPipelinePlanner,
 }
 
 impl Repl {
@@ -55,7 +29,7 @@ impl Repl {
         let _ = load_repl_history(&mut editor);
         Ok(Self {
             editor,
-            pipeline: ReplPipeline::new(),
+            pipeline: ReplPipelinePlanner::new(),
         })
     }
 
@@ -66,6 +40,7 @@ impl Repl {
         loop_result
     }
 
+    /// The main REPL loop.
     async fn repl_loop(&mut self) -> eyre::Result<()> {
         loop {
             let prompt = if self.pipeline.statement_incomplete {
@@ -114,8 +89,28 @@ impl Repl {
     }
 }
 
-/// Runs the datu REPL.
-pub async fn run() -> eyre::Result<()> {
-    let mut repl = Repl::new()?;
-    repl.run().await
+fn repl_history_path() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("datu").join("history"))
+}
+
+fn load_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    if history_path.exists() {
+        println!("Loading REPL history from: {:?}", history_path);
+        editor.load_history(&history_path)?;
+    }
+    Ok(())
+}
+
+fn save_repl_history(editor: &mut DefaultEditor) -> eyre::Result<()> {
+    let Some(history_path) = repl_history_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = history_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    editor.save_history(&history_path)?;
+    Ok(())
 }

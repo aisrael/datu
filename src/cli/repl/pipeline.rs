@@ -12,25 +12,23 @@ use super::stage::PipelineStage;
 use crate::Error;
 use crate::cli::DisplayOutputFormat;
 
-/// A general REPL pipeline.
-pub struct ReplPipeline {
-    pub writer: Option<String>,
+/// A general REPL pipeline planner.
+pub struct ReplPipelinePlanner {
     pub statement_incomplete: bool,
     /// Accumulated expressions until a terminal stage (test assertions).
     pub(crate) pending_exprs: Vec<Expr>,
 }
 
-impl Default for ReplPipeline {
+impl Default for ReplPipelinePlanner {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ReplPipeline {
+impl ReplPipelinePlanner {
     /// Creates an empty pipeline (output path tracked after `write` only).
     pub fn new() -> Self {
         Self {
-            writer: None,
             statement_incomplete: false,
             pending_exprs: Vec::new(),
         }
@@ -107,12 +105,6 @@ impl ReplPipeline {
             .display_csv_headers(true);
         let mut pipeline = builder.build()?;
         pipeline.execute()?;
-        if let Some(PipelineStage::Write { path }) = stages
-            .iter()
-            .find(|s| matches!(s, PipelineStage::Write { .. }))
-        {
-            self.writer = Some(path.clone());
-        }
         Ok(())
     }
 }

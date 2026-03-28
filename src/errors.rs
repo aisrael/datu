@@ -50,6 +50,8 @@ pub enum PipelinePlanningError {
     MissingRequiredStage(String),
     #[error("Unsupported stage: {0}")]
     UnsupportedStage(String),
+    #[error("{0}")]
+    ConflictingOptions(String),
     #[error("Pipeline planner does not support input file type: {0}")]
     UnsupportedInputFileType(String),
     #[error("Pipeline planner does not support output file type: {0}")]

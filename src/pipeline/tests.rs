@@ -3,8 +3,6 @@ use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use tempfile::NamedTempFile;
 
-use crate::select_spec;
-
 use super::*;
 use crate::Error;
 use crate::FileType;
@@ -16,6 +14,7 @@ use crate::pipeline::avro::get_schema_fields_avro;
 use crate::pipeline::dataframe::DataFrameSink;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::write::WriteArgs;
+use crate::select_spec;
 
 #[test]
 fn test_pipeline_builder_read_select_write_parquet() {

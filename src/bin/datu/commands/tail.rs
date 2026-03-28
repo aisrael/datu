@@ -1,4 +1,4 @@
-use datu::FileType;
+use datu::DISPLAY_PIPELINE_INPUTS_FOR_CLI;
 use datu::cli::HeadsOrTails;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
@@ -6,12 +6,11 @@ use datu::resolve_file_type;
 use eyre::Result;
 use eyre::bail;
 
-/// tail command implementation: print the last N lines of an Avro, CSV, Parquet, or ORC file.
+/// tail command implementation: print the last N lines of an Avro, CSV, JSON, Parquet, or ORC file.
 pub async fn tail(args: HeadsOrTails) -> Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
-    match input_file_type {
-        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc => {}
-        _ => bail!("Only Parquet, Avro, CSV, and ORC are supported for tail"),
+    if !input_file_type.supports_pipeline_display_input() {
+        bail!("Only {DISPLAY_PIPELINE_INPUTS_FOR_CLI} are supported for tail");
     }
 
     let mut builder = PipelineBuilder::new();

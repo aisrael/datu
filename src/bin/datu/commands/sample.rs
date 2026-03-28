@@ -1,4 +1,4 @@
-use datu::FileType;
+use datu::DISPLAY_PIPELINE_INPUTS_FOR_CLI;
 use datu::cli::HeadsOrTails;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
@@ -9,9 +9,8 @@ use eyre::bail;
 /// sample command implementation: print N random rows from an Avro, CSV, JSON, Parquet, or ORC file.
 pub async fn sample(args: HeadsOrTails) -> Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
-    match input_file_type {
-        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json => {}
-        _ => bail!("Only Parquet, Avro, CSV, JSON, and ORC are supported for sample"),
+    if !input_file_type.supports_pipeline_display_input() {
+        bail!("Only {DISPLAY_PIPELINE_INPUTS_FOR_CLI} are supported for sample");
     }
 
     let mut builder = PipelineBuilder::new();

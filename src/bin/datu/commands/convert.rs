@@ -58,14 +58,6 @@ pub struct ConvertArgs {
     pub input_headers: Option<bool>,
 }
 
-/// Returns true if the format is supported by DataFusion's DataFrame read API for direct file read.
-fn is_datafusion_native_input(file_type: FileType) -> bool {
-    matches!(
-        file_type,
-        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
-    )
-}
-
 /// Returns the total number of rows from file metadata, if available.
 fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
     datu::get_total_rows_result(path, file_type)
@@ -78,7 +70,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     let output_file_type = resolve_file_type(args.output, &args.output_path)?;
 
-    let use_streaming_write = is_datafusion_native_input(input_file_type)
+    let use_streaming_write = input_file_type.supports_datafusion_file_read()
         && (output_file_type == FileType::Parquet || output_file_type == FileType::Csv);
 
     let total_rows = if !use_streaming_write || input_file_type == FileType::Parquet {

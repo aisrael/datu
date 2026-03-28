@@ -73,6 +73,54 @@ impl TryFrom<&str> for FileType {
     }
 }
 
+/// Human-readable list of formats accepted for `head`, `tail`, and `sample` CLI commands.
+/// Keep in sync with [`FileType::supports_pipeline_display_input`].
+pub const DISPLAY_PIPELINE_INPUTS_FOR_CLI: &str = "Parquet, Avro, CSV, JSON, and ORC";
+
+impl FileType {
+    /// Input formats allowed for [`crate::pipeline::PipelineBuilder`] conversion (read + write).
+    #[inline]
+    pub fn supports_pipeline_conversion_input(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
+        )
+    }
+
+    /// Output formats allowed for [`crate::pipeline::PipelineBuilder`] conversion.
+    #[inline]
+    pub fn supports_pipeline_conversion_output(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet
+                | FileType::Csv
+                | FileType::Json
+                | FileType::Orc
+                | FileType::Avro
+                | FileType::Xlsx
+                | FileType::Yaml
+        )
+    }
+
+    /// Input formats for display pipelines (head / tail / sample to stdout).
+    #[inline]
+    pub fn supports_pipeline_display_input(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
+        )
+    }
+
+    /// Formats read via DataFusion in [`crate::pipeline::read::read_to_dataframe`].
+    #[inline]
+    pub fn supports_datafusion_file_read(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
+        )
+    }
+}
+
 /// Resolve the input file type: use the explicit override if provided, otherwise infer from the file path extension.
 pub fn resolve_file_type(input_override: Option<FileType>, path: &str) -> crate::Result<FileType> {
     input_override.map_or_else(|| FileType::try_from(path), Ok)
@@ -116,5 +164,65 @@ mod tests {
     fn test_no_extension() {
         let result = FileType::try_from("README");
         assert!(matches!(result, Err(crate::Error::UnknownFileType(s)) if s == "README"));
+    }
+
+    #[test]
+    fn supports_pipeline_conversion_input() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Json,
+            FileType::Orc,
+        ] {
+            assert!(t.supports_pipeline_conversion_input(), "{t}");
+        }
+        assert!(!FileType::Xlsx.supports_pipeline_conversion_input());
+        assert!(!FileType::Yaml.supports_pipeline_conversion_input());
+    }
+
+    #[test]
+    fn supports_pipeline_conversion_output() {
+        for t in [
+            FileType::Parquet,
+            FileType::Csv,
+            FileType::Json,
+            FileType::Orc,
+            FileType::Avro,
+            FileType::Xlsx,
+            FileType::Yaml,
+        ] {
+            assert!(t.supports_pipeline_conversion_output(), "{t}");
+        }
+    }
+
+    #[test]
+    fn supports_pipeline_display_input() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Orc,
+            FileType::Json,
+        ] {
+            assert!(t.supports_pipeline_display_input(), "{t}");
+        }
+        assert!(!FileType::Xlsx.supports_pipeline_display_input());
+        assert!(!FileType::Yaml.supports_pipeline_display_input());
+    }
+
+    #[test]
+    fn supports_datafusion_file_read() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Json,
+        ] {
+            assert!(t.supports_datafusion_file_read(), "{t}");
+        }
+        assert!(!FileType::Orc.supports_datafusion_file_read());
+        assert!(!FileType::Xlsx.supports_datafusion_file_read());
+        assert!(!FileType::Yaml.supports_datafusion_file_read());
     }
 }

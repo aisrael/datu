@@ -263,27 +263,12 @@ impl PipelineBuilder {
         let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
         let output_file_type = resolve_file_type(self.output_type_override, output_path)?;
 
-        let is_input_native = matches!(
-            input_file_type,
-            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
-        );
-        let is_output_supported = matches!(
-            output_file_type,
-            FileType::Parquet
-                | FileType::Csv
-                | FileType::Json
-                | FileType::Orc
-                | FileType::Avro
-                | FileType::Xlsx
-                | FileType::Yaml
-        );
-
-        if !is_input_native {
+        if !input_file_type.supports_pipeline_conversion_input() {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
             ));
         }
-        if !is_output_supported {
+        if !output_file_type.supports_pipeline_conversion_output() {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::UnsupportedOutputFileType(output_file_type.to_string()),
             ));
@@ -336,11 +321,7 @@ impl PipelineBuilder {
                 ))
             })?;
         let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
-        let is_display_input = matches!(
-            input_file_type,
-            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
-        );
-        if !is_display_input {
+        if !input_file_type.supports_pipeline_display_input() {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
             ));

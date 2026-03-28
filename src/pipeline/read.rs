@@ -86,14 +86,14 @@ impl std::fmt::Debug for ReadResult {
 ///
 /// Does not apply [`ReadArgs::limit`] or [`ReadArgs::offset`]; use record-batch APIs for slicing.
 pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
-    match args.file_type {
-        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
-            read_to_dataframe(&args.path, args.file_type, args.csv_has_header).await
-        }
-        FileType::Orc => read_to_record_batches(args),
-        FileType::Xlsx | FileType::Yaml => Err(Error::PipelinePlanningError(
+    if args.file_type.supports_datafusion_file_read() {
+        read_to_dataframe(&args.path, args.file_type, args.csv_has_header).await
+    } else if args.file_type == FileType::Orc {
+        read_to_record_batches(args)
+    } else {
+        Err(Error::PipelinePlanningError(
             PipelinePlanningError::UnsupportedInputFileType(args.file_type.to_string()),
-        )),
+        ))
     }
 }
 

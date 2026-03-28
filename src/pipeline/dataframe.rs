@@ -4,11 +4,7 @@ use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::AvroReadOptions;
-use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::NdJsonReadOptions;
-use datafusion::prelude::ParquetReadOptions;
 use futures::StreamExt;
 use indicatif::ProgressBar;
 
@@ -24,17 +20,24 @@ use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro;
+use crate::pipeline::block_on_pipeline_future;
+use crate::pipeline::count_rows;
 use crate::pipeline::csv::DataframeCsvWriter;
-use crate::pipeline::display;
 use crate::pipeline::display::DisplayWriterStep;
+use crate::pipeline::json::DataframeJsonPrettyWriter;
 use crate::pipeline::json::DataframeJsonWriter;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::reservoir_sample_from_reader;
 use crate::pipeline::sample_from_reader;
+use crate::pipeline::schema::get_schema_fields;
+use crate::pipeline::schema::print_schema_fields;
+use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write::WriteArgs;
-use crate::pipeline::xlsx;
+pub use crate::pipeline::write::write_record_batches_from_reader;
 
 /// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
 pub struct DataFrameSource {
@@ -62,7 +65,7 @@ impl Producer<DataFrame> for DataFrameSource {
         let df = self
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         Ok(Box::new(df))
     }
 }
@@ -92,40 +95,33 @@ impl DataFrameWriter {
     }
 }
 
-/// Writes record batches from a reader to an output file. Used by DataFrameWriter and the convert
-/// command to eliminate duplicate format dispatch.
-pub fn write_record_batches_from_reader(
-    reader: &mut dyn RecordBatchReader,
-    output_path: &str,
-    output_file_type: FileType,
-    sparse: bool,
-    json_pretty: bool,
+/// Writes a [`DataFrame`] to Parquet, CSV, or JSON by delegating to [`DataframeParquetWriter`],
+/// [`DataframeCsvWriter`], and [`DataframeJsonWriter`] or [`DataframeJsonPrettyWriter`] when
+/// pretty-printing or non-sparse JSON emission is requested.
+pub async fn write_dataframe_pipeline_output(
+    source: DataFrameSource,
+    args: WriteArgs,
 ) -> crate::Result<()> {
-    if output_file_type != FileType::Json && json_pretty {
-        eprintln!("Warning: --json-pretty is only supported when converting to JSON");
-    }
-
-    match output_file_type {
-        FileType::Parquet => parquet::write_record_batches(output_path, reader)?,
-        FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
+    let input: Box<dyn Producer<DataFrame>> = Box::new(source);
+    match args.file_type {
+        FileType::Parquet => {
+            parquet::DataframeParquetWriter { args }
+                .execute(input)
+                .await
+        }
+        FileType::Csv => DataframeCsvWriter { args }.execute(input).await,
         FileType::Json => {
-            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-            if json_pretty {
-                display::write_record_batches_as_json_pretty(reader, file, sparse)?;
+            let needs_display_json = args.pretty.unwrap_or(false) || args.sparse == Some(false);
+            if needs_display_json {
+                DataframeJsonPrettyWriter { args }.execute(input).await
             } else {
-                display::write_record_batches_as_json(reader, file, sparse)?;
+                DataframeJsonWriter { args }.execute(input).await
             }
         }
-        FileType::Yaml => {
-            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-            display::write_record_batches_as_yaml(reader, file, sparse)?;
-        }
-        FileType::Avro => avro::write_record_batches(output_path, reader)?,
-        FileType::Orc => orc::write_record_batches(output_path, reader)?,
-        FileType::Xlsx => xlsx::write_record_batch_to_xlsx(output_path, reader)?,
+        _ => Err(Error::PipelineExecutionError(
+            PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
+        )),
     }
-
-    Ok(())
 }
 
 #[async_trait(?Send)]
@@ -137,8 +133,7 @@ impl Step for DataFrameWriter {
         let df = input.get().await?;
 
         let handle = tokio::runtime::Handle::current();
-        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let batches = tokio::task::block_in_place(|| handle.block_on(df.collect()))?;
 
         let mut reader = VecRecordBatchReader::new(batches);
         write_record_batches_from_reader(
@@ -180,66 +175,18 @@ impl LegacyDataFrameReader {
     }
 
     async fn read(&self) -> crate::Result<DataFrameSource> {
-        let ctx = SessionContext::new();
-
-        let mut df = match self.input_file_type {
-            FileType::Parquet => ctx
-                .read_parquet(&self.input_path, ParquetReadOptions::default())
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?,
-            FileType::Avro => ctx
-                .read_avro(&self.input_path, AvroReadOptions::default())
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?,
-            FileType::Csv => {
-                let has_header = self.csv_has_header.unwrap_or(true);
-                ctx.read_csv(
-                    &self.input_path,
-                    CsvReadOptions::new().has_header(has_header),
-                )
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?
-            }
-            FileType::Json => ctx
-                .read_json(&self.input_path, NdJsonReadOptions::default())
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?,
-            FileType::Orc => {
-                let batches = read_orc_to_batches(&self.input_path)?;
-                if batches.is_empty() {
-                    return Err(Error::GenericError(
-                        "ORC file is empty or could not be read".to_string(),
-                    ));
-                }
-                ctx.read_batches(batches)
-                    .map_err(|e| Error::GenericError(e.to_string()))?
-            }
-            _ => {
-                return Err(Error::GenericError(
-                    "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types"
-                        .to_string(),
-                ));
-            }
-        };
-
-        if let Some(spec) = &self.select
-            && !spec.is_empty()
-        {
-            let schema = df.schema();
-            let resolved = spec.resolve_names(schema.as_ref())?;
-            let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-            df = df
-                .select_columns(&col_refs)
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-
-        if let Some(n) = self.limit {
-            df = df
-                .limit(0, Some(n))
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-
-        Ok(DataFrameSource::new(df))
+        let df =
+            read_dataframe_from_path(&self.input_path, self.input_file_type, self.csv_has_header)
+                .await?;
+        finalize_dataframe_source(
+            df,
+            &self.input_path,
+            self.input_file_type,
+            self.select.as_ref(),
+            self.limit,
+            None,
+        )
+        .await
     }
 }
 
@@ -259,6 +206,39 @@ fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::Rec
     orc::read_orc_all_batches(path)
 }
 
+/// Reads a [`DataFrame`] from disk (DataFusion-native formats or ORC via in-memory batches).
+pub(crate) async fn read_dataframe_from_path(
+    input_path: &str,
+    input_file_type: FileType,
+    csv_has_header: Option<bool>,
+) -> crate::Result<DataFrame> {
+    match input_file_type {
+        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
+            let result = read_to_dataframe(input_path, input_file_type, csv_has_header).await?;
+            let ReadResult::DataFrame(mut source) = result else {
+                unreachable!()
+            };
+            source
+                .df
+                .take()
+                .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))
+        }
+        FileType::Orc => {
+            let ctx = SessionContext::new();
+            let batches = read_orc_to_batches(input_path)?;
+            if batches.is_empty() {
+                return Err(Error::GenericError(
+                    "ORC file is empty or could not be read".to_string(),
+                ));
+            }
+            Ok(ctx.read_batches(batches)?)
+        }
+        _ => Err(Error::GenericError(
+            "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types".to_string(),
+        )),
+    }
+}
+
 /// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming batches from the
 /// underlying DataFrame via `execute_stream()`.
 pub struct DataframeToRecordBatch {
@@ -271,10 +251,7 @@ impl DataframeToRecordBatch {
     /// Streams record batches from the [`DataFrame`] in `source`.
     pub async fn try_new(mut source: DataFrameSource) -> crate::Result<Self> {
         let df = *source.get().await?;
-        let stream = df
-            .execute_stream()
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let stream = df.execute_stream().await?;
         let schema = stream.schema();
         let handle = tokio::runtime::Handle::current();
         Ok(Self {
@@ -343,17 +320,14 @@ pub fn dataframe_apply_select(
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df
-            .select_columns(&col_refs)
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        df = df.select_columns(&col_refs)?;
     }
     Ok(df)
 }
 
 /// Keeps the first `n` rows (same semantics as [`DataFrame::limit`] with offset 0).
 pub fn dataframe_apply_head(df: DataFrame, n: usize) -> crate::Result<DataFrame> {
-    df.limit(0, Some(n))
-        .map_err(|e| Error::GenericError(e.to_string()))
+    Ok(df.limit(0, Some(n))?)
 }
 
 /// Keeps the last `n` rows using metadata or full collection depending on `input_file_type`.
@@ -368,20 +342,12 @@ pub async fn dataframe_apply_tail(
             let total_rows = crate::get_total_rows_result(input_path, FileType::Parquet)?;
             let number = tail_n.min(total_rows);
             let skip = total_rows.saturating_sub(number);
-            let df = df
-                .limit(skip, Some(number))
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            Ok(df)
+            Ok(df.limit(skip, Some(number))?)
         }
         FileType::Csv | FileType::Json | FileType::Avro | FileType::Orc => {
-            let all = df
-                .collect()
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
+            let all = df.collect().await?;
             let batches = tail_batches(all, tail_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         other => Err(Error::GenericError(format!(
             "DataFrame tail is not supported for input type: {other}"
@@ -402,22 +368,48 @@ pub async fn dataframe_apply_sample(
             let source = DataFrameSource::new(df);
             let batch_reader = DataframeToRecordBatch::try_new(source).await?;
             let batches = sample_from_reader(Box::new(batch_reader), total_rows, sample_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc => {
             let source = DataFrameSource::new(df);
             let batch_reader = DataframeToRecordBatch::try_new(source).await?;
             let batches = reservoir_sample_from_reader(Box::new(batch_reader), sample_n);
-            SessionContext::new()
-                .read_batches(batches)
-                .map_err(|e| Error::GenericError(e.to_string()))
+            Ok(SessionContext::new().read_batches(batches)?)
         }
         other => Err(Error::GenericError(format!(
             "DataFrame sample is not supported for input type: {other}"
         ))),
     }
+}
+
+/// Applies optional column selection, SQL-style row limit, and display slice to a loaded [`DataFrame`].
+///
+/// Used by [`LegacyDataFrameReader`] and [`dataframe_pipeline_prepare_source`] so read → project →
+/// cap/slice stays in one place.
+async fn finalize_dataframe_source(
+    mut df: DataFrame,
+    input_path: &str,
+    input_file_type: FileType,
+    select: Option<&SelectSpec>,
+    limit: Option<usize>,
+    slice: Option<DisplaySlice>,
+) -> crate::Result<DataFrameSource> {
+    df = dataframe_apply_select(df, select)?;
+    if let Some(n) = limit {
+        df = dataframe_apply_head(df, n)?;
+    }
+    if let Some(slice) = slice {
+        df = match slice {
+            DisplaySlice::Head(n) => dataframe_apply_head(df, n)?,
+            DisplaySlice::Tail(tail_n) => {
+                dataframe_apply_tail(df, input_path, input_file_type, tail_n).await?
+            }
+            DisplaySlice::Sample(n) => {
+                dataframe_apply_sample(df, input_path, input_file_type, n).await?
+            }
+        };
+    }
+    Ok(DataFrameSource::new(df))
 }
 
 /// Optional column projection on a [`DataFrameSource`].
@@ -434,7 +426,7 @@ impl Step for DataframeSelect {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_select(df, self.select.as_ref())?;
         Ok(DataFrameSource::new(df))
     }
@@ -454,7 +446,7 @@ impl Step for DataframeHead {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_head(df, self.n)?;
         Ok(DataFrameSource::new(df))
     }
@@ -476,7 +468,7 @@ impl Step for DataframeTail {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_tail(df, &self.input_path, self.input_file_type, self.n).await?;
         Ok(DataFrameSource::new(df))
     }
@@ -498,7 +490,7 @@ impl Step for DataframeSample {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_sample(df, &self.input_path, self.input_file_type, self.n).await?;
         Ok(DataFrameSource::new(df))
     }
@@ -516,6 +508,11 @@ pub enum DataFrameSink {
         output_format: DisplayOutputFormat,
         csv_stdout_headers: bool,
     },
+    Schema {
+        output_format: DisplayOutputFormat,
+        sparse: bool,
+    },
+    Count,
 }
 
 /// DataFusion-based pipeline: Parquet, Avro, CSV, JSON (not ORC; see [`crate::pipeline::RecordBatchPipeline`]).
@@ -557,25 +554,86 @@ impl DataFramePipeline {
                 output_format: *output_format,
                 csv_stdout_headers: *csv_stdout_headers,
             },
+            DataFrameSink::Schema {
+                output_format,
+                sparse: sink_sparse,
+            } => DataFrameSink::Schema {
+                output_format: *output_format,
+                sparse: *sink_sparse,
+            },
+            DataFrameSink::Count => DataFrameSink::Count,
         };
 
         let fut = async move {
-            let mut source = dataframe_pipeline_prepare_source(
-                input_path,
-                input_file_type,
-                select,
-                slice,
-                csv_has_header,
-            )
-            .await?;
-
             match sink {
+                DataFrameSink::Schema {
+                    output_format,
+                    sparse: schema_sparse,
+                } => {
+                    let use_file_metadata_schema = select.is_none()
+                        && matches!(
+                            input_file_type,
+                            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc
+                        );
+                    if use_file_metadata_schema {
+                        let fields =
+                            get_schema_fields(&input_path, input_file_type, csv_has_header)
+                                .map_err(|e| Error::GenericError(e.to_string()))?;
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    } else {
+                        let mut source = dataframe_pipeline_prepare_source(
+                            input_path.clone(),
+                            input_file_type,
+                            select,
+                            None,
+                            csv_has_header,
+                        )
+                        .await?;
+                        let df = source.df.take().ok_or_else(|| {
+                            Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
+                        })?;
+                        let fields = schema_fields_from_arrow(df.schema().as_ref());
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    }
+                    Ok::<(), Error>(())
+                }
+                DataFrameSink::Count => {
+                    let total = if select.is_none() {
+                        count_rows(&input_path, input_file_type, csv_has_header).await?
+                    } else {
+                        let mut source = dataframe_pipeline_prepare_source(
+                            input_path.clone(),
+                            input_file_type,
+                            select,
+                            None,
+                            csv_has_header,
+                        )
+                        .await?;
+                        let df = source.df.take().ok_or_else(|| {
+                            Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
+                        })?;
+                        df.count().await?
+                    };
+                    println!("{total}");
+                    Ok::<(), Error>(())
+                }
                 DataFrameSink::Write {
                     output_path,
                     output_file_type,
                     json_pretty,
                     progress,
                 } => {
+                    let mut source = dataframe_pipeline_prepare_source(
+                        input_path,
+                        input_file_type,
+                        select,
+                        slice,
+                        csv_has_header,
+                    )
+                    .await?;
+
                     let write_args = WriteArgs {
                         path: output_path.clone(),
                         file_type: output_file_type,
@@ -584,20 +642,8 @@ impl DataFramePipeline {
                     };
 
                     match output_file_type {
-                        FileType::Parquet => {
-                            parquet::DataframeParquetWriter { args: write_args }
-                                .execute(Box::new(source))
-                                .await?;
-                        }
-                        FileType::Csv => {
-                            DataframeCsvWriter { args: write_args }
-                                .execute(Box::new(source))
-                                .await?;
-                        }
-                        FileType::Json => {
-                            DataframeJsonWriter { args: write_args }
-                                .execute(Box::new(source))
-                                .await?;
+                        FileType::Parquet | FileType::Csv | FileType::Json => {
+                            write_dataframe_pipeline_output(source, write_args).await?;
                         }
                         FileType::Avro => {
                             avro::DataframeAvroWriter { args: write_args }
@@ -606,12 +652,9 @@ impl DataFramePipeline {
                         }
                         FileType::Orc | FileType::Xlsx | FileType::Yaml => {
                             let df = source.df.take().ok_or_else(|| {
-                                Error::GenericError("DataFrame already taken".to_string())
+                                Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                             })?;
-                            let batches = df
-                                .collect()
-                                .await
-                                .map_err(|e| Error::GenericError(e.to_string()))?;
+                            let batches = df.collect().await?;
                             let inner = VecRecordBatchReader::new(batches);
                             let mut reader = ProgressVecRecordBatchReader { inner, progress };
                             write_record_batches_from_reader(
@@ -623,18 +666,24 @@ impl DataFramePipeline {
                             )?;
                         }
                     }
+                    Ok::<(), Error>(())
                 }
                 DataFrameSink::Display {
                     output_format,
                     csv_stdout_headers,
                 } => {
+                    let mut source = dataframe_pipeline_prepare_source(
+                        input_path,
+                        input_file_type,
+                        select,
+                        slice,
+                        csv_has_header,
+                    )
+                    .await?;
                     let df = source.df.take().ok_or_else(|| {
-                        Error::GenericError("DataFrame already taken".to_string())
+                        Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                     })?;
-                    let batches = df
-                        .collect()
-                        .await
-                        .map_err(|e| Error::GenericError(e.to_string()))?;
+                    let batches = df.collect().await?;
                     let source = Box::new(VecRecordBatchReaderSource::new(batches));
                     let display_step = DisplayWriterStep {
                         output_format,
@@ -642,21 +691,12 @@ impl DataFramePipeline {
                         headers: csv_stdout_headers,
                     };
                     display_step.execute(source).await?;
+                    Ok::<(), Error>(())
                 }
             }
-
-            Ok::<(), Error>(())
         };
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            rt.block_on(fut)
-        }
+        block_on_pipeline_future(fut)
     }
 }
 
@@ -668,62 +708,25 @@ pub(crate) async fn dataframe_pipeline_prepare_source(
     slice: Option<DisplaySlice>,
     csv_has_header: Option<bool>,
 ) -> crate::Result<DataFrameSource> {
-    let ctx = SessionContext::new();
-    let has_header = csv_has_header.unwrap_or(true);
-
     let df = match input_file_type {
-        FileType::Parquet => ctx
-            .read_parquet(&input_path, ParquetReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        FileType::Avro => ctx
-            .read_avro(&input_path, AvroReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        FileType::Csv => ctx
-            .read_csv(&input_path, CsvReadOptions::new().has_header(has_header))
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
-        FileType::Json => ctx
-            .read_json(&input_path, NdJsonReadOptions::default())
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?,
+        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
+            read_dataframe_from_path(&input_path, input_file_type, csv_has_header).await?
+        }
         other => {
             return Err(Error::PipelineExecutionError(
                 PipelineExecutionError::UnsupportedInputFileType(other),
             ));
         }
     };
-
-    let mut source = DataFrameSource::new(df);
-
-    source = DataframeSelect { select }.execute(source).await?;
-
-    if let Some(slice) = slice {
-        source = match slice {
-            DisplaySlice::Head(n) => DataframeHead { n }.execute(source).await?,
-            DisplaySlice::Tail(tail_n) => {
-                DataframeTail {
-                    input_path: input_path.clone(),
-                    input_file_type,
-                    n: tail_n,
-                }
-                .execute(source)
-                .await?
-            }
-            DisplaySlice::Sample(n) => {
-                DataframeSample {
-                    input_path: input_path.clone(),
-                    input_file_type,
-                    n,
-                }
-                .execute(source)
-                .await?
-            }
-        };
-    }
-
-    Ok(source)
+    finalize_dataframe_source(
+        df,
+        &input_path,
+        input_file_type,
+        select.as_ref(),
+        None,
+        slice,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1327,11 +1330,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataframe_steps_parquet_tail_to_csv() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let source = DataframeParquetReader { args: read_args }
             .execute(())
             .await
@@ -1365,11 +1364,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let source = DataframeParquetReader { args: read_args }
             .execute(())
             .await

@@ -2,8 +2,6 @@ use std::io::Write;
 
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
-use arrow_json::writer::JsonArray;
-use arrow_json::writer::WriterBuilder;
 use async_trait::async_trait;
 use saphyr::Yaml;
 use saphyr::YamlEmitter;
@@ -21,6 +19,7 @@ fn normalize_yaml_string_value(s: String) -> String {
 }
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
+use crate::pipeline::json::RecordBatchJsonWriter;
 
 /// Converts a record batch into YAML row objects; when `sparse` is true, omits null values.
 fn record_batch_to_yaml_rows(batch: &RecordBatch, sparse: bool) -> Vec<Yaml<'static>> {
@@ -67,46 +66,6 @@ where
     Ok(())
 }
 
-/// Write record batches from a reader to the given writer as JSON.
-pub fn write_record_batches_as_json<W>(
-    reader: &mut dyn RecordBatchReader,
-    w: W,
-    sparse: bool,
-) -> Result<()>
-where
-    W: Write,
-{
-    let batches: Vec<RecordBatch> = reader
-        .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
-        .map_err(Error::ArrowError)?;
-    let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
-    let builder = WriterBuilder::new().with_explicit_nulls(!sparse);
-    let mut writer = builder.build::<_, JsonArray>(w);
-    writer
-        .write_batches(&batch_refs)
-        .map_err(Error::ArrowError)?;
-    writer.finish().map_err(Error::ArrowError)?;
-    Ok(())
-}
-
-/// Write record batches from a reader to the given writer as pretty-formatted JSON.
-pub fn write_record_batches_as_json_pretty<W>(
-    reader: &mut dyn RecordBatchReader,
-    w: W,
-    sparse: bool,
-) -> Result<()>
-where
-    W: Write,
-{
-    let mut buf = Vec::new();
-    write_record_batches_as_json(reader, &mut buf, sparse)?;
-    let value: serde_json::Value = serde_json::from_slice(&buf)
-        .map_err(|e| Error::GenericError(format!("Invalid JSON: {e}")))?;
-    serde_json::to_writer_pretty(w, &value)
-        .map_err(|e| Error::GenericError(format!("Failed to write JSON: {e}")))?;
-    Ok(())
-}
-
 /// Write record batches from a reader to the given writer as YAML.
 pub fn write_record_batches_as_yaml<W>(
     reader: &mut dyn RecordBatchReader,
@@ -116,9 +75,8 @@ pub fn write_record_batches_as_yaml<W>(
 where
     W: Write,
 {
-    let batches: Vec<RecordBatch> = reader
-        .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
-        .map_err(Error::ArrowError)?;
+    let batches: Vec<RecordBatch> =
+        reader.collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
     let yaml_rows: Vec<Yaml<'static>> = batches
         .iter()
         .flat_map(|batch| record_batch_to_yaml_rows(batch, sparse))
@@ -130,7 +88,7 @@ where
         .dump(&doc)
         .map_err(|e| Error::GenericError(format!("Failed to emit YAML: {e}")))?;
     let to_write = out.strip_prefix("---\n").unwrap_or(&out);
-    write!(w, "{to_write}").map_err(|e| Error::GenericError(format!("Write failed: {e}")))?;
+    write!(w, "{to_write}")?;
     Ok(())
 }
 
@@ -153,10 +111,12 @@ impl Step for DisplayWriterStep {
                 write_record_batches_as_csv(&mut *reader, std::io::stdout(), self.headers)?;
             }
             DisplayOutputFormat::Json => {
-                write_record_batches_as_json(&mut *reader, std::io::stdout(), self.sparse)?;
+                RecordBatchJsonWriter::new(self.sparse, false)
+                    .write(&mut *reader, std::io::stdout())?;
             }
             DisplayOutputFormat::JsonPretty => {
-                write_record_batches_as_json_pretty(&mut *reader, std::io::stdout(), self.sparse)?;
+                RecordBatchJsonWriter::new(self.sparse, true)
+                    .write(&mut *reader, std::io::stdout())?;
             }
             DisplayOutputFormat::Yaml => {
                 write_record_batches_as_yaml(&mut *reader, std::io::stdout(), self.sparse)?;
@@ -198,8 +158,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use super::write_record_batches_as_csv;
-    use super::write_record_batches_as_json;
-    use super::write_record_batches_as_json_pretty;
     use super::write_record_batches_as_yaml;
     use crate::pipeline::Producer as _;
     use crate::pipeline::VecRecordBatchReaderSource;
@@ -243,37 +201,6 @@ mod tests {
         assert!(!s.contains("id,name"));
         assert!(s.contains("1,alice"));
         assert!(s.contains("2,bob"));
-    }
-
-    #[tokio::test]
-    async fn test_write_record_batches_as_json() {
-        let batch = make_test_batch();
-        let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().await.unwrap();
-        let mut out = Vec::new();
-        write_record_batches_as_json(&mut *reader, &mut out, true).unwrap();
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("\"id\""));
-        assert!(s.contains("\"name\""));
-        assert!(s.contains("1"));
-        assert!(s.contains("alice"));
-        assert!(s.contains("bob"));
-    }
-
-    #[tokio::test]
-    async fn test_write_record_batches_as_json_pretty() {
-        let batch = make_test_batch();
-        let mut source = VecRecordBatchReaderSource::new(vec![batch]);
-        let mut reader = source.get().await.unwrap();
-        let mut out = Vec::new();
-        write_record_batches_as_json_pretty(&mut *reader, &mut out, true).unwrap();
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("\"id\""));
-        assert!(s.contains("\"name\""));
-        assert!(s.contains("1"));
-        assert!(s.contains("alice"));
-        assert!(s.contains("bob"));
-        assert!(s.contains('\n'), "pretty output should contain newlines");
     }
 
     #[tokio::test]

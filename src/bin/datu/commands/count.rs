@@ -1,23 +1,29 @@
 //! `datu count` - return the number of rows in a Parquet, Avro, CSV, or ORC file
 
 use datu::cli::CountArgs;
-use datu::pipeline::count_rows;
+use datu::pipeline::PipelineBuilder;
 use datu::resolve_file_type;
+use eyre::Result;
 
 /// The `datu count` command. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
-pub async fn count(args: CountArgs) -> eyre::Result<()> {
-    let file_type = resolve_file_type(args.input, &args.input_path)?;
-    let total = count_rows(&args.input_path, file_type, args.input_headers).await?;
-    println!("{total}");
-    Ok(())
+pub async fn count(args: CountArgs) -> Result<()> {
+    resolve_file_type(args.input, &args.input_path).map_err(eyre::Report::from)?;
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read(&args.input_path)
+        .input_type(args.input)
+        .csv_has_header(args.input_headers)
+        .row_count();
+    let mut built = builder.build().map_err(eyre::Report::from)?;
+    built.execute().map_err(eyre::Report::from)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_count_parquet() {
         let args = CountArgs {
             input_path: "fixtures/table.parquet".to_string(),
@@ -28,7 +34,7 @@ mod tests {
         assert!(result.is_ok(), "count failed: {:?}", result.err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_count_avro() {
         let args = CountArgs {
             input_path: "fixtures/userdata5.avro".to_string(),

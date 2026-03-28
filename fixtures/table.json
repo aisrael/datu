@@ -1,0 +1,3 @@
+{"one":-1.0,"two":"foo","three":true,"four":"2022-12-23T00:00:00","five":"2022-12-23T11:43:49","__index_level_0__":"a"}
+{"one":null,"two":"bar","three":false,"four":"2021-12-23T00:00:00","five":"2021-12-23T12:44:50","__index_level_0__":"b"}
+{"one":2.5,"two":"baz","three":false,"four":"2020-12-23T00:00:00","five":"2020-12-23T13:45:51","__index_level_0__":"c"}

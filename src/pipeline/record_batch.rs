@@ -15,20 +15,18 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReaderSource;
-use crate::pipeline::avro::RecordBatchAvroWriter;
-use crate::pipeline::csv::RecordBatchCsvWriter;
+use crate::pipeline::block_on_pipeline_future;
+use crate::pipeline::count_rows;
 use crate::pipeline::display::apply_select_and_display;
-use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc::OrcRecordBatchReader;
-use crate::pipeline::orc::RecordBatchOrcWriter;
-use crate::pipeline::parquet::RecordBatchParquetWriter;
-use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::read::ReadArgs;
 use crate::pipeline::sample_from_reader;
+use crate::pipeline::schema::get_schema_fields;
+use crate::pipeline::schema::print_schema_fields;
+use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::select::resolve_column_specs;
 use crate::pipeline::tail_batches;
-use crate::pipeline::write as write_dispatch;
-use crate::pipeline::write::WriteArgs;
-use crate::pipeline::write::WriteJsonArgs;
+use crate::pipeline::write::write_record_batches_from_reader;
 
 /// A Source that wraps a single RecordBatchReader and yields it on get().
 struct RecordBatchReaderHolder {
@@ -39,7 +37,7 @@ struct RecordBatchReaderHolder {
 impl Producer<dyn RecordBatchReader + 'static> for RecordBatchReaderHolder {
     async fn get(&mut self) -> crate::Result<Box<dyn RecordBatchReader + 'static>> {
         std::mem::take(&mut self.reader)
-            .ok_or_else(|| crate::Error::GenericError("Reader already taken".to_string()))
+            .ok_or_else(|| Error::GenericError("Reader already taken".to_string()))
     }
 }
 
@@ -60,9 +58,9 @@ impl Step for RecordBatchSelect {
         let indices: Vec<usize> = column_names
             .iter()
             .map(|col| {
-                schema.index_of(col).map_err(|e| {
-                    crate::Error::GenericError(format!("Column '{col}' not found: {e}"))
-                })
+                schema
+                    .index_of(col)
+                    .map_err(|e| Error::GenericError(format!("Column '{col}' not found: {e}")))
             })
             .collect::<crate::Result<Vec<_>>>()?;
         let projected_schema = reader.schema().project(&indices)?;
@@ -112,8 +110,49 @@ pub fn parse_select_step(select: &Option<SelectSpec>) -> Option<RecordBatchSelec
     })
 }
 
+/// Skips the first `offset_remaining` logical rows from an underlying [`RecordBatchReader`].
+pub(crate) struct SkipRowsRecordBatchReader {
+    reader: Box<dyn RecordBatchReader + 'static>,
+    offset_remaining: usize,
+}
+
+impl RecordBatchReader for SkipRowsRecordBatchReader {
+    fn schema(&self) -> SchemaRef {
+        self.reader.schema()
+    }
+}
+
+impl Iterator for SkipRowsRecordBatchReader {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let batch = self.reader.next()?;
+            let batch = match batch {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+            let batch_rows = batch.num_rows();
+            if batch_rows == 0 {
+                continue;
+            }
+            if self.offset_remaining == 0 {
+                return Some(Ok(batch));
+            }
+            if batch_rows <= self.offset_remaining {
+                self.offset_remaining -= batch_rows;
+                continue;
+            }
+            let start = self.offset_remaining;
+            self.offset_remaining = 0;
+            return Some(Ok(batch.slice(start, batch_rows - start)));
+        }
+    }
+}
+
 /// Yields at most `remaining` rows from an underlying [`RecordBatchReader`].
-struct TakeRowsRecordBatchReader {
+/// Used by [`RecordBatchHead`] and by [`apply_offset_limit`] for record-batch read limits.
+pub(crate) struct TakeRowsRecordBatchReader {
     reader: Box<dyn RecordBatchReader + 'static>,
     remaining: usize,
 }
@@ -153,7 +192,30 @@ impl Iterator for TakeRowsRecordBatchReader {
     }
 }
 
-/// Keeps the first `n` rows across batches.
+/// Applies SQL-style `OFFSET` / `LIMIT` across record batches: skip `offset` rows, then take at most
+/// `limit` rows when `limit` is `Some`.
+pub(crate) fn apply_offset_limit(
+    reader: Box<dyn RecordBatchReader + 'static>,
+    offset: usize,
+    limit: Option<usize>,
+) -> Box<dyn RecordBatchReader + 'static> {
+    let mut r = reader;
+    if offset > 0 {
+        r = Box::new(SkipRowsRecordBatchReader {
+            reader: r,
+            offset_remaining: offset,
+        });
+    }
+    if let Some(n) = limit {
+        r = Box::new(TakeRowsRecordBatchReader {
+            reader: r,
+            remaining: n,
+        });
+    }
+    r
+}
+
+/// Keeps the first `n` rows across batches (same streaming cap as record-batch read `limit` after any skip).
 pub struct RecordBatchHead {
     pub n: usize,
 }
@@ -165,17 +227,18 @@ impl Step for RecordBatchHead {
 
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         let reader = input.get().await?;
-        let wrapped = TakeRowsRecordBatchReader {
+        let wrapped = Box::new(TakeRowsRecordBatchReader {
             reader,
             remaining: self.n,
-        };
+        });
         Ok(Box::new(RecordBatchReaderHolder {
-            reader: Some(Box::new(wrapped)),
+            reader: Some(wrapped),
         }))
     }
 }
 
-/// Keeps the last `n` rows (materializes all batches).
+/// Keeps the last `n` rows (materializes all batches). Orthogonal to [`ReadArgs`] offset/limit from
+/// the start of the file; use for tail/slice display, not for SQL-style `OFFSET`/`LIMIT`.
 pub struct RecordBatchTail {
     pub n: usize,
 }
@@ -227,6 +290,41 @@ pub enum RecordBatchSink {
         output_format: DisplayOutputFormat,
         csv_stdout_headers: bool,
     },
+    Schema {
+        output_format: DisplayOutputFormat,
+        sparse: bool,
+    },
+    Count,
+}
+
+/// ORC read, then optional column select (schema/count with projection, and base for write/display).
+async fn orc_source_after_select(
+    input_path: String,
+    select: &Option<SelectSpec>,
+) -> crate::Result<RecordBatchReaderSource> {
+    let read_args = ReadArgs::new(input_path, FileType::Orc);
+    let mut source: RecordBatchReaderSource = Box::new(OrcRecordBatchReader { args: read_args });
+    if let Some(select_step) = parse_select_step(select) {
+        source = select_step.execute(source).await?;
+    }
+    Ok(source)
+}
+
+/// [`orc_source_after_select`] plus optional head/tail/sample (write/display path).
+async fn orc_source_after_select_and_slice(
+    input_path: String,
+    select: &Option<SelectSpec>,
+    slice: Option<DisplaySlice>,
+) -> crate::Result<RecordBatchReaderSource> {
+    let mut source = orc_source_after_select(input_path.clone(), select).await?;
+    if let Some(slice) = slice {
+        source = match slice {
+            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
+            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
+            DisplaySlice::Sample(n) => RecordBatchSample { input_path, n }.execute(source).await?,
+        };
+    }
+    Ok(source)
 }
 
 /// ORC input via record-batch steps (see `PIPELINE.mermaid` RecordBatch branch).
@@ -272,102 +370,81 @@ impl RecordBatchPipeline {
                 output_format: *output_format,
                 csv_stdout_headers: *csv_stdout_headers,
             },
+            RecordBatchSink::Schema {
+                output_format,
+                sparse: schema_sparse,
+            } => RecordBatchSink::Schema {
+                output_format: *output_format,
+                sparse: *schema_sparse,
+            },
+            RecordBatchSink::Count => RecordBatchSink::Count,
         };
 
         let fut = async move {
-            let read_args = LegacyReadArgs {
-                path: input_path.clone(),
-                limit: None,
-                offset: None,
-                csv_has_header: None,
-            };
-            let mut source: RecordBatchReaderSource =
-                Box::new(OrcRecordBatchReader { args: read_args });
-
-            if let Some(select_step) = parse_select_step(&select) {
-                source = select_step.execute(source).await?;
-            }
-
-            if let Some(slice) = slice {
-                source = match slice {
-                    DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
-                    DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
-                    DisplaySlice::Sample(n) => {
-                        RecordBatchSample {
-                            input_path: input_path.clone(),
-                            n,
-                        }
-                        .execute(source)
-                        .await?
-                    }
-                };
-            }
-
             match sink {
+                RecordBatchSink::Schema {
+                    output_format,
+                    sparse: schema_sparse,
+                } => {
+                    if select.is_none() {
+                        let fields = get_schema_fields(&input_path, FileType::Orc, None)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    } else {
+                        let mut source =
+                            orc_source_after_select(input_path.clone(), &select).await?;
+                        let reader = source.get().await?;
+                        let fields = schema_fields_from_arrow(reader.schema().as_ref());
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    }
+                    Ok::<(), Error>(())
+                }
+                RecordBatchSink::Count => {
+                    if select.is_none() {
+                        let total = count_rows(&input_path, FileType::Orc, None).await?;
+                        println!("{total}");
+                    } else {
+                        let mut source =
+                            orc_source_after_select(input_path.clone(), &select).await?;
+                        let reader = source.get().await?;
+                        let mut total = 0usize;
+                        for batch in reader {
+                            total += batch.map_err(Error::ArrowError)?.num_rows();
+                        }
+                        println!("{total}");
+                    }
+                    Ok::<(), Error>(())
+                }
                 RecordBatchSink::Write {
                     output_path,
                     output_file_type,
                     json_pretty,
                     progress: _progress,
                 } => {
-                    let write_args = WriteArgs {
-                        path: output_path.clone(),
-                        file_type: output_file_type,
-                        sparse: Some(sparse),
-                        pretty: Some(json_pretty),
-                    };
+                    let mut source =
+                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                            .await?;
 
-                    match output_file_type {
-                        FileType::Parquet => {
-                            RecordBatchParquetWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Csv => {
-                            RecordBatchCsvWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Json => {
-                            RecordBatchJsonWriter {
-                                args: WriteJsonArgs {
-                                    path: output_path,
-                                    sparse,
-                                    pretty: json_pretty,
-                                },
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Avro => {
-                            RecordBatchAvroWriter { args: write_args }
-                                .execute(source)
-                                .await?;
-                        }
-                        FileType::Orc => {
-                            RecordBatchOrcWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Xlsx | FileType::Yaml => {
-                            write_dispatch::write_record_batches(source, write_args).await?;
-                        }
-                    }
+                    let mut reader = source.get().await?;
+                    write_record_batches_from_reader(
+                        &mut *reader,
+                        output_path.as_str(),
+                        output_file_type,
+                        sparse,
+                        json_pretty,
+                    )?;
+                    Ok::<(), Error>(())
                 }
                 RecordBatchSink::Display {
                     output_format,
                     csv_stdout_headers,
                 } => {
+                    let source =
+                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                            .await?;
+
                     apply_select_and_display(
                         source,
                         None,
@@ -376,21 +453,12 @@ impl RecordBatchPipeline {
                         csv_stdout_headers,
                     )
                     .await?;
+                    Ok::<(), Error>(())
                 }
             }
-
-            Ok::<(), Error>(())
         };
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            rt.block_on(fut)
-        }
+        block_on_pipeline_future(fut)
     }
 }
 
@@ -424,11 +492,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileType;
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::parquet::RecordBatchParquetReader;
-    use crate::pipeline::read::LegacyReadArgs;
+    use crate::pipeline::read::ReadArgs;
 
     #[test]
     fn test_parse_select_step_none() {
@@ -462,12 +531,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_select_columns() {
         // Use the parquet reader to inspect the file and verify column selection
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let parquet_step = RecordBatchParquetReader { args };
 
         let source: RecordBatchReaderSource = Box::new(parquet_step);

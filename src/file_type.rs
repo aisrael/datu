@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::str::FromStr;
 
+use crate::Error;
+
 /// A supported input or output file type
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FileType {
@@ -48,7 +50,7 @@ impl FromStr for FileType {
 
 /// Try to determine the FileType from a filename
 impl TryFrom<&str> for FileType {
-    type Error = crate::Error;
+    type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let path = Path::new(s);
@@ -64,26 +66,72 @@ impl TryFrom<&str> for FileType {
                 "avro" => FileType::Avro,
                 "xlsx" => FileType::Xlsx,
                 "yaml" | "yml" => FileType::Yaml,
-                _ => return Err(crate::Error::UnknownFileType(s.to_owned())),
+                _ => return Err(Error::UnknownFileType(s.to_owned())),
             };
             return Ok(file_type);
         };
 
-        Err(crate::Error::UnknownFileType(s.to_owned()))
+        Err(Error::UnknownFileType(s.to_owned()))
+    }
+}
+
+/// Human-readable list of formats accepted for `head`, `tail`, and `sample` CLI commands.
+/// Keep in sync with [`FileType::supports_pipeline_display_input`].
+pub const DISPLAY_PIPELINE_INPUTS_FOR_CLI: &str = "Parquet, Avro, CSV, JSON, and ORC";
+
+impl FileType {
+    /// Input formats allowed for [`crate::pipeline::PipelineBuilder`] conversion (read + write).
+    #[inline]
+    pub fn supports_pipeline_conversion_input(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
+        )
+    }
+
+    /// Output formats allowed for [`crate::pipeline::PipelineBuilder`] conversion.
+    #[inline]
+    pub fn supports_pipeline_conversion_output(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet
+                | FileType::Csv
+                | FileType::Json
+                | FileType::Orc
+                | FileType::Avro
+                | FileType::Xlsx
+                | FileType::Yaml
+        )
+    }
+
+    /// Input formats for display pipelines (head / tail / sample / schema / row count to stdout).
+    #[inline]
+    pub fn supports_pipeline_display_input(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
+        )
+    }
+
+    /// Formats read via DataFusion in [`crate::pipeline::read::read_to_dataframe`].
+    #[inline]
+    pub fn supports_datafusion_file_read(self) -> bool {
+        matches!(
+            self,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json
+        )
     }
 }
 
 /// Resolve the input file type: use the explicit override if provided, otherwise infer from the file path extension.
 pub fn resolve_file_type(input_override: Option<FileType>, path: &str) -> crate::Result<FileType> {
-    match input_override {
-        Some(ft) => Ok(ft),
-        None => FileType::try_from(path),
-    }
+    input_override.map_or_else(|| FileType::try_from(path), Ok)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Error;
 
     #[test]
     fn test_valid_extensions() {
@@ -112,12 +160,72 @@ mod tests {
     #[test]
     fn test_unknown_extension() {
         let result = FileType::try_from("image.png");
-        assert!(matches!(result, Err(crate::Error::UnknownFileType(s)) if s == "png"));
+        assert!(matches!(result, Err(Error::UnknownFileType(s)) if s == "png"));
     }
 
     #[test]
     fn test_no_extension() {
         let result = FileType::try_from("README");
-        assert!(matches!(result, Err(crate::Error::UnknownFileType(s)) if s == "README"));
+        assert!(matches!(result, Err(Error::UnknownFileType(s)) if s == "README"));
+    }
+
+    #[test]
+    fn supports_pipeline_conversion_input() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Json,
+            FileType::Orc,
+        ] {
+            assert!(t.supports_pipeline_conversion_input(), "{t}");
+        }
+        assert!(!FileType::Xlsx.supports_pipeline_conversion_input());
+        assert!(!FileType::Yaml.supports_pipeline_conversion_input());
+    }
+
+    #[test]
+    fn supports_pipeline_conversion_output() {
+        for t in [
+            FileType::Parquet,
+            FileType::Csv,
+            FileType::Json,
+            FileType::Orc,
+            FileType::Avro,
+            FileType::Xlsx,
+            FileType::Yaml,
+        ] {
+            assert!(t.supports_pipeline_conversion_output(), "{t}");
+        }
+    }
+
+    #[test]
+    fn supports_pipeline_display_input() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Orc,
+            FileType::Json,
+        ] {
+            assert!(t.supports_pipeline_display_input(), "{t}");
+        }
+        assert!(!FileType::Xlsx.supports_pipeline_display_input());
+        assert!(!FileType::Yaml.supports_pipeline_display_input());
+    }
+
+    #[test]
+    fn supports_datafusion_file_read() {
+        for t in [
+            FileType::Parquet,
+            FileType::Avro,
+            FileType::Csv,
+            FileType::Json,
+        ] {
+            assert!(t.supports_datafusion_file_read(), "{t}");
+        }
+        assert!(!FileType::Orc.supports_datafusion_file_read());
+        assert!(!FileType::Xlsx.supports_datafusion_file_read());
+        assert!(!FileType::Yaml.supports_datafusion_file_read());
     }
 }

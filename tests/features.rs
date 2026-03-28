@@ -23,6 +23,29 @@ fn replace_tempdir(s: &str, temp_path: &str) -> String {
     s.replace(TEMPDIR_PLACEHOLDER, temp_path)
 }
 
+/// Accepts a single JSON document (e.g. an array from the display writer) or NDJSON from DataFusion
+/// `write_json` (one JSON value per non-empty line).
+fn assert_file_is_valid_json_content(content: &str) {
+    let trimmed = content.trim();
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return;
+    }
+    let mut saw_line = false;
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        saw_line = true;
+        serde_json::from_str::<serde_json::Value>(line).unwrap_or_else(|e| {
+            panic!(
+                "Expected file to contain valid JSON (single document or NDJSON), but parsing failed: {e}"
+            )
+        });
+    }
+    assert!(saw_line, "Expected file to contain non-empty JSON content");
+}
+
 #[given(regex = r#"^a file "(.+)"$"#)]
 fn a_file(world: &mut CliWorld, path: String) {
     let path_resolved = resolve_path(world, &path);
@@ -315,8 +338,7 @@ fn that_file_should_contain_literal(world: &mut CliWorld, expected: String) {
 fn file_should_be_valid_json(world: &mut CliWorld, path: String) {
     let path_resolved = resolve_path(world, &path);
     let content = std::fs::read_to_string(&path_resolved).expect("Failed to read file");
-    serde_json::from_str::<serde_json::Value>(content.trim())
-        .expect("Expected file to contain valid JSON, but parsing failed");
+    assert_file_is_valid_json_content(&content);
 }
 
 #[then(regex = r#"^the file "(.+)" should be valid YAML$"#)]
@@ -334,8 +356,7 @@ fn that_file_should_be_valid_json(world: &mut CliWorld) {
         .as_ref()
         .expect("No file has been set; use 'the file \"...\" should exist' first");
     let content = std::fs::read_to_string(path_resolved).expect("Failed to read file");
-    serde_json::from_str::<serde_json::Value>(content.trim())
-        .expect("Expected file to contain valid JSON, but parsing failed");
+    assert_file_is_valid_json_content(&content);
 }
 
 #[then(regex = r#"^that file should be valid YAML$"#)]

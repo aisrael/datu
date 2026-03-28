@@ -12,20 +12,22 @@ use arrow::record_batch::RecordBatch;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
 use async_trait::async_trait;
-use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::SessionContext;
 use eyre::Result as EyreResult;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
-use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::expect_file_type;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::apply_offset_limit;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::schema::schema_fields_from_arrow;
@@ -43,18 +45,24 @@ impl Step for DataframeAvroReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(DataFrameSource::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeAvroReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let df = read_avro_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(Box::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Avro, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
 }
 
@@ -75,12 +83,6 @@ impl Step for DataframeAvroWriter {
         let mut reader = producer.get().await?;
         write_record_batches(self.args.path.as_str(), &mut *reader)
     }
-}
-
-async fn read_avro_to_dataframe(ctx: &SessionContext, path: &str) -> Result<DataFrame> {
-    let options = AvroReadOptions::default();
-    let df = ctx.read_avro(path, options).await?;
-    Ok(df)
 }
 
 /// Reads the Arrow schema from an Avro file at `path` and returns [`SchemaField`] descriptions.
@@ -159,7 +161,7 @@ impl Iterator for AvroCompatRecordBatchReader<'_> {
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
 pub struct RecordBatchAvroReader {
-    pub args: LegacyReadArgs,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
@@ -169,93 +171,9 @@ impl Producer<dyn RecordBatchReader + 'static> for RecordBatchAvroReader {
     }
 }
 
-/// Record batch reader that applies offset and limit to an underlying reader.
-/// Arrow Avro does not support offset/limit at the builder level, so we wrap
-/// the reader and slice batches as needed.
-struct LimitOffsetRecordBatchReader {
-    reader: Box<dyn RecordBatchReader + 'static>,
-    offset_remaining: usize,
-    limit_remaining: Option<usize>,
-}
-
-impl LimitOffsetRecordBatchReader {
-    fn new(
-        reader: Box<dyn RecordBatchReader + 'static>,
-        offset: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        Self {
-            reader,
-            offset_remaining: offset,
-            limit_remaining: limit,
-        }
-    }
-}
-
-impl RecordBatchReader for LimitOffsetRecordBatchReader {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.reader.schema()
-    }
-}
-
-impl Iterator for LimitOffsetRecordBatchReader {
-    type Item = arrow::error::Result<RecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.limit_remaining == Some(0) {
-            return None;
-        }
-
-        let batch = self.reader.next()?;
-        let batch = match batch {
-            Ok(b) => b,
-            Err(e) => return Some(Err(e)),
-        };
-
-        let batch_rows = batch.num_rows();
-        if batch_rows == 0 {
-            return Some(Ok(batch));
-        }
-
-        // Apply offset: skip rows at the start
-        let (start, take) = if self.offset_remaining > 0 {
-            if batch_rows <= self.offset_remaining {
-                self.offset_remaining -= batch_rows;
-                return self.next();
-            }
-            let start = self.offset_remaining;
-            self.offset_remaining = 0;
-            (start, batch_rows - start)
-        } else {
-            (0, batch_rows)
-        };
-
-        // Apply limit: cap how many rows we return
-        let take = match self.limit_remaining {
-            Some(remaining) => {
-                let take = take.min(remaining);
-                self.limit_remaining = Some(remaining - take);
-                take
-            }
-            None => take,
-        };
-
-        if take == 0 {
-            return self.next();
-        }
-
-        let result = if start == 0 && take == batch_rows {
-            batch
-        } else {
-            batch.slice(start, take)
-        };
-
-        Some(Ok(result))
-    }
-}
-
 /// Read an Avro file and return a RecordBatchReader.
-pub fn read_avro(args: &LegacyReadArgs) -> Result<impl RecordBatchReader + 'static> {
+pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
+    expect_file_type(args, FileType::Avro)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let reader = BufReader::new(file);
     let arrow_reader = ReaderBuilder::new()
@@ -267,11 +185,7 @@ pub fn read_avro(args: &LegacyReadArgs) -> Result<impl RecordBatchReader + 'stat
     if args.offset.is_some() || args.limit.is_some() {
         let offset = args.offset.unwrap_or(0);
         let limit = args.limit;
-        Ok(Box::new(LimitOffsetRecordBatchReader::new(
-            base_reader,
-            offset,
-            limit,
-        )) as Box<dyn RecordBatchReader + 'static>)
+        Ok(apply_offset_limit(base_reader, offset, limit))
     } else {
         Ok(base_reader)
     }
@@ -350,11 +264,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_avro_step_dataframe() {
-        let args = ReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            file_type: FileType::Avro,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let mut step = DataframeAvroReader { args };
         let df = step.get().await.expect("Failed to read Avro file");
         assert_eq!(
@@ -366,11 +276,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_and_write_avro_steps() {
-        let read_args = ReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            file_type: FileType::Avro,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let read_step = DataframeAvroReader { args: read_args };
 
         let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
@@ -438,12 +344,7 @@ mod tests {
 
     #[test]
     fn test_read_avro() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let mut reader = read_avro(&args).expect("read_avro failed");
         let schema = reader.schema();
         assert!(!schema.fields().is_empty(), "Schema should have columns");
@@ -457,12 +358,8 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: Some(1),
-            offset: None,
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.limit = Some(1);
         let mut reader = read_avro(&args).expect("read_avro failed");
         let batch = reader
             .next()
@@ -474,12 +371,8 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: None,
-            offset: Some(1),
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.offset = Some(1);
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
         for batch_result in reader {
@@ -492,12 +385,9 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset_and_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: Some(5),
-            offset: Some(10),
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.limit = Some(5);
+        args.offset = Some(10);
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
         for batch_result in reader {

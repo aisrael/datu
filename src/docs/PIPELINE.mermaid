@@ -7,10 +7,7 @@ flowchart LR
     PipelineBuilder --> mode{"Display or Write?"}
     mode --> Input{"input FileType?"}
     Input --"orc"--> OrcReader["OrcReader (RecordBatch)"]
-    Input --parquet--> DataframeParquetReader["DataframeParquetReader"]
-    Input --avro--> DataframeAvroReader["DataframeAvroReader"]
-    Input --csv--> DataframeCsvReader["DataframeCsvReader"]
-    Input --json--> DataframeJsonReader["DataframeJsonReader"]
+    Input --"parquet|avro|csv|json"--> read_to_dataframe["read_to_dataframe (read.rs)"]
     subgraph RecordBatchPipeline
         OrcReader --> rbSelect{"select?"}
         rbSelect --Y--> RecordBatchSelect["RecordBatchSelect"]
@@ -33,16 +30,14 @@ flowchart LR
         rbOutputFileType --csv--> RecordBatchCsvWriter
         rbOutputFileType --json--> RecordBatchJsonWriter
         rbOutputFileType --"orc"--> RecordBatchOrcWriter
+        rbOutputFileType --"xlsx|yaml"--> rbWriteDispatch["write_record_batches (dispatch)"]
         rbOutputFormat --csv--> RecordBatchCsvPrinter
         rbOutputFormat --json--> RecordBatchJsonPrinter
         rbOutputFormat --"json-pretty"--> RecordBatchJsonPrettyPrinter
         rbOutputFormat --yaml--> RecordBatchYamlPrinter
     end
     subgraph DataframePipeline
-        DataframeParquetReader --> dfSelect{"select?"}
-        DataframeAvroReader --> dfSelect
-        DataframeCsvReader --> dfSelect
-        DataframeJsonReader --> dfSelect
+        read_to_dataframe --> dfSelect{"select?"}
         dfSelect --Y--> DataframeSelect["DataframeSelect"]
         DataframeSelect --> dfHeadTailSample
         dfSelect --N--> dfHeadTailSample
@@ -58,11 +53,9 @@ flowchart LR
         dfDisplayOrWrite --write--> dfOutputFileType
         dfOutputFormat{"output format?"}
         dfOutputFileType{"output FileType?"}
-        dfOutputFileType --parquet--> DataframeParquetWriter
-        dfOutputFileType --csv--> DataframeCsvWriter
-        dfOutputFileType --json--> DataframeJsonWriter
-        dfOutputFileType --avro--> DataframeToRecordBatch
-        DataframeToRecordBatch --> RecordBatchAvroWriter
+        dfOutputFileType --"parquet|csv|json"--> write_dataframe_pipeline_output["write_dataframe_pipeline_output"]
+        dfOutputFileType --avro--> DataframeAvroWriter
+        dfOutputFileType --"orc|xlsx|yaml"--> dfCollectBatchWrite["collect → ProgressVecRecordBatchReader → write_record_batches_from_reader"]
         dfOutputFormat --csv--> DataframeCsvPrinter
         dfOutputFormat --json--> DataframeJsonPrinter
         dfOutputFormat --"json-pretty"--> DataframeJsonPrettyPrinter

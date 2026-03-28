@@ -1,14 +1,16 @@
-use datafusion::dataframe::DataFrameWriteOptions;
+use arrow::array::RecordBatchReader;
 
 use crate::Error;
 use crate::FileType;
 use crate::Result;
-use crate::errors::PipelineExecutionError;
 use crate::pipeline::DataFrameSource;
-use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::avro;
-use crate::pipeline::display::write_record_batches_as_yaml;
+use crate::pipeline::dataframe::write_dataframe_pipeline_output;
+use crate::pipeline::display;
+use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc;
+use crate::pipeline::parquet::ParquetSink;
+use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::xlsx;
 
 /// Arguments for writing a file (CSV, Avro, Parquet, ORC, XLSX).
@@ -38,59 +40,38 @@ pub struct WriteYamlArgs {
 /// Marker returned by record-batch write pipeline steps after a successful write.
 pub struct WriteResult;
 
-/// Writes a [`DataFrame`] using DataFusion native writers (Parquet, CSV, JSON only).
-pub async fn write_dataframe(mut source: DataFrameSource, args: WriteArgs) -> Result<()> {
-    let write_opts = DataFrameWriteOptions::new();
-    let df = source
-        .df
-        .take()
-        .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
-    match args.file_type {
-        FileType::Parquet => {
-            let _ = df.write_parquet(&args.path, write_opts, None).await?;
-        }
-        FileType::Csv => {
-            let _ = df.write_csv(&args.path, write_opts, None).await?;
-        }
-        FileType::Json => {
-            df.write_json(&args.path, write_opts, None).await?;
-        }
-        FileType::Avro | FileType::Orc | FileType::Xlsx | FileType::Yaml => {
-            return Err(Error::PipelineExecutionError(
-                PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
-            ));
-        }
+/// Writes record batches from a reader to an output file. Single dispatch for DataFrame batch
+/// export, ORC record-batch pipeline writes, and JSON pretty/sparse paths.
+pub fn write_record_batches_from_reader(
+    reader: &mut dyn RecordBatchReader,
+    output_path: &str,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+) -> Result<()> {
+    if output_file_type != FileType::Json && json_pretty {
+        eprintln!("Warning: --json-pretty is only supported when converting to JSON");
     }
+
+    match output_file_type {
+        FileType::Parquet => write_record_batches_with_sink(output_path, reader, ParquetSink::new)?,
+        FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
+        FileType::Json => {
+            RecordBatchJsonWriter::new(sparse, json_pretty).write_to_path(reader, output_path)?;
+        }
+        FileType::Yaml => {
+            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
+            display::write_record_batches_as_yaml(reader, file, sparse)?;
+        }
+        FileType::Avro => avro::write_record_batches(output_path, reader)?,
+        FileType::Orc => orc::write_record_batches(output_path, reader)?,
+        FileType::Xlsx => xlsx::write_record_batch_to_xlsx(output_path, reader)?,
+    }
+
     Ok(())
 }
 
-/// Writes record batches for formats that need a record-batch path (Avro, ORC, XLSX, YAML).
-pub async fn write_record_batches(
-    mut source: RecordBatchReaderSource,
-    args: WriteArgs,
-) -> Result<()> {
-    let mut reader = source.get().await?;
-    let path = args.path.as_str();
-    match args.file_type {
-        FileType::Avro => {
-            avro::write_record_batches(path, &mut reader)?;
-        }
-        FileType::Orc => {
-            orc::write_record_batches(path, &mut reader)?;
-        }
-        FileType::Xlsx => {
-            xlsx::write_record_batch_to_xlsx(path, &mut reader)?;
-        }
-        FileType::Yaml => {
-            let file = std::fs::File::create(path).map_err(Error::IoError)?;
-            let sparse = args.sparse.unwrap_or(false);
-            write_record_batches_as_yaml(&mut *reader, file, sparse)?;
-        }
-        _ => {
-            return Err(Error::PipelineExecutionError(
-                PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
-            ));
-        }
-    }
-    Ok(())
+/// Writes a [`DataFrame`] to Parquet, CSV, or JSON using [`write_dataframe_pipeline_output`].
+pub async fn write_dataframe(source: DataFrameSource, args: WriteArgs) -> Result<()> {
+    write_dataframe_pipeline_output(source, args).await
 }

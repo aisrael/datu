@@ -29,6 +29,10 @@ pub enum Error {
     UnsupportedOperator(String),
     #[error("Unsupported function call: {0}")]
     UnsupportedFunctionCall(String),
+    #[error("{0} is not implemented in the REPL")]
+    ReplNotImplemented(&'static str),
+    #[error("Invalid REPL pipeline: {0}")]
+    InvalidReplPipeline(String),
     #[error(transparent)]
     PipelinePlanningError(#[from] PipelinePlanningError),
     #[error(transparent)]
@@ -50,6 +54,8 @@ pub enum PipelinePlanningError {
     UnsupportedInputFileType(String),
     #[error("Pipeline planner does not support output file type: {0}")]
     UnsupportedOutputFileType(String),
+    #[error("Column '{0}' not found (case-insensitive match)")]
+    ColumnNotFound(String),
 }
 
 /// Errors produced while running a pipeline (wrong format, consumed state, etc.).

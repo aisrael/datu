@@ -1,5 +1,5 @@
 Feature: Head
-  Print the first N rows of a Parquet, Avro, CSV, or ORC file as CSV.
+  Print the first N rows of a Parquet, Avro, CSV, JSON, or ORC file as CSV.
 
   Scenario: Head Parquet default (10 lines)
     When I run `datu head fixtures/userdata.parquet`
@@ -47,6 +47,20 @@ Feature: Head
     Then the command should succeed
     And the output should have a header and 2 lines
     And the first line of the output should contain "one,two"
+
+  Scenario: Head JSON default (10 lines)
+    When I run `datu head fixtures/table.json`
+    Then the command should succeed
+    And the output should have a header and 3 lines
+    And the first line of the output should contain "one"
+    And the first line of the output should contain "two"
+
+  Scenario: Head JSON with -n 2
+    When I run `datu head fixtures/table.json -n 2`
+    Then the command should succeed
+    And the output should have a header and 2 lines
+    And the first line of the output should contain "one"
+    And the output should contain "foo"
 
   Scenario: Head CSV with --select
     When I run `datu head fixtures/table.csv -n 2 --select two,four`

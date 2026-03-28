@@ -5,8 +5,6 @@ use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::ParquetReadOptions;
-use datafusion::prelude::SessionContext;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -15,13 +13,16 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::schema::types::ColumnDescriptor;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
-use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::expect_file_type;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
@@ -39,25 +40,25 @@ impl Step for DataframeParquetReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let df = read_parquet_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(DataFrameSource::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeParquetReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let df = read_parquet_to_dataframe(&ctx, &self.args.path).await?;
-        Ok(Box::new(df))
+        let result =
+            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
-}
-
-async fn read_parquet_to_dataframe(ctx: &SessionContext, path: &str) -> Result<DataFrame> {
-    let options = ParquetReadOptions::default();
-    let df = ctx.read_parquet(path, options).await?;
-    Ok(df)
 }
 
 /// Pipeline step that writes a [`DataFrame`] to Parquet.
@@ -81,7 +82,7 @@ impl Step for DataframeParquetWriter {
 /// Pipeline step that reads a Parquet file and produces a record batch reader.
 /// TODO: Deprecate this and use Dataframe
 pub struct RecordBatchParquetReader {
-    pub args: LegacyReadArgs,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
@@ -159,7 +160,12 @@ pub fn get_schema_fields_parquet(path: &str) -> eyre::Result<Vec<SchemaField>> {
 }
 
 /// Read a parquet file and return a RecordBatchReader.
-pub fn read_parquet(args: &LegacyReadArgs) -> Result<ParquetRecordBatchReader> {
+///
+/// `with_offset` / `with_limit` on the Arrow Parquet reader apply the same global-row semantics as
+/// [`crate::pipeline::record_batch::apply_offset_limit`] (skip `offset` rows, then yield at most
+/// `limit` rows).
+pub fn read_parquet(args: &ReadArgs) -> Result<ParquetRecordBatchReader> {
+    expect_file_type(args, FileType::Parquet)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
 
     let mut builder =
@@ -186,22 +192,17 @@ impl Step for RecordBatchParquetWriter {
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get().await?;
-        write_record_batches(&self.args.path, &mut *reader)?;
+        write_record_batches_with_sink(&self.args.path, &mut *reader, ParquetSink::new)?;
         Ok(WriteResult)
     }
 }
 
-/// Write record batches from a reader to a Parquet file.
-pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
-    write_record_batches_with_sink(path, reader, ParquetSink::new)
-}
-
-struct ParquetSink {
+pub(crate) struct ParquetSink {
     writer: ArrowWriter<std::fs::File>,
 }
 
 impl ParquetSink {
-    fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+    pub(crate) fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;
         Ok(Self { writer })
@@ -228,11 +229,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_parque_step_dataframe() {
-        let args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let mut step = DataframeParquetReader { args };
         let df = step.get().await.expect("Failed to read Parquet file");
         assert_eq!(
@@ -244,11 +241,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_and_write_parquet_steps() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let read_step = DataframeParquetReader { args: read_args };
 
         let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
@@ -285,12 +278,7 @@ mod tests {
 
     #[test]
     fn test_read_parquet() {
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
         let batch = reader
@@ -303,12 +291,8 @@ mod tests {
 
     #[test]
     fn test_read_parquet_with_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: Some(1),
-            offset: None,
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.limit = Some(1);
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
         let batch = reader
@@ -317,5 +301,37 @@ mod tests {
             .map_err(Error::ArrowError)
             .expect("Unable to read batch");
         assert_eq!(batch.num_rows(), 1, "Expected only 1 row");
+    }
+
+    #[test]
+    fn test_read_parquet_with_offset() {
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.offset = Some(1);
+        let reader =
+            read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
+        let total: usize = reader
+            .map(|b| b.map_err(Error::ArrowError).expect("batch").num_rows())
+            .sum();
+        assert_eq!(total, 2, "Expected 2 rows after skipping 1");
+    }
+
+    #[test]
+    fn test_read_parquet_with_offset_and_limit() {
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.offset = Some(1);
+        args.limit = Some(1);
+        let mut reader =
+            read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
+        let batch = reader
+            .next()
+            .expect("None")
+            .map_err(Error::ArrowError)
+            .expect("Unable to read batch");
+        assert_eq!(
+            batch.num_rows(),
+            1,
+            "Expected 1 row after offset 1 and limit 1"
+        );
+        assert!(reader.next().is_none());
     }
 }

@@ -135,7 +135,9 @@ Feature: Convert
     And the file "$TEMPDIR/table.json" should be valid JSON
     And the file "$TEMPDIR/table.json" should contain:
       ```
-      [{"one":-1.0,"two":"foo","three":true,"four":"2022-12-23T00:00:00Z","five":"2022-12-23T11:43:49","__index_level_0__":"a"},{"two":"bar","three":false,"four":"2021-12-23T00:00:00Z","five":"2021-12-23T12:44:50","__index_level_0__":"b"},{"one":2.5,"two":"baz","four":"2020-12-23T00:00:00Z","five":"2020-12-23T13:45:51","__index_level_0__":"c"}]
+      {"one":-1.0,"two":"foo","three":true,"four":"2022-12-23T00:00:00Z","five":"2022-12-23T11:43:49","__index_level_0__":"a"}
+      {"two":"bar","three":false,"four":"2021-12-23T00:00:00Z","five":"2021-12-23T12:44:50","__index_level_0__":"b"}
+      {"one":2.5,"two":"baz","four":"2020-12-23T00:00:00Z","five":"2020-12-23T13:45:51","__index_level_0__":"c"}
       ```
 
   Scenario: Parquet to JSON (with `--json-pretty`)

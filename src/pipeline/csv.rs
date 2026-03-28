@@ -6,13 +6,19 @@ use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::DataFrame;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::expect_file_type;
+use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::apply_offset_limit;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteResult;
@@ -29,24 +35,22 @@ impl Step for DataframeCsvReader {
     type Output = DataFrameSource;
 
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let ctx = SessionContext::new();
-        let has_header = self.has_header.unwrap_or(true);
-        let df = ctx
-            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
-            .await?;
-        Ok(DataFrameSource::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Csv, self.has_header).await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
     }
 }
 
 #[async_trait(?Send)]
 impl Producer<DataFrame> for DataframeCsvReader {
     async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let ctx = SessionContext::new();
-        let has_header = self.has_header.unwrap_or(true);
-        let df = ctx
-            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
-            .await?;
-        Ok(Box::new(df))
+        let result = read_to_dataframe(&self.path, FileType::Csv, self.has_header).await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
     }
 }
 
@@ -70,43 +74,34 @@ impl Step for DataframeCsvWriter {
 
 /// Pipeline step that reads a CSV file and produces a record batch reader.
 /// Uses DataFusion for schema inference and type detection.
+///
+/// [`ReadArgs::file_type`] must be [`FileType::Csv`]. Applies [`ReadArgs::offset`] and
+/// [`ReadArgs::limit`] with the same semantics as other record-batch readers (see [`ReadArgs`](crate::pipeline::read::ReadArgs)).
 pub struct ReadCsvStepRecordBatch {
-    pub path: String,
-    pub has_header: Option<bool>,
-    /// Maximum number of rows to read. None means read all.
-    pub limit: Option<usize>,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
 impl Producer<dyn RecordBatchReader + 'static> for ReadCsvStepRecordBatch {
     async fn get(&mut self) -> Result<Box<dyn RecordBatchReader + 'static>> {
-        let has_header = self.has_header.unwrap_or(true);
+        expect_file_type(&self.args, FileType::Csv)?;
+        let has_header = self.args.csv_has_header.unwrap_or(true);
         let ctx = SessionContext::new();
         let df = ctx
-            .read_csv(&self.path, CsvReadOptions::new().has_header(has_header))
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+            .read_csv(
+                &self.args.path,
+                CsvReadOptions::new().has_header(has_header),
+            )
+            .await?;
 
-        let mut batches = df
-            .collect()
-            .await
-            .map_err(|e| Error::GenericError(e.to_string()))?;
+        let batches = df.collect().await?;
 
-        if let Some(limit) = self.limit {
-            let mut result = Vec::new();
-            let mut remaining = limit;
-            for batch in batches {
-                if remaining == 0 {
-                    break;
-                }
-                let rows = batch.num_rows().min(remaining);
-                result.push(batch.slice(0, rows));
-                remaining -= rows;
-            }
-            batches = result;
-        }
-
-        Ok(Box::new(VecRecordBatchReader::new(batches)))
+        let reader = Box::new(VecRecordBatchReader::new(batches));
+        Ok(apply_offset_limit(
+            reader,
+            self.args.offset.unwrap_or(0),
+            self.args.limit,
+        ))
     }
 }
 
@@ -166,7 +161,7 @@ mod tests {
     use crate::FileType;
     use crate::pipeline::Producer;
     use crate::pipeline::parquet::read_parquet;
-    use crate::pipeline::read::LegacyReadArgs;
+    use crate::pipeline::read::ReadArgs;
 
     struct TestRecordBatchReader {
         reader: Option<Box<dyn RecordBatchReader>>,
@@ -182,12 +177,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_csv_writer() {
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
 
@@ -212,5 +202,18 @@ mod tests {
         let result = writer.execute(()).await;
         assert!(result.is_ok());
         assert!(output_path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_csv_record_batch_offset_and_limit() {
+        let mut args = ReadArgs::new("fixtures/table.csv", FileType::Csv);
+        args.offset = Some(1);
+        args.limit = Some(1);
+        let mut step = ReadCsvStepRecordBatch { args };
+        let mut reader = step.get().await.expect("read csv batches");
+        let total: usize = std::iter::from_fn(|| reader.next())
+            .map(|b| b.expect("batch").num_rows())
+            .sum();
+        assert_eq!(total, 1, "Expected one row after offset 1 and limit 1");
     }
 }

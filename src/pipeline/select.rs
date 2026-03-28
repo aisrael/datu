@@ -26,25 +26,17 @@ pub async fn read_parquet_select(
     let ctx = SessionContext::new();
     let mut df = ctx
         .read_parquet(path, ParquetReadOptions::default())
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        .await?;
     if !spec.is_empty() {
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df
-            .select_columns(&col_refs)
-            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        df = df.select_columns(&col_refs)?;
     }
     if let Some(n) = limit {
-        df = df
-            .limit(0, Some(n))
-            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        df = df.limit(0, Some(n))?;
     }
-    let batches = df
-        .collect()
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let batches = df.collect().await?;
     Ok(Box::new(VecRecordBatchReaderSource::new(batches)))
 }
 
@@ -55,27 +47,17 @@ pub async fn read_avro_select(
     limit: Option<usize>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let ctx = SessionContext::new();
-    let mut df = ctx
-        .read_avro(path, AvroReadOptions::default())
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let mut df = ctx.read_avro(path, AvroReadOptions::default()).await?;
     if !spec.is_empty() {
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df
-            .select_columns(&col_refs)
-            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        df = df.select_columns(&col_refs)?;
     }
     if let Some(n) = limit {
-        df = df
-            .limit(0, Some(n))
-            .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+        df = df.limit(0, Some(n))?;
     }
-    let batches = df
-        .collect()
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let batches = df.collect().await?;
     Ok(Box::new(VecRecordBatchReaderSource::new(batches)))
 }
 
@@ -92,15 +74,11 @@ pub fn select_columns_to_batches(
     let column_names = resolve_column_specs(schema.as_ref(), specs)?;
     let indices: Vec<usize> = column_names
         .iter()
-        .map(|col| {
-            schema
-                .index_of(col)
-                .map_err(|e| crate::Error::GenericError(format!("Column '{col}' not found: {e}")))
-        })
+        .map(|col| Ok(schema.index_of(col)?))
         .collect::<crate::Result<Vec<_>>>()?;
     batches
         .into_iter()
-        .map(|batch| batch.project(&indices).map_err(crate::Error::from))
+        .map(|batch| Ok(batch.project(&indices)?))
         .collect()
 }
 
@@ -113,22 +91,16 @@ pub async fn select_columns_from_batches(
         return Ok(Box::new(VecRecordBatchReaderSource::new(batches)));
     }
     let ctx = SessionContext::new();
-    let df = ctx
-        .read_batches(batches)
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let df = ctx.read_batches(batches)?;
     let df = if spec.is_empty() {
         df
     } else {
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df.select_columns(&col_refs)
-            .map_err(|e| crate::Error::GenericError(e.to_string()))?
+        df.select_columns(&col_refs)?
     };
-    let result_batches = df
-        .collect()
-        .await
-        .map_err(|e| crate::Error::GenericError(e.to_string()))?;
+    let result_batches = df.collect().await?;
     Ok(Box::new(VecRecordBatchReaderSource::new(result_batches)))
 }
 

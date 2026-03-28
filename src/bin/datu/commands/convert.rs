@@ -5,6 +5,7 @@ use datu::FileType;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
+use eyre::Result;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 
@@ -58,54 +59,9 @@ pub struct ConvertArgs {
     pub input_headers: Option<bool>,
 }
 
-/// Returns the total number of rows from file metadata, if available.
-fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
-    datu::get_total_rows_result(path, file_type)
-        .ok()
-        .map(|n| n as u64)
-}
-
 /// Converts between file formats; reads from input and writes to output, optionally selecting columns.
 pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
-    let input_file_type = resolve_file_type(args.input, &args.input_path)?;
-    let output_file_type = resolve_file_type(args.output, &args.output_path)?;
-
-    let use_streaming_write = input_file_type.supports_datafusion_file_read()
-        && (output_file_type == FileType::Parquet || output_file_type == FileType::Csv);
-
-    let total_rows = if !use_streaming_write || input_file_type == FileType::Parquet {
-        get_total_rows(&args.input_path, input_file_type)
-    } else {
-        None
-    };
-
-    let progress = match total_rows {
-        Some(total) => {
-            let pb = ProgressBar::new(total);
-            pb.set_style(
-                ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos}/{len} rows ({eta})")
-                    .expect("valid template")
-                    .progress_chars("=>-"),
-            );
-            pb.set_message(format!(
-                "Converting {} to {}",
-                args.input_path, args.output_path
-            ));
-            pb
-        }
-        None => {
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::with_template("{spinner:.cyan} {msg}").expect("valid template"),
-            );
-            pb.set_message(format!(
-                "Converting {} to {}...",
-                args.input_path, args.output_path
-            ));
-            pb.enable_steady_tick(Duration::from_millis(100));
-            pb
-        }
-    };
+    let progress = create_progress_bar(&args)?;
 
     let select_spec = SelectSpec::from_cli_args(&args.select);
 
@@ -148,6 +104,56 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
             Err(e.into())
         }
     }
+}
+
+/// Returns the total number of rows from file metadata, if available.
+fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
+    datu::get_total_rows_result(path, file_type)
+        .ok()
+        .map(|n| n as u64)
+}
+
+/// Creates a progress bar for the convert command.
+fn create_progress_bar(args: &ConvertArgs) -> Result<ProgressBar> {
+    let input_file_type = resolve_file_type(args.input, &args.input_path)?;
+    let output_file_type = resolve_file_type(args.output, &args.output_path)?;
+
+    let use_streaming_write = input_file_type.supports_datafusion_file_read()
+        && (output_file_type == FileType::Parquet || output_file_type == FileType::Csv);
+
+    let total_rows = if !use_streaming_write || input_file_type == FileType::Parquet {
+        get_total_rows(&args.input_path, input_file_type)
+    } else {
+        None
+    };
+
+    Ok(match total_rows {
+        Some(total) => {
+            let pb = ProgressBar::new(total);
+            pb.set_style(
+                ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos}/{len} rows ({eta})")
+                    .expect("valid template")
+                    .progress_chars("=>-"),
+            );
+            pb.set_message(format!(
+                "Converting {} to {}",
+                args.input_path, args.output_path
+            ));
+            pb
+        }
+        None => {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::with_template("{spinner:.cyan} {msg}").expect("valid template"),
+            );
+            pb.set_message(format!(
+                "Converting {} to {}...",
+                args.input_path, args.output_path
+            ));
+            pb.enable_steady_tick(Duration::from_millis(100));
+            pb
+        }
+    })
 }
 
 #[cfg(test)]

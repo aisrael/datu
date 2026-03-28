@@ -11,10 +11,10 @@ pub mod utils;
 
 /// Primary error type for datu operations.
 pub use errors::Error;
-/// Supported input/output formats and extension-based detection.
-pub use file_type::FileType;
 /// Human-readable list of formats accepted for `head`, `tail`, and `sample` CLI commands.
 pub use file_type::DISPLAY_PIPELINE_INPUTS_FOR_CLI;
+/// Supported input/output formats and extension-based detection.
+pub use file_type::FileType;
 /// Resolves an explicit file type or infers it from a path.
 pub use file_type::resolve_file_type;
 /// Total row count from file metadata (Parquet and ORC only).

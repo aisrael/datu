@@ -204,57 +204,18 @@ impl LegacyDataFrameReader {
     }
 
     async fn read(&self) -> crate::Result<DataFrameSource> {
-        let mut df = match self.input_file_type {
-            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
-                let result =
-                    read_to_dataframe(&self.input_path, self.input_file_type, self.csv_has_header)
-                        .await
-                        .map_err(|e| Error::GenericError(e.to_string()))?;
-                let ReadResult::DataFrame(mut source) = result else {
-                    unreachable!()
-                };
-                source
-                    .df
-                    .take()
-                    .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?
-            }
-            FileType::Orc => {
-                let ctx = SessionContext::new();
-                let batches = read_orc_to_batches(&self.input_path)?;
-                if batches.is_empty() {
-                    return Err(Error::GenericError(
-                        "ORC file is empty or could not be read".to_string(),
-                    ));
-                }
-                ctx.read_batches(batches)
-                    .map_err(|e| Error::GenericError(e.to_string()))?
-            }
-            _ => {
-                return Err(Error::GenericError(
-                    "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types"
-                        .to_string(),
-                ));
-            }
-        };
-
-        if let Some(spec) = &self.select
-            && !spec.is_empty()
-        {
-            let schema = df.schema();
-            let resolved = spec.resolve_names(schema.as_ref())?;
-            let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-            df = df
-                .select_columns(&col_refs)
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-
-        if let Some(n) = self.limit {
-            df = df
-                .limit(0, Some(n))
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-        }
-
-        Ok(DataFrameSource::new(df))
+        let df =
+            read_dataframe_from_path(&self.input_path, self.input_file_type, self.csv_has_header)
+                .await?;
+        finalize_dataframe_source(
+            df,
+            &self.input_path,
+            self.input_file_type,
+            self.select.as_ref(),
+            self.limit,
+            None,
+        )
+        .await
     }
 }
 
@@ -272,6 +233,42 @@ impl Step for LegacyDataFrameReader {
 /// Limit is applied via DataFusion after reading.
 fn read_orc_to_batches(path: &str) -> crate::Result<Vec<arrow::record_batch::RecordBatch>> {
     orc::read_orc_all_batches(path)
+}
+
+/// Reads a [`DataFrame`] from disk (DataFusion-native formats or ORC via in-memory batches).
+pub(crate) async fn read_dataframe_from_path(
+    input_path: &str,
+    input_file_type: FileType,
+    csv_has_header: Option<bool>,
+) -> crate::Result<DataFrame> {
+    match input_file_type {
+        FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
+            let result = read_to_dataframe(input_path, input_file_type, csv_has_header)
+                .await
+                .map_err(|e| Error::GenericError(e.to_string()))?;
+            let ReadResult::DataFrame(mut source) = result else {
+                unreachable!()
+            };
+            source
+                .df
+                .take()
+                .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))
+        }
+        FileType::Orc => {
+            let ctx = SessionContext::new();
+            let batches = read_orc_to_batches(input_path)?;
+            if batches.is_empty() {
+                return Err(Error::GenericError(
+                    "ORC file is empty or could not be read".to_string(),
+                ));
+            }
+            ctx.read_batches(batches)
+                .map_err(|e| Error::GenericError(e.to_string()))
+        }
+        _ => Err(Error::GenericError(
+            "Only Parquet, Avro, CSV, JSON, and ORC are supported as input file types".to_string(),
+        )),
+    }
 }
 
 /// A `RecordBatchReader` that wraps a `DataFrameSource`, lazily streaming batches from the
@@ -433,6 +430,36 @@ pub async fn dataframe_apply_sample(
             "DataFrame sample is not supported for input type: {other}"
         ))),
     }
+}
+
+/// Applies optional column selection, SQL-style row limit, and display slice to a loaded [`DataFrame`].
+///
+/// Used by [`LegacyDataFrameReader`] and [`dataframe_pipeline_prepare_source`] so read → project →
+/// cap/slice stays in one place.
+async fn finalize_dataframe_source(
+    mut df: DataFrame,
+    input_path: &str,
+    input_file_type: FileType,
+    select: Option<&SelectSpec>,
+    limit: Option<usize>,
+    slice: Option<DisplaySlice>,
+) -> crate::Result<DataFrameSource> {
+    df = dataframe_apply_select(df, select)?;
+    if let Some(n) = limit {
+        df = dataframe_apply_head(df, n)?;
+    }
+    if let Some(slice) = slice {
+        df = match slice {
+            DisplaySlice::Head(n) => dataframe_apply_head(df, n)?,
+            DisplaySlice::Tail(tail_n) => {
+                dataframe_apply_tail(df, input_path, input_file_type, tail_n).await?
+            }
+            DisplaySlice::Sample(n) => {
+                dataframe_apply_sample(df, input_path, input_file_type, n).await?
+            }
+        };
+    }
+    Ok(DataFrameSource::new(df))
 }
 
 /// Optional column projection on a [`DataFrameSource`].
@@ -671,15 +698,9 @@ pub(crate) async fn dataframe_pipeline_prepare_source(
     slice: Option<DisplaySlice>,
     csv_has_header: Option<bool>,
 ) -> crate::Result<DataFrameSource> {
-    let mut source = match input_file_type {
+    let df = match input_file_type {
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
-            let result = read_to_dataframe(&input_path, input_file_type, csv_has_header)
-                .await
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            let ReadResult::DataFrame(s) = result else {
-                unreachable!()
-            };
-            s
+            read_dataframe_from_path(&input_path, input_file_type, csv_has_header).await?
         }
         other => {
             return Err(Error::PipelineExecutionError(
@@ -687,34 +708,15 @@ pub(crate) async fn dataframe_pipeline_prepare_source(
             ));
         }
     };
-
-    source = DataframeSelect { select }.execute(source).await?;
-
-    if let Some(slice) = slice {
-        source = match slice {
-            DisplaySlice::Head(n) => DataframeHead { n }.execute(source).await?,
-            DisplaySlice::Tail(tail_n) => {
-                DataframeTail {
-                    input_path: input_path.clone(),
-                    input_file_type,
-                    n: tail_n,
-                }
-                .execute(source)
-                .await?
-            }
-            DisplaySlice::Sample(n) => {
-                DataframeSample {
-                    input_path: input_path.clone(),
-                    input_file_type,
-                    n,
-                }
-                .execute(source)
-                .await?
-            }
-        };
-    }
-
-    Ok(source)
+    finalize_dataframe_source(
+        df,
+        &input_path,
+        input_file_type,
+        select.as_ref(),
+        None,
+        slice,
+    )
+    .await
 }
 
 #[cfg(test)]

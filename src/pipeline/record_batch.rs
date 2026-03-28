@@ -15,15 +15,10 @@ use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReaderSource;
-use crate::pipeline::avro::RecordBatchAvroWriter;
 use crate::pipeline::block_on_pipeline_future;
 use crate::pipeline::count_rows;
-use crate::pipeline::csv::RecordBatchCsvWriter;
 use crate::pipeline::display::apply_select_and_display;
-use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc::OrcRecordBatchReader;
-use crate::pipeline::orc::RecordBatchOrcWriter;
-use crate::pipeline::parquet::RecordBatchParquetWriter;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::sample_from_reader;
 use crate::pipeline::schema::get_schema_fields;
@@ -31,9 +26,7 @@ use crate::pipeline::schema::print_schema_fields;
 use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::select::resolve_column_specs;
 use crate::pipeline::tail_batches;
-use crate::pipeline::write as write_dispatch;
-use crate::pipeline::write::WriteArgs;
-use crate::pipeline::write::WriteJsonArgs;
+use crate::pipeline::write::write_record_batches_from_reader;
 
 /// A Source that wraps a single RecordBatchReader and yields it on get().
 struct RecordBatchReaderHolder {
@@ -436,58 +429,14 @@ impl RecordBatchPipeline {
                         orc_source_after_select_and_slice(input_path.clone(), &select, slice)
                             .await?;
 
-                    let write_args = WriteArgs {
-                        path: output_path.clone(),
-                        file_type: output_file_type,
-                        sparse: Some(sparse),
-                        pretty: Some(json_pretty),
-                    };
-
-                    match output_file_type {
-                        FileType::Parquet => {
-                            RecordBatchParquetWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Csv => {
-                            RecordBatchCsvWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Json => {
-                            let args = WriteJsonArgs {
-                                path: output_path,
-                                sparse,
-                                pretty: json_pretty,
-                            };
-                            let path = args.path.as_str();
-                            let mut reader = source.get().await?;
-                            let writer = RecordBatchJsonWriter::from_write_json_args(&args);
-                            writer.write_to_path(&mut *reader, path)?;
-                        }
-                        FileType::Avro => {
-                            RecordBatchAvroWriter { args: write_args }
-                                .execute(source)
-                                .await?;
-                        }
-                        FileType::Orc => {
-                            RecordBatchOrcWriter {
-                                args: write_args,
-                                source,
-                            }
-                            .execute(())
-                            .await?;
-                        }
-                        FileType::Xlsx | FileType::Yaml => {
-                            write_dispatch::write_record_batches(source, write_args).await?;
-                        }
-                    }
+                    let mut reader = source.get().await?;
+                    write_record_batches_from_reader(
+                        &mut *reader,
+                        output_path.as_str(),
+                        output_file_type,
+                        sparse,
+                        json_pretty,
+                    )?;
                     Ok::<(), Error>(())
                 }
                 RecordBatchSink::Display {

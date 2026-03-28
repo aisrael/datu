@@ -15,11 +15,11 @@ use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
-use crate::pipeline::dataframe::write_record_batches_from_reader;
 use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteJsonArgs;
+use crate::pipeline::write::write_record_batches_from_reader;
 
 /// Writes record batches as a single JSON array (compact or pretty) using Arrow's JSON writer.
 pub struct RecordBatchJsonWriter {
@@ -125,7 +125,7 @@ impl Step for DataframeJsonWriter {
     }
 }
 
-/// Writes a [`DataFrame`] to JSON using the display layer ([`write_record_batches_from_reader`])
+/// Writes a [`DataFrame`] to JSON using the display layer ([`crate::pipeline::write::write_record_batches_from_reader`])
 /// so `--json-pretty` and non-default sparse emission are supported.
 pub struct DataframeJsonPrettyWriter {
     pub(crate) args: WriteArgs,

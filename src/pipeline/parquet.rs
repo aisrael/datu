@@ -192,22 +192,17 @@ impl Step for RecordBatchParquetWriter {
 
     async fn execute(mut self, _input: Self::Input) -> Result<Self::Output> {
         let mut reader = self.source.get().await?;
-        write_record_batches(&self.args.path, &mut *reader)?;
+        write_record_batches_with_sink(&self.args.path, &mut *reader, ParquetSink::new)?;
         Ok(WriteResult)
     }
 }
 
-/// Write record batches from a reader to a Parquet file.
-pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
-    write_record_batches_with_sink(path, reader, ParquetSink::new)
-}
-
-struct ParquetSink {
+pub(crate) struct ParquetSink {
     writer: ArrowWriter<std::fs::File>,
 }
 
 impl ParquetSink {
-    fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+    pub(crate) fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         let writer = ArrowWriter::try_new(file, schema, None).map_err(Error::ParquetError)?;
         Ok(Self { writer })

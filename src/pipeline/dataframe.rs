@@ -23,11 +23,9 @@ use crate::pipeline::avro;
 use crate::pipeline::block_on_pipeline_future;
 use crate::pipeline::count_rows;
 use crate::pipeline::csv::DataframeCsvWriter;
-use crate::pipeline::display;
 use crate::pipeline::display::DisplayWriterStep;
 use crate::pipeline::json::DataframeJsonPrettyWriter;
 use crate::pipeline::json::DataframeJsonWriter;
-use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
 use crate::pipeline::read::ReadResult;
@@ -39,7 +37,7 @@ use crate::pipeline::schema::print_schema_fields;
 use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write::WriteArgs;
-use crate::pipeline::xlsx;
+pub use crate::pipeline::write::write_record_batches_from_reader;
 
 /// A source that yields a DataFusion DataFrame, implementing `Source<DataFrame>`.
 pub struct DataFrameSource {
@@ -95,37 +93,6 @@ impl DataFrameWriter {
             json_pretty,
         }
     }
-}
-
-/// Writes record batches from a reader to an output file. Used by DataFrameWriter and the convert
-/// command to eliminate duplicate format dispatch.
-pub fn write_record_batches_from_reader(
-    reader: &mut dyn RecordBatchReader,
-    output_path: &str,
-    output_file_type: FileType,
-    sparse: bool,
-    json_pretty: bool,
-) -> crate::Result<()> {
-    if output_file_type != FileType::Json && json_pretty {
-        eprintln!("Warning: --json-pretty is only supported when converting to JSON");
-    }
-
-    match output_file_type {
-        FileType::Parquet => parquet::write_record_batches(output_path, reader)?,
-        FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
-        FileType::Json => {
-            RecordBatchJsonWriter::new(sparse, json_pretty).write_to_path(reader, output_path)?;
-        }
-        FileType::Yaml => {
-            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-            display::write_record_batches_as_yaml(reader, file, sparse)?;
-        }
-        FileType::Avro => avro::write_record_batches(output_path, reader)?,
-        FileType::Orc => orc::write_record_batches(output_path, reader)?,
-        FileType::Xlsx => xlsx::write_record_batch_to_xlsx(output_path, reader)?,
-    }
-
-    Ok(())
 }
 
 /// Writes a [`DataFrame`] to Parquet, CSV, or JSON by delegating to [`DataframeParquetWriter`],

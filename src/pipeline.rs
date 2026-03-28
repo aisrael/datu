@@ -109,7 +109,7 @@ fn ensure_at_most_one_of_head_tail_sample(
         usize::from(head.is_some()) + usize::from(tail.is_some()) + usize::from(sample.is_some());
     if slice_count > 1 {
         return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::UnsupportedStage(
+            PipelinePlanningError::ConflictingOptions(
                 "only one of head(n), tail(n), or sample(n) may be set".to_string(),
             ),
         ));
@@ -131,7 +131,7 @@ fn ensure_display_stage_exclusivity(
     let meta_stages = usize::from(schema) + usize::from(display_row_count);
     if meta_stages > 1 {
         return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::UnsupportedStage(
+            PipelinePlanningError::ConflictingOptions(
                 "only one of schema(), head(n), tail(n), sample(n), or row count may be set"
                     .to_string(),
             ),
@@ -139,7 +139,7 @@ fn ensure_display_stage_exclusivity(
     }
     if has_slice && meta_stages > 0 {
         return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::UnsupportedStage(
+            PipelinePlanningError::ConflictingOptions(
                 "schema and row count cannot be combined with head(n), tail(n), or sample(n)"
                     .to_string(),
             ),
@@ -506,7 +506,7 @@ impl PipelineBuilder {
 
         if self.write.is_some() && (self.schema || self.display_row_count) {
             return Err(Error::PipelinePlanningError(
-                PipelinePlanningError::UnsupportedStage(
+                PipelinePlanningError::ConflictingOptions(
                     "schema and row count are not supported with write(path)".to_string(),
                 ),
             ));
@@ -1196,7 +1196,7 @@ mod tests {
         };
         assert!(matches!(
             err,
-            Error::PipelinePlanningError(PipelinePlanningError::UnsupportedStage(ref s))
+            Error::PipelinePlanningError(PipelinePlanningError::ConflictingOptions(ref s))
                 if s == "only one of head(n), tail(n), or sample(n) may be set"
         ));
     }

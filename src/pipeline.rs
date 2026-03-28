@@ -68,7 +68,7 @@ use crate::pipeline::avro::RecordBatchAvroReader;
 use crate::pipeline::csv::ReadCsvStepRecordBatch;
 use crate::pipeline::dataframe::LegacyDataFrameReader;
 use crate::pipeline::parquet::RecordBatchParquetReader;
-use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::read::ReadArgs;
 use crate::resolve_file_type;
 
 fn slice_from_head_tail_sample(
@@ -615,47 +615,17 @@ impl Producer<dyn RecordBatchReader + 'static> for VecRecordBatchReaderSource {
     }
 }
 
-/// Builds a format-specific `RecordBatchReaderSource` for the given file type.
-pub fn build_reader(
-    path: &str,
-    file_type: FileType,
-    limit: Option<usize>,
-    offset: Option<usize>,
-    csv_has_header: Option<bool>,
-) -> Result<RecordBatchReaderSource> {
-    let reader: RecordBatchReaderSource = match file_type {
-        FileType::Parquet => Box::new(RecordBatchParquetReader {
-            args: LegacyReadArgs {
-                path: path.to_string(),
-                limit,
-                offset,
-                csv_has_header: None,
-            },
-        }),
-        FileType::Avro => Box::new(RecordBatchAvroReader {
-            args: LegacyReadArgs {
-                path: path.to_string(),
-                limit,
-                offset,
-                csv_has_header: None,
-            },
-        }),
-        FileType::Csv => Box::new(ReadCsvStepRecordBatch {
-            path: path.to_string(),
-            has_header: csv_has_header,
-            limit,
-        }),
-        FileType::Orc => Box::new(OrcRecordBatchReader {
-            args: LegacyReadArgs {
-                path: path.to_string(),
-                limit,
-                offset,
-                csv_has_header: None,
-            },
-        }),
+/// Builds a format-specific `RecordBatchReaderSource` for [`ReadArgs::file_type`].
+pub fn build_reader(args: &ReadArgs) -> Result<RecordBatchReaderSource> {
+    let reader: RecordBatchReaderSource = match args.file_type {
+        FileType::Parquet => Box::new(RecordBatchParquetReader { args: args.clone() }),
+        FileType::Avro => Box::new(RecordBatchAvroReader { args: args.clone() }),
+        FileType::Csv => Box::new(ReadCsvStepRecordBatch { args: args.clone() }),
+        FileType::Orc => Box::new(OrcRecordBatchReader { args: args.clone() }),
         _ => {
             return Err(Error::GenericError(format!(
-                "Unsupported file type for reading: {file_type}"
+                "Unsupported file type for reading: {}",
+                args.file_type
             )));
         }
     };
@@ -672,7 +642,9 @@ pub async fn count_rows(
     if matches!(file_type, FileType::Parquet | FileType::Orc) {
         return get_total_rows_result(path, file_type);
     }
-    let mut reader_step = build_reader(path, file_type, None, None, csv_has_header)?;
+    let mut read_args = ReadArgs::new(path, file_type);
+    read_args.csv_has_header = csv_has_header;
+    let mut reader_step = build_reader(&read_args)?;
     let reader = reader_step.get().await?;
     let mut total = 0usize;
     for batch in reader {
@@ -1204,11 +1176,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_parquet_write_avro_steps() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let read_step = DataframeParquetReader { args: read_args };
         let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
         let write_args = WriteArgs {

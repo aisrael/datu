@@ -22,7 +22,7 @@ use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc::OrcRecordBatchReader;
 use crate::pipeline::orc::RecordBatchOrcWriter;
 use crate::pipeline::parquet::RecordBatchParquetWriter;
-use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::read::ReadArgs;
 use crate::pipeline::sample_from_reader;
 use crate::pipeline::select::resolve_column_specs;
 use crate::pipeline::tail_batches;
@@ -275,12 +275,7 @@ impl RecordBatchPipeline {
         };
 
         let fut = async move {
-            let read_args = LegacyReadArgs {
-                path: input_path.clone(),
-                limit: None,
-                offset: None,
-                csv_has_header: None,
-            };
+            let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
             let mut source: RecordBatchReaderSource =
                 Box::new(OrcRecordBatchReader { args: read_args });
 
@@ -424,11 +419,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileType;
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::RecordBatchReaderSource;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::parquet::RecordBatchParquetReader;
-    use crate::pipeline::read::LegacyReadArgs;
+    use crate::pipeline::read::ReadArgs;
 
     #[test]
     fn test_parse_select_step_none() {
@@ -462,12 +458,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_select_columns() {
         // Use the parquet reader to inspect the file and verify column selection
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let parquet_step = RecordBatchParquetReader { args };
 
         let source: RecordBatchReaderSource = Box::new(parquet_step);

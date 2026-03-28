@@ -6,11 +6,13 @@ use orc_rust::arrow_writer::ArrowWriterBuilder;
 use orc_rust::row_selection::RowSelector;
 
 use crate::Error;
+use crate::FileType;
 use crate::Result;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
-use crate::pipeline::read::LegacyReadArgs;
+use crate::pipeline::read::ReadArgs;
+use crate::pipeline::read::expect_file_type;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
@@ -18,7 +20,7 @@ use crate::pipeline::write::WriteResult;
 
 /// Pipeline step that reads an ORC file and produces a record batch reader.
 pub struct OrcRecordBatchReader {
-    pub args: LegacyReadArgs,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
@@ -32,7 +34,8 @@ impl Producer<dyn RecordBatchReader + 'static> for OrcRecordBatchReader {
 ///
 /// When both offset and limit are specified, uses ORC row selection for efficient
 /// seeking—only the requested rows are decoded, avoiding full file scans.
-pub fn read_orc(args: &LegacyReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
+pub fn read_orc(args: &ReadArgs) -> Result<Box<dyn RecordBatchReader + 'static>> {
+    expect_file_type(args, FileType::Orc)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let builder = ArrowReaderBuilder::try_new(file).map_err(Error::OrcError)?;
 
@@ -48,12 +51,7 @@ pub fn read_orc(args: &LegacyReadArgs) -> Result<Box<dyn RecordBatchReader + 'st
 
 /// Read an entire ORC file into record batches (no row selection).
 pub(crate) fn read_orc_all_batches(path: &str) -> Result<Vec<RecordBatch>> {
-    let args = LegacyReadArgs {
-        path: path.to_string(),
-        limit: None,
-        offset: None,
-        csv_has_header: None,
-    };
+    let args = ReadArgs::new(path, FileType::Orc);
     let reader = read_orc(&args)?;
     let batches: Vec<RecordBatch> = reader.collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(batches)

@@ -19,9 +19,9 @@ use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::dataframe::write_dataframe_pipeline_output;
-use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::expect_file_type;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
@@ -81,7 +81,7 @@ impl Step for DataframeParquetWriter {
 /// Pipeline step that reads a Parquet file and produces a record batch reader.
 /// TODO: Deprecate this and use Dataframe
 pub struct RecordBatchParquetReader {
-    pub args: LegacyReadArgs,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
@@ -159,7 +159,8 @@ pub fn get_schema_fields_parquet(path: &str) -> eyre::Result<Vec<SchemaField>> {
 }
 
 /// Read a parquet file and return a RecordBatchReader.
-pub fn read_parquet(args: &LegacyReadArgs) -> Result<ParquetRecordBatchReader> {
+pub fn read_parquet(args: &ReadArgs) -> Result<ParquetRecordBatchReader> {
+    expect_file_type(args, FileType::Parquet)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
 
     let mut builder =
@@ -228,11 +229,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_parque_step_dataframe() {
-        let args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let mut step = DataframeParquetReader { args };
         let df = step.get().await.expect("Failed to read Parquet file");
         assert_eq!(
@@ -244,11 +241,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_and_write_parquet_steps() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let read_step = DataframeParquetReader { args: read_args };
 
         let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
@@ -285,12 +278,7 @@ mod tests {
 
     #[test]
     fn test_read_parquet() {
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
         let batch = reader
@@ -303,12 +291,8 @@ mod tests {
 
     #[test]
     fn test_read_parquet_with_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            limit: Some(1),
-            offset: None,
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.limit = Some(1);
         let mut reader =
             read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
         let batch = reader

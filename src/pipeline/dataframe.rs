@@ -1332,11 +1332,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataframe_steps_parquet_tail_to_csv() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let source = DataframeParquetReader { args: read_args }
             .execute(())
             .await
@@ -1370,11 +1366,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
-        let read_args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let source = DataframeParquetReader { args: read_args }
             .execute(())
             .await

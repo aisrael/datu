@@ -22,9 +22,9 @@ use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataframeToRecordBatchProducer;
-use crate::pipeline::read::LegacyReadArgs;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::read::ReadResult;
+use crate::pipeline::read::expect_file_type;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
@@ -160,7 +160,7 @@ impl Iterator for AvroCompatRecordBatchReader<'_> {
 
 /// Pipeline step that reads an Avro file and produces a record batch reader.
 pub struct RecordBatchAvroReader {
-    pub args: LegacyReadArgs,
+    pub args: ReadArgs,
 }
 
 #[async_trait(?Send)]
@@ -256,7 +256,8 @@ impl Iterator for LimitOffsetRecordBatchReader {
 }
 
 /// Read an Avro file and return a RecordBatchReader.
-pub fn read_avro(args: &LegacyReadArgs) -> Result<impl RecordBatchReader + 'static> {
+pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
+    expect_file_type(args, FileType::Avro)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
     let reader = BufReader::new(file);
     let arrow_reader = ReaderBuilder::new()
@@ -351,11 +352,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_avro_step_dataframe() {
-        let args = ReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            file_type: FileType::Avro,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let mut step = DataframeAvroReader { args };
         let df = step.get().await.expect("Failed to read Avro file");
         assert_eq!(
@@ -367,11 +364,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_and_write_avro_steps() {
-        let read_args = ReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            file_type: FileType::Avro,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let read_step = DataframeAvroReader { args: read_args };
 
         let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
@@ -439,12 +432,7 @@ mod tests {
 
     #[test]
     fn test_read_avro() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let mut reader = read_avro(&args).expect("read_avro failed");
         let schema = reader.schema();
         assert!(!schema.fields().is_empty(), "Schema should have columns");
@@ -458,12 +446,8 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: Some(1),
-            offset: None,
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.limit = Some(1);
         let mut reader = read_avro(&args).expect("read_avro failed");
         let batch = reader
             .next()
@@ -475,12 +459,8 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: None,
-            offset: Some(1),
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.offset = Some(1);
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
         for batch_result in reader {
@@ -493,12 +473,9 @@ mod tests {
 
     #[test]
     fn test_read_avro_with_offset_and_limit() {
-        let args = LegacyReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            limit: Some(5),
-            offset: Some(10),
-            csv_has_header: None,
-        };
+        let mut args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        args.limit = Some(5);
+        args.offset = Some(10);
         let reader = read_avro(&args).expect("read_avro failed");
         let mut total_rows = 0usize;
         for batch_result in reader {

@@ -161,8 +161,9 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
 #[cfg(test)]
 mod tests {
     use arrow::array::RecordBatchReader;
+    use datu::FileType;
     use datu::pipeline::avro;
-    use datu::pipeline::read::LegacyReadArgs;
+    use datu::pipeline::read::ReadArgs;
 
     use super::*;
 
@@ -467,12 +468,7 @@ mod tests {
         );
         assert!(output_path_buf.exists(), "Output file was not created");
 
-        let read_args = LegacyReadArgs {
-            path: output_path,
-            limit: None,
-            offset: None,
-            csv_has_header: None,
-        };
+        let read_args = ReadArgs::new(output_path, FileType::Avro);
         let reader = avro::read_avro(&read_args).expect("Failed to read output Avro");
         let field_names: Vec<String> = reader
             .schema()

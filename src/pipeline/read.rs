@@ -14,23 +14,44 @@ use crate::errors::PipelineExecutionError;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::dataframe::DataFrameSource;
 
-/// (Legacy) Arguments for reading a file (Avro, CSV, Parquet, ORC).
-/// TODO: Remove this once we have a new read API.
-#[derive(Default)]
-pub struct LegacyReadArgs {
-    pub path: String,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-    /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
-    pub csv_has_header: Option<bool>,
-}
-
-/// Arguments for reading a file (Avro, CSV, Parquet, ORC).
+/// Arguments for reading a file (all formats).
+///
+/// [`limit`](ReadArgs::limit) and [`offset`](ReadArgs::offset) are used by record-batch readers
+/// (`read_parquet`, `read_avro`, `read_orc`, CSV record-batch step, [`crate::pipeline::build_reader`]).
+/// They are **ignored** by [`read`] and [`read_to_dataframe`] until those entry points apply slicing.
+#[derive(Clone)]
 pub struct ReadArgs {
     pub path: String,
     pub file_type: FileType,
     /// When reading CSV: has_header for CsvReadOptions. None is treated as true.
     pub csv_has_header: Option<bool>,
+    /// Maximum rows for record-batch reads. None means read all.
+    pub limit: Option<usize>,
+    /// Rows to skip for record-batch reads (not applied to CSV record-batch reads; see module docs).
+    pub offset: Option<usize>,
+}
+
+impl ReadArgs {
+    /// Builds read arguments with no CSV override and no row slice.
+    pub fn new(path: impl Into<String>, file_type: FileType) -> Self {
+        Self {
+            path: path.into(),
+            file_type,
+            csv_has_header: None,
+            limit: None,
+            offset: None,
+        }
+    }
+}
+
+pub(crate) fn expect_file_type(args: &ReadArgs, expected: FileType) -> Result<()> {
+    if args.file_type != expected {
+        return Err(Error::GenericError(format!(
+            "read args file type mismatch: expected {expected}, got {}",
+            args.file_type
+        )));
+    }
+    Ok(())
 }
 
 /// Outcome of [`read`](read): a DataFusion source or an ORC reader builder.
@@ -50,6 +71,8 @@ impl std::fmt::Debug for ReadResult {
 }
 
 /// Read a file and return a [ReadResult].
+///
+/// Does not apply [`ReadArgs::limit`] or [`ReadArgs::offset`]; use record-batch APIs for slicing.
 pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
     match args.file_type {
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json => {
@@ -66,6 +89,8 @@ pub async fn read(args: &ReadArgs) -> Result<ReadResult> {
 ///
 /// Supported: [`FileType::Parquet`], [`FileType::Avro`], [`FileType::Csv`], [`FileType::Json`].
 /// For CSV, `csv_has_header` defaults to `true` when `None`.
+///
+/// Does not apply [`ReadArgs::limit`] or [`ReadArgs::offset`].
 pub async fn read_to_dataframe(
     input_path: &str,
     file_type: FileType,
@@ -119,11 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_parquet() {
-        let args = ReadArgs {
-            path: "fixtures/table.parquet".to_string(),
-            file_type: FileType::Parquet,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
         let result = read(&args).await;
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -136,11 +157,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_avro() {
-        let args = ReadArgs {
-            path: "fixtures/userdata5.avro".to_string(),
-            file_type: FileType::Avro,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
         let result = read(&args).await;
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -153,11 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_csv() {
-        let args = ReadArgs {
-            path: "fixtures/table.csv".to_string(),
-            file_type: FileType::Csv,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.csv", FileType::Csv);
         let result = read(&args).await;
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -170,11 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_json() {
-        let args = ReadArgs {
-            path: "fixtures/table.json".to_string(),
-            file_type: FileType::Json,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/table.json", FileType::Json);
         let result = read(&args).await;
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -187,11 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_orc() {
-        let args = ReadArgs {
-            path: "fixtures/userdata.orc".to_string(),
-            file_type: FileType::Orc,
-            csv_has_header: None,
-        };
+        let args = ReadArgs::new("fixtures/userdata.orc", FileType::Orc);
         let result = read(&args).await;
         println!("result: {:?}", result);
         assert!(result.is_ok());

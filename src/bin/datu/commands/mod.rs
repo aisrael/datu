@@ -1,15 +1,12 @@
-//! CLI command implementations (convert, count, head, sample, schema, tail).
+//! CLI command implementations (convert, count, head/tail/sample, schema).
 
 pub mod convert;
 mod count;
-mod head;
-mod sample;
+mod heads_or_tails;
 mod schema;
-mod tail;
 
 pub use convert::convert;
 pub use count::count;
-pub use head::head;
-pub use sample::sample;
+pub use heads_or_tails::HeadsOrTailsCmd;
+pub use heads_or_tails::heads_or_tails;
 pub use schema::schema;
-pub use tail::tail;

@@ -5,12 +5,11 @@ use clap::Subcommand;
 
 mod commands;
 
+use commands::HeadsOrTailsCmd;
 use commands::convert;
 use commands::count;
-use commands::head;
-use commands::sample;
+use commands::heads_or_tails;
 use commands::schema;
-use commands::tail;
 
 use crate::commands::convert::ConvertArgs;
 
@@ -50,10 +49,10 @@ async fn main() -> eyre::Result<()> {
         None => datu::cli::repl::run().await,
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
-        Some(Command::Head(args)) => head(args).await,
-        Some(Command::Sample(args)) => sample(args).await,
+        Some(Command::Head(args)) => heads_or_tails(args, HeadsOrTailsCmd::Head).await,
+        Some(Command::Sample(args)) => heads_or_tails(args, HeadsOrTailsCmd::Sample).await,
         Some(Command::Schema(args)) => schema(args).await,
-        Some(Command::Tail(args)) => tail(args).await,
+        Some(Command::Tail(args)) => heads_or_tails(args, HeadsOrTailsCmd::Tail).await,
         Some(Command::Version) => {
             println!("datu v{}", datu::VERSION);
             Ok(())

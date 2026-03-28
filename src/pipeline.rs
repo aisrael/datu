@@ -82,6 +82,23 @@ fn slice_from_head_tail_sample(
         .or_else(|| head.map(DisplaySlice::Head))
 }
 
+fn ensure_at_most_one_of_head_tail_sample(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+) -> Result<()> {
+    let slice_count =
+        usize::from(head.is_some()) + usize::from(tail.is_some()) + usize::from(sample.is_some());
+    if slice_count > 1 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::UnsupportedStage(
+                "only one of head(n), tail(n), or sample(n) may be set".to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Fluent builder for a [`Pipeline`] (file conversion or head/tail/sample display).
 pub struct PipelineBuilder {
     read: Option<String>,
@@ -234,6 +251,137 @@ impl PipelineBuilder {
         self
     }
 
+    /// Builds a write pipeline from the builder's configuration.
+    fn build_write_pipeline(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        select: Option<SelectSpec>,
+    ) -> Result<Pipeline> {
+        ensure_at_most_one_of_head_tail_sample(self.head, self.tail, self.sample)?;
+        let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+        let output_file_type = resolve_file_type(self.output_type_override, output_path)?;
+
+        let is_input_native = matches!(
+            input_file_type,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
+        );
+        let is_output_supported = matches!(
+            output_file_type,
+            FileType::Parquet
+                | FileType::Csv
+                | FileType::Json
+                | FileType::Orc
+                | FileType::Avro
+                | FileType::Xlsx
+                | FileType::Yaml
+        );
+
+        if !is_input_native {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+        if !is_output_supported {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedOutputFileType(output_file_type.to_string()),
+            ));
+        }
+
+        let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
+        if input_file_type == FileType::Orc {
+            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+                input_path: input_path.to_string(),
+                input_file_type,
+                select,
+                slice,
+                sparse: self.sparse,
+                sink: RecordBatchSink::Write {
+                    output_path: output_path.to_string(),
+                    output_file_type,
+                    json_pretty: self.json_pretty,
+                    progress: self.progress.clone(),
+                },
+            })))
+        } else {
+            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+                input_path: input_path.to_string(),
+                input_file_type,
+                select,
+                slice,
+                csv_has_header: self.csv_has_header,
+                sparse: self.sparse,
+                sink: DataFrameSink::Write {
+                    output_path: output_path.to_string(),
+                    output_file_type,
+                    json_pretty: self.json_pretty,
+                    progress: self.progress.clone(),
+                },
+            })))
+        }
+    }
+
+    /// Builds a display pipeline from the builder's configuration.
+    fn build_display_pipeline(
+        &self,
+        input_path: &str,
+        select: Option<SelectSpec>,
+    ) -> Result<Pipeline> {
+        ensure_at_most_one_of_head_tail_sample(self.head, self.tail, self.sample)?;
+        let slice =
+            slice_from_head_tail_sample(self.head, self.tail, self.sample).ok_or_else(|| {
+                Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
+                    "head(n), tail(n), or sample(n)".to_string(),
+                ))
+            })?;
+        let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+        let is_display_input = matches!(
+            input_file_type,
+            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
+        );
+        if !is_display_input {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+
+        let output_format = self
+            .display_output_format
+            .unwrap_or(DisplayOutputFormat::Csv);
+        let csv_stdout_headers = self.display_csv_headers.unwrap_or(true);
+
+        let input_path = input_path.to_string();
+        let csv_has_header = self.csv_has_header;
+        let sparse = self.sparse;
+
+        if input_file_type == FileType::Orc {
+            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: Some(slice),
+                sparse,
+                sink: RecordBatchSink::Display {
+                    output_format,
+                    csv_stdout_headers,
+                },
+            })))
+        } else {
+            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: Some(slice),
+                csv_has_header,
+                sparse,
+                sink: DataFrameSink::Display {
+                    output_format,
+                    csv_stdout_headers,
+                },
+            })))
+        }
+    }
+
     /// Consumes configuration and returns a [`Pipeline`] or a planning error.
     pub fn build(&mut self) -> Result<Pipeline> {
         let input_path = self.read.as_ref().ok_or_else(|| {
@@ -263,140 +411,9 @@ impl PipelineBuilder {
         }
 
         if let Some(output_path) = &self.write {
-            let slice_count = usize::from(self.head.is_some())
-                + usize::from(self.tail.is_some())
-                + usize::from(self.sample.is_some());
-            if slice_count > 1 {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedStage(
-                        "only one of head(n), tail(n), or sample(n) may be set".to_string(),
-                    ),
-                ));
-            }
-            let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
-            let output_file_type = resolve_file_type(self.output_type_override, output_path)?;
-
-            let is_input_native = matches!(
-                input_file_type,
-                FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Json | FileType::Orc
-            );
-            let is_output_supported = matches!(
-                output_file_type,
-                FileType::Parquet
-                    | FileType::Csv
-                    | FileType::Json
-                    | FileType::Orc
-                    | FileType::Avro
-                    | FileType::Xlsx
-                    | FileType::Yaml
-            );
-
-            if !is_input_native {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
-                ));
-            }
-            if !is_output_supported {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedOutputFileType(output_file_type.to_string()),
-                ));
-            }
-
-            let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
-            if input_file_type == FileType::Orc {
-                Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
-                    input_path: input_path.to_string(),
-                    input_file_type,
-                    select,
-                    slice,
-                    sparse: self.sparse,
-                    sink: RecordBatchSink::Write {
-                        output_path: output_path.to_string(),
-                        output_file_type,
-                        json_pretty: self.json_pretty,
-                        progress: self.progress.clone(),
-                    },
-                })))
-            } else {
-                Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
-                    input_path: input_path.to_string(),
-                    input_file_type,
-                    select,
-                    slice,
-                    csv_has_header: self.csv_has_header,
-                    sparse: self.sparse,
-                    sink: DataFrameSink::Write {
-                        output_path: output_path.to_string(),
-                        output_file_type,
-                        json_pretty: self.json_pretty,
-                        progress: self.progress.clone(),
-                    },
-                })))
-            }
+            self.build_write_pipeline(input_path, output_path, select)
         } else {
-            let stage_count = usize::from(self.head.is_some())
-                + usize::from(self.tail.is_some())
-                + usize::from(self.sample.is_some());
-            if stage_count > 1 {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedStage(
-                        "only one of head(n), tail(n), or sample(n) may be set".to_string(),
-                    ),
-                ));
-            }
-            let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample).ok_or_else(
-                || {
-                    Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
-                        "head(n), tail(n), or sample(n)".to_string(),
-                    ))
-                },
-            )?;
-            let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
-            let is_display_input = matches!(
-                input_file_type,
-                FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc | FileType::Json
-            );
-            if !is_display_input {
-                return Err(Error::PipelinePlanningError(
-                    PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
-                ));
-            }
-
-            let output_format = self
-                .display_output_format
-                .unwrap_or(DisplayOutputFormat::Csv);
-            let csv_stdout_headers = self.display_csv_headers.unwrap_or(true);
-
-            let input_path = input_path.to_string();
-            let csv_has_header = self.csv_has_header;
-            let sparse = self.sparse;
-
-            if input_file_type == FileType::Orc {
-                Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
-                    input_path,
-                    input_file_type,
-                    select,
-                    slice: Some(slice),
-                    sparse,
-                    sink: RecordBatchSink::Display {
-                        output_format,
-                        csv_stdout_headers,
-                    },
-                })))
-            } else {
-                Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
-                    input_path,
-                    input_file_type,
-                    select,
-                    slice: Some(slice),
-                    csv_has_header,
-                    sparse,
-                    sink: DataFrameSink::Display {
-                        output_format,
-                        csv_stdout_headers,
-                    },
-                })))
-            }
+            self.build_display_pipeline(input_path, select)
         }
     }
 }

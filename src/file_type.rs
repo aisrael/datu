@@ -75,10 +75,7 @@ impl TryFrom<&str> for FileType {
 
 /// Resolve the input file type: use the explicit override if provided, otherwise infer from the file path extension.
 pub fn resolve_file_type(input_override: Option<FileType>, path: &str) -> crate::Result<FileType> {
-    match input_override {
-        Some(ft) => Ok(ft),
-        None => FileType::try_from(path),
-    }
+    input_override.map_or_else(|| FileType::try_from(path), Ok)
 }
 
 #[cfg(test)]

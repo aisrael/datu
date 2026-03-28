@@ -5,9 +5,7 @@ use crate::Result;
 use crate::pipeline;
 use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataFramePipeline;
-use crate::pipeline::dataframe::LegacyDataFrameReader;
 use crate::pipeline::record_batch::RecordBatchPipeline;
-use crate::pipeline::spec::SelectSpec;
 
 /// Runs a pipeline future on the current Tokio runtime when called from within a runtime
 /// worker; otherwise builds a current-thread runtime. Used by synchronous `execute` methods
@@ -40,27 +38,6 @@ impl Pipeline {
             Pipeline::RecordBatch(p) => p.execute(),
         }
     }
-}
-
-/// Reads input into record batches for use by REPL and other callers that need RecordBatchReaderSource.
-/// Uses DataFusion for Parquet, Avro, and CSV; uses orc-rust for ORC.
-pub async fn read_to_batches(
-    input_path: &str,
-    input_file_type: FileType,
-    select: &Option<SelectSpec>,
-    limit: Option<usize>,
-    csv_has_header: Option<bool>,
-) -> eyre::Result<Vec<arrow::record_batch::RecordBatch>> {
-    let source = {
-        let select = select.clone();
-        LegacyDataFrameReader::new(input_path, input_file_type, select, limit, csv_has_header)
-    }
-    .execute(())
-    .await?;
-    let reader = pipeline::dataframe::DataframeToRecordBatch::try_new(source)
-        .await
-        .map_err(|e| eyre::eyre!("{e}"))?;
-    Ok(reader.into_batches())
 }
 
 /// Writes record batches to output file. Used by REPL.

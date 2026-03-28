@@ -62,33 +62,6 @@ pub(super) fn take_rows_at_sorted_indices(
     Some(RecordBatch::try_new(batch.schema(), columns).expect("RecordBatch::try_new failed"))
 }
 
-/// Samples `n` random rows from in-memory batches. Used by the REPL.
-pub fn sample_batches(batches: Vec<RecordBatch>, n: usize) -> Vec<RecordBatch> {
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    if n >= total_rows {
-        return batches;
-    }
-    let mut rng = rand::thread_rng();
-    let mut indices: Vec<usize> = rand::seq::index::sample(&mut rng, total_rows, n).into_vec();
-    indices.sort_unstable();
-
-    let mut result = Vec::new();
-    let mut batch_start = 0usize;
-    let mut idx_pos = 0usize;
-    for batch in &batches {
-        if idx_pos >= indices.len() {
-            break;
-        }
-        if let Some(selected) =
-            take_rows_at_sorted_indices(batch, batch_start, &indices, &mut idx_pos)
-        {
-            result.push(selected);
-        }
-        batch_start += batch.num_rows();
-    }
-    result
-}
-
 /// Samples `n` random rows by streaming through a reader when `total_rows` is known
 /// (Parquet, ORC). Generates sorted random indices upfront, then picks rows batch-by-batch
 /// without holding all records in memory.

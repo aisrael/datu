@@ -2,7 +2,6 @@
 
 mod execute;
 mod from_path;
-mod legacy_reader;
 mod source;
 mod steps;
 mod to_record_batch;
@@ -14,7 +13,6 @@ mod tests;
 
 pub use execute::DataFramePipeline;
 pub use execute::DataFrameSink;
-pub use legacy_reader::LegacyDataFrameReader;
 pub use source::DataFrameSource;
 pub use steps::DataframeHead;
 pub use steps::DataframeSample;

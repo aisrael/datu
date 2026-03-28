@@ -65,7 +65,7 @@ impl Producer<DataFrame> for DataFrameSource {
         let df = self
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         Ok(Box::new(df))
     }
 }
@@ -224,7 +224,7 @@ pub(crate) async fn read_dataframe_from_path(
             source
                 .df
                 .take()
-                .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))
+                .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))
         }
         FileType::Orc => {
             let ctx = SessionContext::new();
@@ -448,7 +448,7 @@ impl Step for DataframeSelect {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_select(df, self.select.as_ref())?;
         Ok(DataFrameSource::new(df))
     }
@@ -468,7 +468,7 @@ impl Step for DataframeHead {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_head(df, self.n)?;
         Ok(DataFrameSource::new(df))
     }
@@ -490,7 +490,7 @@ impl Step for DataframeTail {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_tail(df, &self.input_path, self.input_file_type, self.n).await?;
         Ok(DataFrameSource::new(df))
     }
@@ -512,7 +512,7 @@ impl Step for DataframeSample {
         let df = input
             .df
             .take()
-            .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+            .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
         let df = dataframe_apply_sample(df, &self.input_path, self.input_file_type, self.n).await?;
         Ok(DataFrameSource::new(df))
     }
@@ -613,7 +613,7 @@ impl DataFramePipeline {
                         )
                         .await?;
                         let df = source.df.take().ok_or_else(|| {
-                            Error::GenericError("DataFrame already taken".to_string())
+                            Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                         })?;
                         let fields = schema_fields_from_arrow(df.schema().as_ref());
                         print_schema_fields(&fields, output_format, schema_sparse)
@@ -634,7 +634,7 @@ impl DataFramePipeline {
                         )
                         .await?;
                         let df = source.df.take().ok_or_else(|| {
-                            Error::GenericError("DataFrame already taken".to_string())
+                            Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                         })?;
                         df.count()
                             .await
@@ -676,7 +676,7 @@ impl DataFramePipeline {
                         }
                         FileType::Orc | FileType::Xlsx | FileType::Yaml => {
                             let df = source.df.take().ok_or_else(|| {
-                                Error::GenericError("DataFrame already taken".to_string())
+                                Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                             })?;
                             let batches = df
                                 .collect()
@@ -708,7 +708,7 @@ impl DataFramePipeline {
                     )
                     .await?;
                     let df = source.df.take().ok_or_else(|| {
-                        Error::GenericError("DataFrame already taken".to_string())
+                        Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
                     })?;
                     let batches = df
                         .collect()

@@ -1,5 +1,29 @@
 # datu Version Notes
 
+## v0.3.3
+
+### Highlights
+
+- **Pipeline**: Large refactor toward a unified CLI and REPL pipeline—shared `ReadArgs`, consolidated readers, and `heads_or_tails` handling.
+- **Writes**: Replaced per-format write markers with a single `WriteResult` type for clearer sink outcomes.
+- **Planning errors**: Added `PipelinePlanningError::ConflictingOptions` when pipeline options are mutually exclusive.
+
+### Improvements
+
+- **CLI and REPL**
+  - Shared read path and arguments between interactive and command-line use.
+
+- **Pipeline internals**
+  - Unified write completion signaling via `WriteResult`.
+  - Stricter validation for conflicting pipeline options.
+
+### Changelog Stats
+
+- 4 commits
+- 46 files changed
+- 4714 insertions
+- 2643 deletions
+
 ## v0.3.2
 
 ### Highlights

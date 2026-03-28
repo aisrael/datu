@@ -24,7 +24,6 @@ pub use to_record_batch::DataframeToRecordBatch;
 pub use to_record_batch::DataframeToRecordBatchProducer;
 pub use transform::dataframe_apply_head;
 pub use transform::dataframe_apply_sample;
-pub use transform::dataframe_apply_select;
 pub use transform::dataframe_apply_tail;
 pub use writer::DataFrameWriter;
 pub use writer::write_dataframe_pipeline_output;

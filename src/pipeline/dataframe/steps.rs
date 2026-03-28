@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use super::source::DataFrameSource;
 use super::transform::dataframe_apply_head;
 use super::transform::dataframe_apply_sample;
-use super::transform::dataframe_apply_select;
 use super::transform::dataframe_apply_tail;
 use crate::Error;
 use crate::FileType;
@@ -24,11 +23,18 @@ impl Step for DataframeSelect {
     type Output = DataFrameSource;
 
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
-        let df = input
+        let mut df = input
             .df
             .take()
             .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
-        let df = dataframe_apply_select(df, self.select.as_ref())?;
+        if let Some(spec) = self.select.as_ref()
+            && !spec.is_empty()
+        {
+            let schema = df.schema();
+            let resolved = spec.resolve_names(schema.as_ref())?;
+            let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+            df = df.select_columns(&col_refs)?;
+        }
         Ok(DataFrameSource::new(df))
     }
 }

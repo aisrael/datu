@@ -13,22 +13,6 @@ use crate::pipeline::reservoir_sample_from_reader;
 use crate::pipeline::sample_from_reader;
 use crate::pipeline::tail_batches;
 
-/// Applies optional column selection to a [`DataFrame`].
-pub fn dataframe_apply_select(
-    mut df: DataFrame,
-    select: Option<&SelectSpec>,
-) -> crate::Result<DataFrame> {
-    if let Some(spec) = select
-        && !spec.is_empty()
-    {
-        let schema = df.schema();
-        let resolved = spec.resolve_names(schema.as_ref())?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df.select_columns(&col_refs)?;
-    }
-    Ok(df)
-}
-
 /// Keeps the first `n` rows (same semantics as [`DataFrame::limit`] with offset 0).
 pub fn dataframe_apply_head(df: DataFrame, n: usize) -> crate::Result<DataFrame> {
     Ok(df.limit(0, Some(n))?)
@@ -98,7 +82,14 @@ pub(super) async fn finalize_dataframe_source(
     limit: Option<usize>,
     slice: Option<DisplaySlice>,
 ) -> crate::Result<DataFrameSource> {
-    df = dataframe_apply_select(df, select)?;
+    if let Some(spec) = select
+        && !spec.is_empty()
+    {
+        let schema = df.schema();
+        let resolved = spec.resolve_names(schema.as_ref())?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+        df = df.select_columns(&col_refs)?;
+    }
     if let Some(n) = limit {
         df = dataframe_apply_head(df, n)?;
     }

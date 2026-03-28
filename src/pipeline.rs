@@ -48,7 +48,6 @@ pub type DataframeCsvReader = DataframeFormatReader;
 
 pub mod record_batch;
 pub mod schema;
-pub mod select;
 pub mod write;
 pub mod xlsx;
 pub mod yaml;

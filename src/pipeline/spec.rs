@@ -1,5 +1,7 @@
 //! Column selection types and display slice for pipeline head/tail/sample.
 
+use std::ops::Index;
+
 use arrow::datatypes::Schema;
 
 use crate::Error;
@@ -71,6 +73,11 @@ impl SelectSpec {
         self.columns.is_empty()
     }
 
+    /// Returns the number of columns in the selection.
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
+
     /// Parses CLI `--select` values from `Option<Vec<String>>`: splits each string on commas,
     /// trims, drops empties, maps to [`ColumnSpec::Exact`]. Returns `None` when `select` is `None`
     /// or yields no column names.
@@ -96,6 +103,79 @@ impl SelectSpec {
 
     /// Resolves all column specs against `schema`, returning actual column names in order.
     pub fn resolve_names(&self, schema: &Schema) -> Result<Vec<String>> {
-        crate::pipeline::select::resolve_column_specs(schema, &self.columns)
+        self.columns.iter().map(|s| s.resolve(schema)).collect()
+    }
+}
+
+/// Indexes into a [`SelectSpec`] by column index.
+impl Index<usize> for SelectSpec {
+    type Output = ColumnSpec;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.columns[index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
+    use arrow::datatypes::Schema;
+
+    use super::ColumnSpec;
+    use super::SelectSpec;
+
+    fn schema_with_columns(names: &[&str]) -> Schema {
+        let fields: Vec<Field> = names
+            .iter()
+            .map(|n| Field::new(*n, DataType::Utf8, true))
+            .collect();
+        Schema::new(fields)
+    }
+
+    #[test]
+    fn test_select_spec_resolve_exact_match() {
+        let schema = schema_with_columns(&["one", "two", "three"]);
+        let spec = SelectSpec {
+            columns: vec![
+                ColumnSpec::Exact("one".into()),
+                ColumnSpec::Exact("three".into()),
+            ],
+        };
+        let resolved = spec.resolve_names(&schema).unwrap();
+        assert_eq!(resolved, vec!["one", "three"]);
+    }
+
+    #[test]
+    fn test_select_spec_resolve_exact_no_match_wrong_case() {
+        let schema = schema_with_columns(&["one", "two"]);
+        let spec = SelectSpec {
+            columns: vec![ColumnSpec::Exact("ONE".into())],
+        };
+        let result = spec.resolve_names(&schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_select_spec_resolve_case_insensitive_match() {
+        let schema = schema_with_columns(&["one", "two", "Email"]);
+        let spec = SelectSpec {
+            columns: vec![
+                ColumnSpec::CaseInsensitive("ONE".into()),
+                ColumnSpec::CaseInsensitive("email".into()),
+            ],
+        };
+        let resolved = spec.resolve_names(&schema).unwrap();
+        assert_eq!(resolved, vec!["one", "Email"]);
+    }
+
+    #[test]
+    fn test_select_spec_resolve_case_insensitive_no_match() {
+        let schema = schema_with_columns(&["one", "two"]);
+        let spec = SelectSpec {
+            columns: vec![ColumnSpec::CaseInsensitive("missing".into())],
+        };
+        let result = spec.resolve_names(&schema);
+        assert!(result.is_err());
     }
 }

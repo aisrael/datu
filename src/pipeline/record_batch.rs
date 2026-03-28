@@ -395,16 +395,15 @@ impl RecordBatchPipeline {
                             .await?;
                         }
                         FileType::Json => {
-                            RecordBatchJsonWriter {
-                                args: WriteJsonArgs {
-                                    path: output_path,
-                                    sparse,
-                                    pretty: json_pretty,
-                                },
-                                source,
-                            }
-                            .execute(())
-                            .await?;
+                            let args = WriteJsonArgs {
+                                path: output_path,
+                                sparse,
+                                pretty: json_pretty,
+                            };
+                            let path = args.path.as_str();
+                            let mut reader = source.get().await?;
+                            let writer = RecordBatchJsonWriter::from_write_json_args(&args);
+                            writer.write_to_path(&mut *reader, path)?;
                         }
                         FileType::Avro => {
                             RecordBatchAvroWriter { args: write_args }

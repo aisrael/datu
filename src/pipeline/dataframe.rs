@@ -25,6 +25,7 @@ use crate::pipeline::display;
 use crate::pipeline::display::DisplayWriterStep;
 use crate::pipeline::json::DataframeJsonPrettyWriter;
 use crate::pipeline::json::DataframeJsonWriter;
+use crate::pipeline::json::RecordBatchJsonWriter;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
 use crate::pipeline::read::ReadResult;
@@ -108,12 +109,7 @@ pub fn write_record_batches_from_reader(
         FileType::Parquet => parquet::write_record_batches(output_path, reader)?,
         FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
         FileType::Json => {
-            display::write_record_batches_as_json_to_path(
-                output_path,
-                reader,
-                sparse,
-                json_pretty,
-            )?;
+            RecordBatchJsonWriter::new(sparse, json_pretty).write_to_path(reader, output_path)?;
         }
         FileType::Yaml => {
             let file = std::fs::File::create(output_path).map_err(Error::IoError)?;

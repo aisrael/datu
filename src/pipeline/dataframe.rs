@@ -3,7 +3,6 @@ use std::sync::Arc;
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::DataFrame;
 use futures::StreamExt;
@@ -21,8 +20,11 @@ use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro;
+use crate::pipeline::csv::DataframeCsvWriter;
 use crate::pipeline::display;
 use crate::pipeline::display::DisplayWriterStep;
+use crate::pipeline::json::DataframeJsonPrettyWriter;
+use crate::pipeline::json::DataframeJsonWriter;
 use crate::pipeline::orc;
 use crate::pipeline::parquet;
 use crate::pipeline::read::ReadResult;
@@ -106,12 +108,12 @@ pub fn write_record_batches_from_reader(
         FileType::Parquet => parquet::write_record_batches(output_path, reader)?,
         FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
         FileType::Json => {
-            let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
-            if json_pretty {
-                display::write_record_batches_as_json_pretty(reader, file, sparse)?;
-            } else {
-                display::write_record_batches_as_json(reader, file, sparse)?;
-            }
+            display::write_record_batches_as_json_to_path(
+                output_path,
+                reader,
+                sparse,
+                json_pretty,
+            )?;
         }
         FileType::Yaml => {
             let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
@@ -125,45 +127,33 @@ pub fn write_record_batches_from_reader(
     Ok(())
 }
 
-/// Writes a [`DataFrame`] to Parquet, CSV, or JSON using the same strategy as [`DataFramePipeline`]:
-/// native DataFusion writers for Parquet and CSV; record-batch JSON with `sparse` / `pretty` support.
+/// Writes a [`DataFrame`] to Parquet, CSV, or JSON by delegating to [`DataframeParquetWriter`],
+/// [`DataframeCsvWriter`], and [`DataframeJsonWriter`] or [`DataframeJsonPrettyWriter`] when
+/// pretty-printing or non-sparse JSON emission is requested.
 pub async fn write_dataframe_pipeline_output(
-    mut source: DataFrameSource,
+    source: DataFrameSource,
     args: WriteArgs,
 ) -> crate::Result<()> {
-    let df = source
-        .df
-        .take()
-        .ok_or_else(|| Error::GenericError("DataFrame already taken".to_string()))?;
+    let input: Box<dyn Producer<DataFrame>> = Box::new(source);
     match args.file_type {
         FileType::Parquet => {
-            df.write_parquet(&args.path, DataFrameWriteOptions::default(), None)
-                .await?;
+            parquet::DataframeParquetWriter { args }
+                .execute(input)
+                .await
         }
-        FileType::Csv => {
-            df.write_csv(&args.path, DataFrameWriteOptions::default(), None)
-                .await?;
-        }
+        FileType::Csv => DataframeCsvWriter { args }.execute(input).await,
         FileType::Json => {
-            let batches = df.collect().await?;
-            let mut reader = VecRecordBatchReader::new(batches);
-            let sparse = args.sparse.unwrap_or(true);
-            let json_pretty = args.pretty.unwrap_or(false);
-            write_record_batches_from_reader(
-                &mut reader,
-                &args.path,
-                FileType::Json,
-                sparse,
-                json_pretty,
-            )?;
+            let needs_display_json = args.pretty.unwrap_or(false) || args.sparse == Some(false);
+            if needs_display_json {
+                DataframeJsonPrettyWriter { args }.execute(input).await
+            } else {
+                DataframeJsonWriter { args }.execute(input).await
+            }
         }
-        _ => {
-            return Err(Error::PipelineExecutionError(
-                PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
-            ));
-        }
+        _ => Err(Error::PipelineExecutionError(
+            PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
+        )),
     }
-    Ok(())
 }
 
 #[async_trait(?Send)]

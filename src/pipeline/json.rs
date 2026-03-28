@@ -1,17 +1,16 @@
-use arrow::record_batch::RecordBatch;
-use arrow_json::writer::JsonArray;
-use arrow_json::writer::WriterBuilder;
 use async_trait::async_trait;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::DataFrame;
 
-use crate::Error;
 use crate::FileType;
 use crate::Result;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
-use crate::pipeline::dataframe::write_dataframe_pipeline_output;
+use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::dataframe::write_record_batches_from_reader;
+use crate::pipeline::display;
 use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::write::WriteArgs;
@@ -47,7 +46,7 @@ impl Producer<DataFrame> for DataframeJsonReader {
     }
 }
 
-/// Writes a [`DataFrame`] to a JSON file (NDJSON array semantics via [`write_record_batches_from_reader`]).
+/// Writes a [`DataFrame`] to JSON using DataFusion's native [`DataFrame::write_json`].
 pub struct DataframeJsonWriter {
     pub(crate) args: WriteArgs,
 }
@@ -59,8 +58,37 @@ impl Step for DataframeJsonWriter {
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
-        let source = DataFrameSource::new(*df);
-        write_dataframe_pipeline_output(source, self.args).await
+        df.write_json(&self.args.path, DataFrameWriteOptions::default(), None)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Writes a [`DataFrame`] to JSON using the display layer ([`write_record_batches_from_reader`])
+/// so `--json-pretty` and non-default sparse emission are supported.
+pub struct DataframeJsonPrettyWriter {
+    pub(crate) args: WriteArgs,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeJsonPrettyWriter {
+    type Input = Box<dyn Producer<DataFrame>>;
+    type Output = ();
+
+    async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
+        let df = input.get().await?;
+        let batches = df.collect().await?;
+        let mut reader = VecRecordBatchReader::new(batches);
+        let sparse = self.args.sparse.unwrap_or(true);
+        let json_pretty = self.args.pretty.unwrap_or(false);
+        write_record_batches_from_reader(
+            &mut reader,
+            &self.args.path,
+            FileType::Json,
+            sparse,
+            json_pretty,
+        )?;
+        Ok(())
     }
 }
 
@@ -78,33 +106,13 @@ impl Step for RecordBatchJsonWriter {
     async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
         let path = self.args.path.as_str();
         let mut source = self.source;
-        let reader = source.get().await?;
-        let batches: Vec<RecordBatch> = reader
-            .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
-            .map_err(Error::ArrowError)?;
-        let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
-        let builder = WriterBuilder::new().with_explicit_nulls(!self.args.sparse);
-
-        if self.args.pretty {
-            let mut buf = Vec::new();
-            let mut writer = builder.build::<_, JsonArray>(&mut buf);
-            writer
-                .write_batches(&batch_refs)
-                .map_err(Error::ArrowError)?;
-            writer.finish().map_err(Error::ArrowError)?;
-            let value: serde_json::Value = serde_json::from_slice(&buf)
-                .map_err(|e| Error::GenericError(format!("Invalid JSON: {e}")))?;
-            let file = std::fs::File::create(path).map_err(Error::IoError)?;
-            serde_json::to_writer_pretty(file, &value)
-                .map_err(|e| Error::GenericError(format!("Failed to write JSON: {e}")))?;
-        } else {
-            let file = std::fs::File::create(path).map_err(Error::IoError)?;
-            let mut writer = builder.build::<_, JsonArray>(file);
-            writer
-                .write_batches(&batch_refs)
-                .map_err(Error::ArrowError)?;
-            writer.finish().map_err(Error::ArrowError)?;
-        }
+        let mut reader = source.get().await?;
+        display::write_record_batches_as_json_to_path(
+            path,
+            &mut *reader,
+            self.args.sparse,
+            self.args.pretty,
+        )?;
         Ok(())
     }
 }

@@ -107,6 +107,21 @@ where
     Ok(())
 }
 
+/// Write record batches from a reader to a file as JSON (compact or pretty).
+pub fn write_record_batches_as_json_to_path(
+    path: &str,
+    reader: &mut dyn RecordBatchReader,
+    sparse: bool,
+    pretty: bool,
+) -> Result<()> {
+    let file = std::fs::File::create(path).map_err(Error::IoError)?;
+    if pretty {
+        write_record_batches_as_json_pretty(reader, file, sparse)
+    } else {
+        write_record_batches_as_json(reader, file, sparse)
+    }
+}
+
 /// Write record batches from a reader to the given writer as YAML.
 pub fn write_record_batches_as_yaml<W>(
     reader: &mut dyn RecordBatchReader,

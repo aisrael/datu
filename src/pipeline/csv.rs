@@ -1,5 +1,6 @@
 use arrow::array::RecordBatchReader;
 use async_trait::async_trait;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::DataFrame;
@@ -12,7 +13,6 @@ use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
-use crate::pipeline::dataframe::write_dataframe_pipeline_output;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::expect_file_type;
@@ -66,8 +66,9 @@ impl Step for DataframeCsvWriter {
 
     async fn execute(self, mut input: Self::Input) -> Result<Self::Output> {
         let df = input.get().await?;
-        let source = DataFrameSource::new(*df);
-        write_dataframe_pipeline_output(source, self.args).await
+        df.write_csv(&self.args.path, DataFrameWriteOptions::default(), None)
+            .await?;
+        Ok(())
     }
 }
 

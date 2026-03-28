@@ -5,6 +5,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::AvroReadOptions;
+use datafusion::prelude::DataFrame;
 use datafusion::prelude::ParquetReadOptions;
 
 use crate::pipeline::ColumnSpec;
@@ -17,16 +18,12 @@ pub fn resolve_column_specs(schema: &Schema, specs: &[ColumnSpec]) -> crate::Res
     specs.iter().map(|s| s.resolve(schema)).collect()
 }
 
-/// Reads a Parquet file and selects columns using the DataFusion DataFrame API.
-pub async fn read_parquet_select(
-    path: &str,
+/// Applies optional column projection, row cap, and materialization for a DataFusion [`DataFrame`].
+async fn dataframe_select_limit_collect(
+    mut df: DataFrame,
     spec: &SelectSpec,
     limit: Option<usize>,
 ) -> crate::Result<RecordBatchReaderSource> {
-    let ctx = SessionContext::new();
-    let mut df = ctx
-        .read_parquet(path, ParquetReadOptions::default())
-        .await?;
     if !spec.is_empty() {
         let schema = df.schema();
         let resolved = spec.resolve_names(schema.as_ref())?;
@@ -40,6 +37,19 @@ pub async fn read_parquet_select(
     Ok(Box::new(VecRecordBatchReaderSource::new(batches)))
 }
 
+/// Reads a Parquet file and selects columns using the DataFusion DataFrame API.
+pub async fn read_parquet_select(
+    path: &str,
+    spec: &SelectSpec,
+    limit: Option<usize>,
+) -> crate::Result<RecordBatchReaderSource> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_parquet(path, ParquetReadOptions::default())
+        .await?;
+    dataframe_select_limit_collect(df, spec, limit).await
+}
+
 /// Reads an Avro file and selects columns using the DataFusion DataFrame API.
 pub async fn read_avro_select(
     path: &str,
@@ -47,18 +57,8 @@ pub async fn read_avro_select(
     limit: Option<usize>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let ctx = SessionContext::new();
-    let mut df = ctx.read_avro(path, AvroReadOptions::default()).await?;
-    if !spec.is_empty() {
-        let schema = df.schema();
-        let resolved = spec.resolve_names(schema.as_ref())?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df.select_columns(&col_refs)?;
-    }
-    if let Some(n) = limit {
-        df = df.limit(0, Some(n))?;
-    }
-    let batches = df.collect().await?;
-    Ok(Box::new(VecRecordBatchReaderSource::new(batches)))
+    let df = ctx.read_avro(path, AvroReadOptions::default()).await?;
+    dataframe_select_limit_collect(df, spec, limit).await
 }
 
 /// Applies column selection to record batches using the same resolution and projection
@@ -92,16 +92,7 @@ pub async fn select_columns_from_batches(
     }
     let ctx = SessionContext::new();
     let df = ctx.read_batches(batches)?;
-    let df = if spec.is_empty() {
-        df
-    } else {
-        let schema = df.schema();
-        let resolved = spec.resolve_names(schema.as_ref())?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df.select_columns(&col_refs)?
-    };
-    let result_batches = df.collect().await?;
-    Ok(Box::new(VecRecordBatchReaderSource::new(result_batches)))
+    dataframe_select_limit_collect(df, spec, None).await
 }
 
 #[cfg(test)]

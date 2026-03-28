@@ -102,7 +102,7 @@ impl FileType {
         )
     }
 
-    /// Input formats for display pipelines (head / tail / sample to stdout).
+    /// Input formats for display pipelines (head / tail / sample / schema / row count to stdout).
     #[inline]
     pub fn supports_pipeline_display_input(self) -> bool {
         matches!(

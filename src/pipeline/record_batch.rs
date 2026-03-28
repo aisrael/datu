@@ -16,6 +16,7 @@ use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro::RecordBatchAvroWriter;
+use crate::pipeline::count_rows;
 use crate::pipeline::csv::RecordBatchCsvWriter;
 use crate::pipeline::display::apply_select_and_display;
 use crate::pipeline::json::RecordBatchJsonWriter;
@@ -24,6 +25,9 @@ use crate::pipeline::orc::RecordBatchOrcWriter;
 use crate::pipeline::parquet::RecordBatchParquetWriter;
 use crate::pipeline::read::ReadArgs;
 use crate::pipeline::sample_from_reader;
+use crate::pipeline::schema::get_schema_fields;
+use crate::pipeline::schema::print_schema_fields;
+use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::select::resolve_column_specs;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write as write_dispatch;
@@ -292,6 +296,11 @@ pub enum RecordBatchSink {
         output_format: DisplayOutputFormat,
         csv_stdout_headers: bool,
     },
+    Schema {
+        output_format: DisplayOutputFormat,
+        sparse: bool,
+    },
+    Count,
 }
 
 /// ORC input via record-batch steps (see `PIPELINE.mermaid` RecordBatch branch).
@@ -337,39 +346,92 @@ impl RecordBatchPipeline {
                 output_format: *output_format,
                 csv_stdout_headers: *csv_stdout_headers,
             },
+            RecordBatchSink::Schema {
+                output_format,
+                sparse: schema_sparse,
+            } => RecordBatchSink::Schema {
+                output_format: *output_format,
+                sparse: *schema_sparse,
+            },
+            RecordBatchSink::Count => RecordBatchSink::Count,
         };
 
         let fut = async move {
-            let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
-            let mut source: RecordBatchReaderSource =
-                Box::new(OrcRecordBatchReader { args: read_args });
-
-            if let Some(select_step) = parse_select_step(&select) {
-                source = select_step.execute(source).await?;
-            }
-
-            if let Some(slice) = slice {
-                source = match slice {
-                    DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
-                    DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
-                    DisplaySlice::Sample(n) => {
-                        RecordBatchSample {
-                            input_path: input_path.clone(),
-                            n,
-                        }
-                        .execute(source)
-                        .await?
-                    }
-                };
-            }
-
             match sink {
+                RecordBatchSink::Schema {
+                    output_format,
+                    sparse: schema_sparse,
+                } => {
+                    if select.is_none() {
+                        let fields = get_schema_fields(&input_path, FileType::Orc, None)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    } else {
+                        let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
+                        let mut source: RecordBatchReaderSource =
+                            Box::new(OrcRecordBatchReader { args: read_args });
+                        if let Some(select_step) = parse_select_step(&select) {
+                            source = select_step.execute(source).await?;
+                        }
+                        let reader = source.get().await?;
+                        let fields = schema_fields_from_arrow(reader.schema().as_ref());
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    }
+                    Ok::<(), Error>(())
+                }
+                RecordBatchSink::Count => {
+                    if select.is_none() {
+                        let total = count_rows(&input_path, FileType::Orc, None)
+                            .await
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                        println!("{total}");
+                    } else {
+                        let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
+                        let mut source: RecordBatchReaderSource =
+                            Box::new(OrcRecordBatchReader { args: read_args });
+                        if let Some(select_step) = parse_select_step(&select) {
+                            source = select_step.execute(source).await?;
+                        }
+                        let reader = source.get().await?;
+                        let mut total = 0usize;
+                        for batch in reader {
+                            total += batch.map_err(Error::ArrowError)?.num_rows();
+                        }
+                        println!("{total}");
+                    }
+                    Ok::<(), Error>(())
+                }
                 RecordBatchSink::Write {
                     output_path,
                     output_file_type,
                     json_pretty,
                     progress: _progress,
                 } => {
+                    let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
+                    let mut source: RecordBatchReaderSource =
+                        Box::new(OrcRecordBatchReader { args: read_args });
+
+                    if let Some(select_step) = parse_select_step(&select) {
+                        source = select_step.execute(source).await?;
+                    }
+
+                    if let Some(slice) = slice {
+                        source = match slice {
+                            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
+                            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
+                            DisplaySlice::Sample(n) => {
+                                RecordBatchSample {
+                                    input_path: input_path.clone(),
+                                    n,
+                                }
+                                .execute(source)
+                                .await?
+                            }
+                        };
+                    }
+
                     let write_args = WriteArgs {
                         path: output_path.clone(),
                         file_type: output_file_type,
@@ -422,11 +484,35 @@ impl RecordBatchPipeline {
                             write_dispatch::write_record_batches(source, write_args).await?;
                         }
                     }
+                    Ok::<(), Error>(())
                 }
                 RecordBatchSink::Display {
                     output_format,
                     csv_stdout_headers,
                 } => {
+                    let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
+                    let mut source: RecordBatchReaderSource =
+                        Box::new(OrcRecordBatchReader { args: read_args });
+
+                    if let Some(select_step) = parse_select_step(&select) {
+                        source = select_step.execute(source).await?;
+                    }
+
+                    if let Some(slice) = slice {
+                        source = match slice {
+                            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
+                            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
+                            DisplaySlice::Sample(n) => {
+                                RecordBatchSample {
+                                    input_path: input_path.clone(),
+                                    n,
+                                }
+                                .execute(source)
+                                .await?
+                            }
+                        };
+                    }
+
                     apply_select_and_display(
                         source,
                         None,
@@ -435,10 +521,9 @@ impl RecordBatchPipeline {
                         csv_stdout_headers,
                     )
                     .await?;
+                    Ok::<(), Error>(())
                 }
             }
-
-            Ok::<(), Error>(())
         };
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {

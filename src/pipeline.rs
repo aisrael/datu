@@ -100,14 +100,45 @@ fn ensure_at_most_one_of_head_tail_sample(
     Ok(())
 }
 
-/// Fluent builder for a [`Pipeline`] (file conversion or head/tail/sample display).
+/// Ensures slice operations (head/tail/sample) are not combined with each other or with
+/// `schema` / row-count display, and that at most one of schema vs row-count is set.
+fn ensure_display_stage_exclusivity(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+    schema: bool,
+    display_row_count: bool,
+) -> Result<()> {
+    ensure_at_most_one_of_head_tail_sample(head, tail, sample)?;
+    let has_slice = head.is_some() || tail.is_some() || sample.is_some();
+    let meta_stages = usize::from(schema) + usize::from(display_row_count);
+    if meta_stages > 1 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::UnsupportedStage(
+                "only one of schema(), head(n), tail(n), sample(n), or row count may be set"
+                    .to_string(),
+            ),
+        ));
+    }
+    if has_slice && meta_stages > 0 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::UnsupportedStage(
+                "schema and row count cannot be combined with head(n), tail(n), or sample(n)"
+                    .to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Fluent builder for a [`Pipeline`] (file conversion or stdout display: head/tail/sample, schema, or row count).
 pub struct PipelineBuilder {
     read: Option<String>,
     select: Option<SelectSpec>,
     head: Option<usize>,
     tail: Option<usize>,
     sample: Option<usize>,
-    count: Option<String>,
+    display_row_count: bool,
     write: Option<String>,
     schema: bool,
     input_type_override: Option<FileType>,
@@ -128,7 +159,7 @@ impl Default for PipelineBuilder {
             head: None,
             tail: None,
             sample: None,
-            count: None,
+            display_row_count: false,
             write: None,
             schema: false,
             input_type_override: None,
@@ -192,12 +223,12 @@ impl PipelineBuilder {
         self.sample = Some(n);
         self
     }
-    /// Sets a row-count path (not supported by [`build`](PipelineBuilder::build); use the CLI).
-    pub fn count(&mut self, path: &str) -> &mut Self {
-        self.count = Some(path.to_string());
+    /// Display pipeline: print total row count for the read path (and optional [`select`](PipelineBuilder::select_spec)).
+    pub fn row_count(&mut self) -> &mut Self {
+        self.display_row_count = true;
         self
     }
-    /// Requests schema output (not supported by [`build`](PipelineBuilder::build); use the CLI).
+    /// Display pipeline: print schema for the read path (and optional column selection).
     pub fn schema(&mut self) -> &mut Self {
         self.schema = true;
         self
@@ -307,13 +338,97 @@ impl PipelineBuilder {
         }
     }
 
+    fn build_schema_display_pipeline(
+        &self,
+        input_path: &str,
+        select: Option<SelectSpec>,
+    ) -> Result<Pipeline> {
+        let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+        if !input_file_type.supports_pipeline_display_input() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+
+        let output_format = self
+            .display_output_format
+            .unwrap_or(DisplayOutputFormat::Csv);
+        let sparse = self.sparse;
+        let input_path = input_path.to_string();
+        let csv_has_header = self.csv_has_header;
+
+        if input_file_type == FileType::Orc {
+            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: None,
+                sparse,
+                sink: RecordBatchSink::Schema {
+                    output_format,
+                    sparse,
+                },
+            })))
+        } else {
+            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: None,
+                csv_has_header,
+                sparse,
+                sink: DataFrameSink::Schema {
+                    output_format,
+                    sparse,
+                },
+            })))
+        }
+    }
+
+    fn build_row_count_display_pipeline(
+        &self,
+        input_path: &str,
+        select: Option<SelectSpec>,
+    ) -> Result<Pipeline> {
+        let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+        if !input_file_type.supports_pipeline_display_input() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+
+        let input_path = input_path.to_string();
+        let csv_has_header = self.csv_has_header;
+        let sparse = self.sparse;
+
+        if input_file_type == FileType::Orc {
+            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: None,
+                sparse,
+                sink: RecordBatchSink::Count,
+            })))
+        } else {
+            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+                input_path,
+                input_file_type,
+                select,
+                slice: None,
+                csv_has_header,
+                sparse,
+                sink: DataFrameSink::Count,
+            })))
+        }
+    }
+
     /// Builds a display pipeline from the builder's configuration.
     fn build_display_pipeline(
         &self,
         input_path: &str,
         select: Option<SelectSpec>,
     ) -> Result<Pipeline> {
-        ensure_at_most_one_of_head_tail_sample(self.head, self.tail, self.sample)?;
         let slice =
             slice_from_head_tail_sample(self.head, self.tail, self.sample).ok_or_else(|| {
                 Error::PipelinePlanningError(PipelinePlanningError::MissingRequiredStage(
@@ -372,16 +487,21 @@ impl PipelineBuilder {
             ))
         })?;
 
-        if self.count.is_some() {
+        if self.write.is_some() && (self.schema || self.display_row_count) {
             return Err(Error::PipelinePlanningError(
-                PipelinePlanningError::UnsupportedStage("count(path?)".to_string()),
+                PipelinePlanningError::UnsupportedStage(
+                    "schema and row count are not supported with write(path)".to_string(),
+                ),
             ));
         }
-        if self.schema {
-            return Err(Error::PipelinePlanningError(
-                PipelinePlanningError::UnsupportedStage("schema()".to_string()),
-            ));
-        }
+
+        ensure_display_stage_exclusivity(
+            self.head,
+            self.tail,
+            self.sample,
+            self.schema,
+            self.display_row_count,
+        )?;
 
         let select = self.select.clone();
         if let Some(spec) = &select
@@ -394,6 +514,10 @@ impl PipelineBuilder {
 
         if let Some(output_path) = &self.write {
             self.build_write_pipeline(input_path, output_path, select)
+        } else if self.schema {
+            self.build_schema_display_pipeline(input_path, select)
+        } else if self.display_row_count {
+            self.build_row_count_display_pipeline(input_path, select)
         } else {
             self.build_display_pipeline(input_path, select)
         }
@@ -849,6 +973,7 @@ mod tests {
     use crate::pipeline::SelectSpec;
     use crate::pipeline::avro::DataframeAvroWriter;
     use crate::pipeline::avro::get_schema_fields_avro;
+    use crate::pipeline::dataframe::DataFrameSink;
     use crate::pipeline::parquet::DataframeParquetReader;
     use crate::pipeline::read::ReadArgs;
     use crate::pipeline::write::WriteArgs;
@@ -1116,6 +1241,45 @@ mod tests {
         built
             .execute()
             .expect("execute orc sample display pipeline");
+    }
+
+    #[test]
+    fn test_pipeline_builder_read_schema_display_parquet() {
+        let mut builder = PipelineBuilder::new();
+        builder.read("fixtures/table.parquet").schema();
+        let built = builder.build().expect("build schema display pipeline");
+        let Pipeline::DataFrame(p) = built else {
+            panic!("expected DataFrame pipeline");
+        };
+        assert!(p.slice.is_none());
+        assert!(matches!(p.sink, DataFrameSink::Schema { .. }));
+    }
+
+    #[test]
+    fn test_pipeline_builder_read_row_count_display_orc() {
+        let mut builder = PipelineBuilder::new();
+        builder.read("fixtures/userdata.orc").row_count();
+        let built = builder.build().expect("build row count pipeline");
+        let Pipeline::RecordBatch(p) = built else {
+            panic!("expected RecordBatch pipeline");
+        };
+        assert!(matches!(p.sink, RecordBatchSink::Count));
+    }
+
+    #[test]
+    fn test_display_pipeline_execute_schema_parquet() {
+        let mut builder = PipelineBuilder::new();
+        builder.read("fixtures/table.parquet").schema();
+        let mut built = builder.build().expect("build");
+        built.execute().expect("execute schema");
+    }
+
+    #[test]
+    fn test_display_pipeline_execute_row_count_parquet() {
+        let mut builder = PipelineBuilder::new();
+        builder.read("fixtures/table.parquet").row_count();
+        let mut built = builder.build().expect("build");
+        built.execute().expect("execute row count");
     }
 
     #[test]

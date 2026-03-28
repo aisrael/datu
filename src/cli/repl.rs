@@ -24,6 +24,8 @@ pub enum PipelineStage {
     Head { n: usize },
     Tail { n: usize },
     Sample { n: usize },
+    Schema,
+    Count,
     Write { path: String },
     Print,
 }
@@ -36,6 +38,8 @@ impl PipelineStage {
             PipelineStage::Head { .. }
                 | PipelineStage::Tail { .. }
                 | PipelineStage::Sample { .. }
+                | PipelineStage::Schema
+                | PipelineStage::Count
                 | PipelineStage::Write { .. }
         )
     }
@@ -73,6 +77,8 @@ impl fmt::Display for PipelineStage {
             PipelineStage::Head { n } => write!(f, "head({n})"),
             PipelineStage::Tail { n } => write!(f, "tail({n})"),
             PipelineStage::Sample { n } => write!(f, "sample({n})"),
+            PipelineStage::Schema => write!(f, "schema()"),
+            PipelineStage::Count => write!(f, "count()"),
             PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
             PipelineStage::Print => write!(f, "print()"),
         }
@@ -383,21 +389,21 @@ fn plan_stage(expr: Expr) -> crate::Result<PipelineStage> {
                     let n = extract_sample_n(&args)?;
                     Ok(PipelineStage::Sample { n })
                 }
-                "count" => match args.as_slice() {
-                    [] | [Expr::Literal(Literal::String(_))] => {
-                        Err(Error::ReplNotImplemented("count"))
+                "count" => {
+                    if !args.is_empty() {
+                        return Err(Error::UnsupportedFunctionCall(
+                            "count takes no arguments".to_string(),
+                        ));
                     }
-                    _ => Err(Error::UnsupportedFunctionCall(
-                        "count takes no arguments or a single path string".to_string(),
-                    )),
-                },
+                    Ok(PipelineStage::Count)
+                }
                 "schema" => {
                     if !args.is_empty() {
                         return Err(Error::UnsupportedFunctionCall(
                             "schema takes no arguments".to_string(),
                         ));
                     }
-                    Err(Error::ReplNotImplemented("schema"))
+                    Ok(PipelineStage::Schema)
                 }
                 "write" => {
                     let path = extract_path_from_args("write", &args)?;
@@ -427,7 +433,7 @@ fn plan_pipeline_with_state(exprs: Vec<Expr>) -> crate::Result<(Vec<PipelineStag
     Ok((stages, statement_incomplete))
 }
 
-/// Validates that stages match `read` → optional `select` → optional slice → optional `write`,
+/// Validates that stages match `read` → optional `select` → optional slice or `schema`/`count` → optional `write`,
 /// with optional trailing `print` only after head/tail/sample.
 fn validate_repl_pipeline_stages(stages: &[PipelineStage]) -> crate::Result<()> {
     if stages.is_empty() {
@@ -455,32 +461,48 @@ fn validate_repl_pipeline_stages(stages: &[PipelineStage]) -> crate::Result<()> 
         ));
     }
 
-    if matches!(
-        body.get(i),
+    match body.get(i) {
         Some(
             PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Sample { .. },
-        )
-    ) {
-        i += 1;
-    }
-    if matches!(
-        body.get(i),
-        Some(
-            PipelineStage::Head { .. } | PipelineStage::Tail { .. } | PipelineStage::Sample { .. },
-        )
-    ) {
-        return Err(Error::InvalidReplPipeline(
-            "only one of head(...), tail(...), or sample(...) is allowed".to_string(),
-        ));
-    }
-
-    if matches!(body.get(i), Some(PipelineStage::Write { .. })) {
-        i += 1;
+        ) => {
+            i += 1;
+            if matches!(
+                body.get(i),
+                Some(
+                    PipelineStage::Head { .. }
+                        | PipelineStage::Tail { .. }
+                        | PipelineStage::Sample { .. },
+                ),
+            ) {
+                return Err(Error::InvalidReplPipeline(
+                    "only one of head(...), tail(...), or sample(...) is allowed".to_string(),
+                ));
+            }
+            if matches!(body.get(i), Some(PipelineStage::Write { .. })) {
+                i += 1;
+            }
+        }
+        Some(PipelineStage::Schema) | Some(PipelineStage::Count) => {
+            i += 1;
+        }
+        Some(PipelineStage::Write { .. }) => {
+            i += 1;
+        }
+        None => {
+            return Err(Error::InvalidReplPipeline(
+                "pipeline must end with write, head, tail, sample, schema, or count".to_string(),
+            ));
+        }
+        _ => {
+            return Err(Error::InvalidReplPipeline(
+                "invalid pipeline stage order (expected read, optional select, then head|tail|sample|schema|count, or write)".to_string(),
+            ));
+        }
     }
 
     if i != body.len() {
         return Err(Error::InvalidReplPipeline(
-            "invalid pipeline stage order (expected read, optional select, optional head|tail|sample, optional write)".to_string(),
+            "invalid pipeline stage order (expected read, optional select, optional head|tail|sample|schema|count, optional write)".to_string(),
         ));
     }
 
@@ -504,10 +526,13 @@ fn validate_repl_pipeline_stages(stages: &[PipelineStage]) -> crate::Result<()> 
                 PipelineStage::Head { .. }
                 | PipelineStage::Tail { .. }
                 | PipelineStage::Sample { .. },
-            ) => {}
+            )
+            | Some(PipelineStage::Schema)
+            | Some(PipelineStage::Count) => {}
             _ => {
                 return Err(Error::InvalidReplPipeline(
-                    "pipeline must end with write, head, tail, or sample".to_string(),
+                    "pipeline must end with write, head, tail, sample, schema, or count"
+                        .to_string(),
                 ));
             }
         }
@@ -554,6 +579,14 @@ fn repl_stages_to_pipeline_builder(stages: &[PipelineStage]) -> crate::Result<Pi
         }
         Some(PipelineStage::Sample { n }) => {
             builder.sample(*n);
+            i += 1;
+        }
+        Some(PipelineStage::Schema) => {
+            builder.schema();
+            i += 1;
+        }
+        Some(PipelineStage::Count) => {
+            builder.row_count();
             i += 1;
         }
         _ => {}
@@ -1186,30 +1219,34 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_stage_count_not_implemented() {
+    fn test_plan_stage_count() {
         let expr = parse("count()");
-        let err = plan_stage(expr).unwrap_err();
-        assert!(matches!(err, Error::ReplNotImplemented("count")));
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Count);
     }
 
     #[test]
-    fn test_plan_stage_schema_not_implemented() {
+    fn test_plan_stage_schema() {
         let expr = parse("schema()");
-        let err = plan_stage(expr).unwrap_err();
-        assert!(matches!(err, Error::ReplNotImplemented("schema")));
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(stage, PipelineStage::Schema);
     }
 
     #[test]
-    fn test_plan_pipeline_with_count_errors() {
+    fn test_plan_pipeline_read_count() {
         let expr = parse(r#"read("a.parquet") |> count()"#);
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
-        let result = plan_pipeline_with_state(exprs);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Error::ReplNotImplemented("count")
-        ));
+        let (pipeline, incomplete) = plan_pipeline_with_state(exprs).unwrap();
+        assert!(!incomplete);
+        assert_eq!(pipeline.len(), 2);
+        assert_eq!(
+            pipeline[0],
+            PipelineStage::Read {
+                path: "a.parquet".to_string()
+            }
+        );
+        assert_eq!(pipeline[1], PipelineStage::Count);
     }
 
     #[test]
@@ -1323,6 +1360,8 @@ mod tests {
     fn test_terminal_stage_classification() {
         assert!(PipelineStage::Head { n: 1 }.is_terminal());
         assert!(PipelineStage::Tail { n: 1 }.is_terminal());
+        assert!(PipelineStage::Schema.is_terminal());
+        assert!(PipelineStage::Count.is_terminal());
         assert!(
             PipelineStage::Write {
                 path: "out.csv".into()
@@ -1360,6 +1399,8 @@ mod tests {
             .implicit_followup_stage(),
             None
         );
+        assert_eq!(PipelineStage::Schema.implicit_followup_stage(), None);
+        assert_eq!(PipelineStage::Count.implicit_followup_stage(), None);
     }
 
     #[test]
@@ -1554,6 +1595,26 @@ mod tests {
 
         assert!(output_path.exists());
         assert_eq!(ctx.writer.as_deref(), Some(output_str.as_str()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_schema() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> schema()"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_repl_pipeline_read_count() {
+        let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
+        let mut ctx = new_context();
+        let pipeline_stages = ctx.eval(expr).expect("eval");
+        ctx.execute_pipeline(pipeline_stages)
+            .await
+            .expect("execute");
     }
 
     #[tokio::test(flavor = "multi_thread")]

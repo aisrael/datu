@@ -20,6 +20,7 @@ use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro;
+use crate::pipeline::count_rows;
 use crate::pipeline::csv::DataframeCsvWriter;
 use crate::pipeline::display;
 use crate::pipeline::display::DisplayWriterStep;
@@ -32,6 +33,9 @@ use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::reservoir_sample_from_reader;
 use crate::pipeline::sample_from_reader;
+use crate::pipeline::schema::get_schema_fields;
+use crate::pipeline::schema::print_schema_fields;
+use crate::pipeline::schema::schema_fields_from_arrow;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::xlsx;
@@ -558,6 +562,11 @@ pub enum DataFrameSink {
         output_format: DisplayOutputFormat,
         csv_stdout_headers: bool,
     },
+    Schema {
+        output_format: DisplayOutputFormat,
+        sparse: bool,
+    },
+    Count,
 }
 
 /// DataFusion-based pipeline: Parquet, Avro, CSV, JSON (not ORC; see [`crate::pipeline::RecordBatchPipeline`]).
@@ -599,25 +608,88 @@ impl DataFramePipeline {
                 output_format: *output_format,
                 csv_stdout_headers: *csv_stdout_headers,
             },
+            DataFrameSink::Schema {
+                output_format,
+                sparse: sink_sparse,
+            } => DataFrameSink::Schema {
+                output_format: *output_format,
+                sparse: *sink_sparse,
+            },
+            DataFrameSink::Count => DataFrameSink::Count,
         };
 
         let fut = async move {
-            let mut source = dataframe_pipeline_prepare_source(
-                input_path,
-                input_file_type,
-                select,
-                slice,
-                csv_has_header,
-            )
-            .await?;
-
             match sink {
+                DataFrameSink::Schema {
+                    output_format,
+                    sparse: schema_sparse,
+                } => {
+                    let use_file_metadata_schema = select.is_none()
+                        && matches!(
+                            input_file_type,
+                            FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc
+                        );
+                    if use_file_metadata_schema {
+                        let fields =
+                            get_schema_fields(&input_path, input_file_type, csv_has_header)
+                                .map_err(|e| Error::GenericError(e.to_string()))?;
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    } else {
+                        let mut source = dataframe_pipeline_prepare_source(
+                            input_path.clone(),
+                            input_file_type,
+                            select,
+                            None,
+                            csv_has_header,
+                        )
+                        .await?;
+                        let df = source.df.take().ok_or_else(|| {
+                            Error::GenericError("DataFrame already taken".to_string())
+                        })?;
+                        let fields = schema_fields_from_arrow(df.schema().as_ref());
+                        print_schema_fields(&fields, output_format, schema_sparse)
+                            .map_err(|e| Error::GenericError(e.to_string()))?;
+                    }
+                    Ok::<(), Error>(())
+                }
+                DataFrameSink::Count => {
+                    let total = if select.is_none() {
+                        count_rows(&input_path, input_file_type, csv_has_header).await?
+                    } else {
+                        let mut source = dataframe_pipeline_prepare_source(
+                            input_path.clone(),
+                            input_file_type,
+                            select,
+                            None,
+                            csv_has_header,
+                        )
+                        .await?;
+                        let df = source.df.take().ok_or_else(|| {
+                            Error::GenericError("DataFrame already taken".to_string())
+                        })?;
+                        df.count()
+                            .await
+                            .map_err(|e| Error::GenericError(e.to_string()))?
+                    };
+                    println!("{total}");
+                    Ok::<(), Error>(())
+                }
                 DataFrameSink::Write {
                     output_path,
                     output_file_type,
                     json_pretty,
                     progress,
                 } => {
+                    let mut source = dataframe_pipeline_prepare_source(
+                        input_path,
+                        input_file_type,
+                        select,
+                        slice,
+                        csv_has_header,
+                    )
+                    .await?;
+
                     let write_args = WriteArgs {
                         path: output_path.clone(),
                         file_type: output_file_type,
@@ -653,11 +725,20 @@ impl DataFramePipeline {
                             )?;
                         }
                     }
+                    Ok::<(), Error>(())
                 }
                 DataFrameSink::Display {
                     output_format,
                     csv_stdout_headers,
                 } => {
+                    let mut source = dataframe_pipeline_prepare_source(
+                        input_path,
+                        input_file_type,
+                        select,
+                        slice,
+                        csv_has_header,
+                    )
+                    .await?;
                     let df = source.df.take().ok_or_else(|| {
                         Error::GenericError("DataFrame already taken".to_string())
                     })?;
@@ -672,10 +753,9 @@ impl DataFramePipeline {
                         headers: csv_stdout_headers,
                     };
                     display_step.execute(source).await?;
+                    Ok::<(), Error>(())
                 }
             }
-
-            Ok::<(), Error>(())
         };
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {

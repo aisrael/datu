@@ -18,6 +18,7 @@ use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::expect_file_type;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::apply_offset_limit;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteResult;
@@ -73,8 +74,8 @@ impl Step for DataframeCsvWriter {
 /// Pipeline step that reads a CSV file and produces a record batch reader.
 /// Uses DataFusion for schema inference and type detection.
 ///
-/// [`ReadArgs::file_type`] must be [`FileType::Csv`]. [`ReadArgs::offset`] is ignored (use record-batch
-/// adapters if offset is required for CSV).
+/// [`ReadArgs::file_type`] must be [`FileType::Csv`]. Applies [`ReadArgs::offset`] and
+/// [`ReadArgs::limit`] with the same semantics as other record-batch readers (see [`ReadArgs`](crate::pipeline::read::ReadArgs)).
 pub struct ReadCsvStepRecordBatch {
     pub args: ReadArgs,
 }
@@ -93,26 +94,17 @@ impl Producer<dyn RecordBatchReader + 'static> for ReadCsvStepRecordBatch {
             .await
             .map_err(|e| Error::GenericError(e.to_string()))?;
 
-        let mut batches = df
+        let batches = df
             .collect()
             .await
             .map_err(|e| Error::GenericError(e.to_string()))?;
 
-        if let Some(limit) = self.args.limit {
-            let mut result = Vec::new();
-            let mut remaining = limit;
-            for batch in batches {
-                if remaining == 0 {
-                    break;
-                }
-                let rows = batch.num_rows().min(remaining);
-                result.push(batch.slice(0, rows));
-                remaining -= rows;
-            }
-            batches = result;
-        }
-
-        Ok(Box::new(VecRecordBatchReader::new(batches)))
+        let reader = Box::new(VecRecordBatchReader::new(batches));
+        Ok(apply_offset_limit(
+            reader,
+            self.args.offset.unwrap_or(0),
+            self.args.limit,
+        ))
     }
 }
 
@@ -213,5 +205,18 @@ mod tests {
         let result = writer.execute(()).await;
         assert!(result.is_ok());
         assert!(output_path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_csv_record_batch_offset_and_limit() {
+        let mut args = ReadArgs::new("fixtures/table.csv", FileType::Csv);
+        args.offset = Some(1);
+        args.limit = Some(1);
+        let mut step = ReadCsvStepRecordBatch { args };
+        let mut reader = step.get().await.expect("read csv batches");
+        let total: usize = std::iter::from_fn(|| reader.next())
+            .map(|b| b.expect("batch").num_rows())
+            .sum();
+        assert_eq!(total, 1, "Expected one row after offset 1 and limit 1");
     }
 }

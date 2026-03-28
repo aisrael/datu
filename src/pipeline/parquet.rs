@@ -159,6 +159,10 @@ pub fn get_schema_fields_parquet(path: &str) -> eyre::Result<Vec<SchemaField>> {
 }
 
 /// Read a parquet file and return a RecordBatchReader.
+///
+/// `with_offset` / `with_limit` on the Arrow Parquet reader apply the same global-row semantics as
+/// [`crate::pipeline::record_batch::apply_offset_limit`] (skip `offset` rows, then yield at most
+/// `limit` rows).
 pub fn read_parquet(args: &ReadArgs) -> Result<ParquetRecordBatchReader> {
     expect_file_type(args, FileType::Parquet)?;
     let file = std::fs::File::open(&args.path).map_err(Error::IoError)?;
@@ -301,5 +305,37 @@ mod tests {
             .map_err(Error::ArrowError)
             .expect("Unable to read batch");
         assert_eq!(batch.num_rows(), 1, "Expected only 1 row");
+    }
+
+    #[test]
+    fn test_read_parquet_with_offset() {
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.offset = Some(1);
+        let reader =
+            read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
+        let total: usize = reader
+            .map(|b| b.map_err(Error::ArrowError).expect("batch").num_rows())
+            .sum();
+        assert_eq!(total, 2, "Expected 2 rows after skipping 1");
+    }
+
+    #[test]
+    fn test_read_parquet_with_offset_and_limit() {
+        let mut args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        args.offset = Some(1);
+        args.limit = Some(1);
+        let mut reader =
+            read_parquet(&args).expect("read_parquet failed to return a ParquetRecordBatchReader");
+        let batch = reader
+            .next()
+            .expect("None")
+            .map_err(Error::ArrowError)
+            .expect("Unable to read batch");
+        assert_eq!(
+            batch.num_rows(),
+            1,
+            "Expected 1 row after offset 1 and limit 1"
+        );
+        assert!(reader.next().is_none());
     }
 }

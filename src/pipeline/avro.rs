@@ -27,6 +27,7 @@ use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::expect_file_type;
 use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
+use crate::pipeline::record_batch::apply_offset_limit;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::schema::schema_fields_from_arrow;
@@ -170,91 +171,6 @@ impl Producer<dyn RecordBatchReader + 'static> for RecordBatchAvroReader {
     }
 }
 
-/// Record batch reader that applies offset and limit to an underlying reader.
-/// Arrow Avro does not support offset/limit at the builder level, so we wrap
-/// the reader and slice batches as needed.
-struct LimitOffsetRecordBatchReader {
-    reader: Box<dyn RecordBatchReader + 'static>,
-    offset_remaining: usize,
-    limit_remaining: Option<usize>,
-}
-
-impl LimitOffsetRecordBatchReader {
-    fn new(
-        reader: Box<dyn RecordBatchReader + 'static>,
-        offset: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        Self {
-            reader,
-            offset_remaining: offset,
-            limit_remaining: limit,
-        }
-    }
-}
-
-impl RecordBatchReader for LimitOffsetRecordBatchReader {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.reader.schema()
-    }
-}
-
-impl Iterator for LimitOffsetRecordBatchReader {
-    type Item = arrow::error::Result<RecordBatch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.limit_remaining == Some(0) {
-            return None;
-        }
-
-        let batch = self.reader.next()?;
-        let batch = match batch {
-            Ok(b) => b,
-            Err(e) => return Some(Err(e)),
-        };
-
-        let batch_rows = batch.num_rows();
-        if batch_rows == 0 {
-            return Some(Ok(batch));
-        }
-
-        // Apply offset: skip rows at the start
-        let (start, take) = if self.offset_remaining > 0 {
-            if batch_rows <= self.offset_remaining {
-                self.offset_remaining -= batch_rows;
-                return self.next();
-            }
-            let start = self.offset_remaining;
-            self.offset_remaining = 0;
-            (start, batch_rows - start)
-        } else {
-            (0, batch_rows)
-        };
-
-        // Apply limit: cap how many rows we return
-        let take = match self.limit_remaining {
-            Some(remaining) => {
-                let take = take.min(remaining);
-                self.limit_remaining = Some(remaining - take);
-                take
-            }
-            None => take,
-        };
-
-        if take == 0 {
-            return self.next();
-        }
-
-        let result = if start == 0 && take == batch_rows {
-            batch
-        } else {
-            batch.slice(start, take)
-        };
-
-        Some(Ok(result))
-    }
-}
-
 /// Read an Avro file and return a RecordBatchReader.
 pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
     expect_file_type(args, FileType::Avro)?;
@@ -269,11 +185,7 @@ pub fn read_avro(args: &ReadArgs) -> Result<impl RecordBatchReader + 'static> {
     if args.offset.is_some() || args.limit.is_some() {
         let offset = args.offset.unwrap_or(0);
         let limit = args.limit;
-        Ok(Box::new(LimitOffsetRecordBatchReader::new(
-            base_reader,
-            offset,
-            limit,
-        )) as Box<dyn RecordBatchReader + 'static>)
+        Ok(apply_offset_limit(base_reader, offset, limit))
     } else {
         Ok(base_reader)
     }

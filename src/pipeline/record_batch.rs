@@ -112,8 +112,49 @@ pub fn parse_select_step(select: &Option<SelectSpec>) -> Option<RecordBatchSelec
     })
 }
 
+/// Skips the first `offset_remaining` logical rows from an underlying [`RecordBatchReader`].
+pub(crate) struct SkipRowsRecordBatchReader {
+    reader: Box<dyn RecordBatchReader + 'static>,
+    offset_remaining: usize,
+}
+
+impl RecordBatchReader for SkipRowsRecordBatchReader {
+    fn schema(&self) -> SchemaRef {
+        self.reader.schema()
+    }
+}
+
+impl Iterator for SkipRowsRecordBatchReader {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let batch = self.reader.next()?;
+            let batch = match batch {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+            let batch_rows = batch.num_rows();
+            if batch_rows == 0 {
+                continue;
+            }
+            if self.offset_remaining == 0 {
+                return Some(Ok(batch));
+            }
+            if batch_rows <= self.offset_remaining {
+                self.offset_remaining -= batch_rows;
+                continue;
+            }
+            let start = self.offset_remaining;
+            self.offset_remaining = 0;
+            return Some(Ok(batch.slice(start, batch_rows - start)));
+        }
+    }
+}
+
 /// Yields at most `remaining` rows from an underlying [`RecordBatchReader`].
-struct TakeRowsRecordBatchReader {
+/// Used by [`RecordBatchHead`] and by [`apply_offset_limit`] for record-batch read limits.
+pub(crate) struct TakeRowsRecordBatchReader {
     reader: Box<dyn RecordBatchReader + 'static>,
     remaining: usize,
 }
@@ -153,7 +194,30 @@ impl Iterator for TakeRowsRecordBatchReader {
     }
 }
 
-/// Keeps the first `n` rows across batches.
+/// Applies SQL-style `OFFSET` / `LIMIT` across record batches: skip `offset` rows, then take at most
+/// `limit` rows when `limit` is `Some`.
+pub(crate) fn apply_offset_limit(
+    reader: Box<dyn RecordBatchReader + 'static>,
+    offset: usize,
+    limit: Option<usize>,
+) -> Box<dyn RecordBatchReader + 'static> {
+    let mut r = reader;
+    if offset > 0 {
+        r = Box::new(SkipRowsRecordBatchReader {
+            reader: r,
+            offset_remaining: offset,
+        });
+    }
+    if let Some(n) = limit {
+        r = Box::new(TakeRowsRecordBatchReader {
+            reader: r,
+            remaining: n,
+        });
+    }
+    r
+}
+
+/// Keeps the first `n` rows across batches (same streaming cap as record-batch read `limit` after any skip).
 pub struct RecordBatchHead {
     pub n: usize,
 }
@@ -165,17 +229,18 @@ impl Step for RecordBatchHead {
 
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         let reader = input.get().await?;
-        let wrapped = TakeRowsRecordBatchReader {
+        let wrapped = Box::new(TakeRowsRecordBatchReader {
             reader,
             remaining: self.n,
-        };
+        });
         Ok(Box::new(RecordBatchReaderHolder {
-            reader: Some(Box::new(wrapped)),
+            reader: Some(wrapped),
         }))
     }
 }
 
-/// Keeps the last `n` rows (materializes all batches).
+/// Keeps the last `n` rows (materializes all batches). Orthogonal to [`ReadArgs`] offset/limit from
+/// the start of the file; use for tail/slice display, not for SQL-style `OFFSET`/`LIMIT`.
 pub struct RecordBatchTail {
     pub n: usize,
 }

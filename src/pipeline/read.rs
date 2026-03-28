@@ -16,9 +16,21 @@ use crate::pipeline::dataframe::DataFrameSource;
 
 /// Arguments for reading a file (all formats).
 ///
-/// [`limit`](ReadArgs::limit) and [`offset`](ReadArgs::offset) are used by record-batch readers
-/// (`read_parquet`, `read_avro`, `read_orc`, CSV record-batch step, [`crate::pipeline::build_reader`]).
-/// They are **ignored** by [`read`] and [`read_to_dataframe`] until those entry points apply slicing.
+/// ## Record-batch `offset` / `limit`
+///
+/// For [`crate::pipeline::build_reader`], [`read_parquet`](crate::pipeline::parquet::read_parquet),
+/// [`read_avro`](crate::pipeline::avro::read_avro), [`read_orc`](crate::pipeline::orc::read_orc), and
+/// the CSV record-batch step, **`offset`** skips that many rows from the start of the file (default
+/// `0` when unset) and **`limit`** caps how many rows are returned after that (`None` = no cap). This
+/// matches SQL-style `OFFSET` / `LIMIT`. Parquet and ORC may apply these via native row selection or
+/// pushdown; other formats use the same semantics with streaming adapters in
+/// [`crate::pipeline::record_batch`].
+///
+/// In the record-batch **pipeline** [`crate::pipeline::RecordBatchHead`] applies a row cap from the
+/// current reader position; [`crate::pipeline::RecordBatchTail`] keeps the **last** `n` rows only
+/// and is not the same as `offset`/`limit` from the start of the file.
+///
+/// [`read`](read) and [`read_to_dataframe`] do **not** apply [`ReadArgs::limit`] or [`ReadArgs::offset`].
 #[derive(Clone)]
 pub struct ReadArgs {
     pub path: String,
@@ -27,7 +39,7 @@ pub struct ReadArgs {
     pub csv_has_header: Option<bool>,
     /// Maximum rows for record-batch reads. None means read all.
     pub limit: Option<usize>,
-    /// Rows to skip for record-batch reads (not applied to CSV record-batch reads; see module docs).
+    /// Rows to skip for record-batch reads (see struct-level docs).
     pub offset: Option<usize>,
 }
 

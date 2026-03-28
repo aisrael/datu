@@ -2,7 +2,7 @@ Feature: CLI
 
   Scenario: Print version
     When I run `datu --version`
-    Then the first line of the output should be: datu 0.3.2
+    Then the first line of the output should be: datu 0.3.3
 
   Scenario: Print help with help subcommand
     When I run `datu help`

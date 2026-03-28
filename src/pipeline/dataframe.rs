@@ -20,6 +20,7 @@ use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro;
+use crate::pipeline::block_on_pipeline_future;
 use crate::pipeline::count_rows;
 use crate::pipeline::csv::DataframeCsvWriter;
 use crate::pipeline::display;
@@ -758,15 +759,7 @@ impl DataFramePipeline {
             }
         };
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            rt.block_on(fut)
-        }
+        block_on_pipeline_future(fut)
     }
 }
 

@@ -83,6 +83,24 @@ fn slice_from_head_tail_sample(
         .or_else(|| head.map(DisplaySlice::Head))
 }
 
+/// Runs a pipeline future on the current Tokio runtime when called from within a runtime
+/// worker; otherwise builds a current-thread runtime. Used by synchronous `execute` methods
+/// that wrap async bodies.
+pub(crate) fn block_on_pipeline_future<T, F>(fut: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(fut))
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| Error::GenericError(e.to_string()))?;
+        rt.block_on(fut)
+    }
+}
+
 fn ensure_at_most_one_of_head_tail_sample(
     head: Option<usize>,
     tail: Option<usize>,

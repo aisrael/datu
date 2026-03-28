@@ -16,6 +16,7 @@ use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReaderSource;
 use crate::pipeline::avro::RecordBatchAvroWriter;
+use crate::pipeline::block_on_pipeline_future;
 use crate::pipeline::count_rows;
 use crate::pipeline::csv::RecordBatchCsvWriter;
 use crate::pipeline::display::apply_select_and_display;
@@ -510,15 +511,7 @@ impl RecordBatchPipeline {
             }
         };
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::GenericError(e.to_string()))?;
-            rt.block_on(fut)
-        }
+        block_on_pipeline_future(fut)
     }
 }
 

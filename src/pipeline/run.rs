@@ -26,8 +26,8 @@ where
 
 /// Result of [`crate::pipeline::PipelineBuilder::build`]: DataFusion path vs ORC record-batch path (see `PIPELINE.mermaid`).
 pub enum Pipeline {
-    DataFrame(Box<DataFramePipeline>),
-    RecordBatch(Box<RecordBatchPipeline>),
+    DataFrame(DataFramePipeline),
+    RecordBatch(RecordBatchPipeline),
 }
 
 impl Pipeline {

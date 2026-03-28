@@ -254,7 +254,7 @@ impl PipelineBuilder {
 
         let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
         if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path: input_path.to_string(),
                 input_file_type,
                 select,
@@ -266,9 +266,9 @@ impl PipelineBuilder {
                     json_pretty: self.json_pretty,
                     progress: self.progress.clone(),
                 },
-            })))
+            }))
         } else {
-            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+            Ok(Pipeline::DataFrame(DataFramePipeline {
                 input_path: input_path.to_string(),
                 input_file_type,
                 select,
@@ -281,7 +281,7 @@ impl PipelineBuilder {
                     json_pretty: self.json_pretty,
                     progress: self.progress.clone(),
                 },
-            })))
+            }))
         }
     }
 
@@ -305,7 +305,7 @@ impl PipelineBuilder {
         let csv_has_header = self.csv_has_header;
 
         if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path,
                 input_file_type,
                 select,
@@ -315,9 +315,9 @@ impl PipelineBuilder {
                     output_format,
                     sparse,
                 },
-            })))
+            }))
         } else {
-            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+            Ok(Pipeline::DataFrame(DataFramePipeline {
                 input_path,
                 input_file_type,
                 select,
@@ -328,7 +328,7 @@ impl PipelineBuilder {
                     output_format,
                     sparse,
                 },
-            })))
+            }))
         }
     }
 
@@ -349,16 +349,16 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path,
                 input_file_type,
                 select,
                 slice: None,
                 sparse,
                 sink: RecordBatchSink::Count,
-            })))
+            }))
         } else {
-            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+            Ok(Pipeline::DataFrame(DataFramePipeline {
                 input_path,
                 input_file_type,
                 select,
@@ -366,7 +366,7 @@ impl PipelineBuilder {
                 csv_has_header,
                 sparse,
                 sink: DataFrameSink::Count,
-            })))
+            }))
         }
     }
 
@@ -399,7 +399,7 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(Box::new(RecordBatchPipeline {
+            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path,
                 input_file_type,
                 select,
@@ -409,9 +409,9 @@ impl PipelineBuilder {
                     output_format,
                     csv_stdout_headers,
                 },
-            })))
+            }))
         } else {
-            Ok(Pipeline::DataFrame(Box::new(DataFramePipeline {
+            Ok(Pipeline::DataFrame(DataFramePipeline {
                 input_path,
                 input_file_type,
                 select,
@@ -422,7 +422,7 @@ impl PipelineBuilder {
                     output_format,
                     csv_stdout_headers,
                 },
-            })))
+            }))
         }
     }
 

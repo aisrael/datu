@@ -19,12 +19,6 @@ pub struct ReplPipelinePlanner {
     pub(crate) pending_exprs: Vec<Expr>,
 }
 
-impl Default for ReplPipelinePlanner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ReplPipelinePlanner {
     /// Creates an empty pipeline (output path tracked after `write` only).
     pub fn new() -> Self {

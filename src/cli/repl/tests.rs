@@ -756,22 +756,22 @@ fn test_terminal_stage_classification() {
 #[test]
 fn test_terminal_stage_implicit_followup() {
     assert_eq!(
-        PipelineStage::Head { n: 5 }.implicit_followup_stage(),
+        PipelineStage::Head { n: 5 }.get_implicit_followup_stage(),
         Some(PipelineStage::Print)
     );
     assert_eq!(
-        PipelineStage::Tail { n: 5 }.implicit_followup_stage(),
+        PipelineStage::Tail { n: 5 }.get_implicit_followup_stage(),
         Some(PipelineStage::Print)
     );
     assert_eq!(
         PipelineStage::Write {
             path: "out.csv".into()
         }
-        .implicit_followup_stage(),
+        .get_implicit_followup_stage(),
         None
     );
-    assert_eq!(PipelineStage::Schema.implicit_followup_stage(), None);
-    assert_eq!(PipelineStage::Count.implicit_followup_stage(), None);
+    assert_eq!(PipelineStage::Schema.get_implicit_followup_stage(), None);
+    assert_eq!(PipelineStage::Count.get_implicit_followup_stage(), None);
 }
 
 #[test]
@@ -892,7 +892,7 @@ fn test_sample_is_terminal() {
 #[test]
 fn test_sample_implicit_followup_is_print() {
     assert_eq!(
-        PipelineStage::Sample { n: 5 }.implicit_followup_stage(),
+        PipelineStage::Sample { n: 5 }.get_implicit_followup_stage(),
         Some(PipelineStage::Print)
     );
 }

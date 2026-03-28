@@ -38,7 +38,7 @@ impl PipelineStage {
     }
 
     /// Returns any implicit stage that should be appended after this stage.
-    pub fn implicit_followup_stage(&self) -> Option<PipelineStage> {
+    pub fn get_implicit_followup_stage(&self) -> Option<PipelineStage> {
         match self {
             PipelineStage::Head { .. }
             | PipelineStage::Tail { .. }

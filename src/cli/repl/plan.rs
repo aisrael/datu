@@ -134,7 +134,7 @@ pub(super) fn plan_pipeline_with_state(
     let statement_incomplete = stages.last().is_some_and(PipelineStage::is_non_terminal);
     if let Some(implicit_stage) = stages
         .last()
-        .and_then(PipelineStage::implicit_followup_stage)
+        .and_then(PipelineStage::get_implicit_followup_stage)
     {
         stages.push(implicit_stage);
     }

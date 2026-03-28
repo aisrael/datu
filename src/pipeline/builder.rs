@@ -19,65 +19,6 @@ use crate::pipeline::spec::DisplaySlice;
 use crate::pipeline::spec::SelectSpec;
 use crate::resolve_file_type;
 
-fn slice_from_head_tail_sample(
-    head: Option<usize>,
-    tail: Option<usize>,
-    sample: Option<usize>,
-) -> Option<DisplaySlice> {
-    sample
-        .map(DisplaySlice::Sample)
-        .or_else(|| tail.map(DisplaySlice::Tail))
-        .or_else(|| head.map(DisplaySlice::Head))
-}
-
-fn ensure_at_most_one_of_head_tail_sample(
-    head: Option<usize>,
-    tail: Option<usize>,
-    sample: Option<usize>,
-) -> Result<()> {
-    let slice_count =
-        usize::from(head.is_some()) + usize::from(tail.is_some()) + usize::from(sample.is_some());
-    if slice_count > 1 {
-        return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::ConflictingOptions(
-                "only one of head(n), tail(n), or sample(n) may be set".to_string(),
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Ensures slice operations (head/tail/sample) are not combined with each other or with
-/// `schema` / row-count display, and that at most one of schema vs row-count is set.
-fn ensure_display_stage_exclusivity(
-    head: Option<usize>,
-    tail: Option<usize>,
-    sample: Option<usize>,
-    schema: bool,
-    display_row_count: bool,
-) -> Result<()> {
-    ensure_at_most_one_of_head_tail_sample(head, tail, sample)?;
-    let has_slice = head.is_some() || tail.is_some() || sample.is_some();
-    let meta_stages = usize::from(schema) + usize::from(display_row_count);
-    if meta_stages > 1 {
-        return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::ConflictingOptions(
-                "only one of schema(), head(n), tail(n), sample(n), or row count may be set"
-                    .to_string(),
-            ),
-        ));
-    }
-    if has_slice && meta_stages > 0 {
-        return Err(Error::PipelinePlanningError(
-            PipelinePlanningError::ConflictingOptions(
-                "schema and row count cannot be combined with head(n), tail(n), or sample(n)"
-                    .to_string(),
-            ),
-        ));
-    }
-    Ok(())
-}
-
 /// Fluent builder for a [`Pipeline`] (file conversion or stdout display: head/tail/sample, schema, or row count).
 pub struct PipelineBuilder {
     read: Option<String>,
@@ -469,4 +410,63 @@ impl PipelineBuilder {
             self.build_display_pipeline(input_path, select)
         }
     }
+}
+
+fn slice_from_head_tail_sample(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+) -> Option<DisplaySlice> {
+    sample
+        .map(DisplaySlice::Sample)
+        .or_else(|| tail.map(DisplaySlice::Tail))
+        .or_else(|| head.map(DisplaySlice::Head))
+}
+
+fn ensure_at_most_one_of_head_tail_sample(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+) -> Result<()> {
+    let slice_count =
+        usize::from(head.is_some()) + usize::from(tail.is_some()) + usize::from(sample.is_some());
+    if slice_count > 1 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::ConflictingOptions(
+                "only one of head(n), tail(n), or sample(n) may be set".to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Ensures slice operations (head/tail/sample) are not combined with each other or with
+/// `schema` / row-count display, and that at most one of schema vs row-count is set.
+fn ensure_display_stage_exclusivity(
+    head: Option<usize>,
+    tail: Option<usize>,
+    sample: Option<usize>,
+    schema: bool,
+    display_row_count: bool,
+) -> Result<()> {
+    ensure_at_most_one_of_head_tail_sample(head, tail, sample)?;
+    let has_slice = head.is_some() || tail.is_some() || sample.is_some();
+    let meta_stages = usize::from(schema) + usize::from(display_row_count);
+    if meta_stages > 1 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::ConflictingOptions(
+                "only one of schema(), head(n), tail(n), sample(n), or row count may be set"
+                    .to_string(),
+            ),
+        ));
+    }
+    if has_slice && meta_stages > 0 {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::ConflictingOptions(
+                "schema and row count cannot be combined with head(n), tail(n), or sample(n)"
+                    .to_string(),
+            ),
+        ));
+    }
+    Ok(())
 }

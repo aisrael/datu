@@ -303,6 +303,36 @@ pub enum RecordBatchSink {
     Count,
 }
 
+/// ORC read, then optional column select (schema/count with projection, and base for write/display).
+async fn orc_source_after_select(
+    input_path: String,
+    select: &Option<SelectSpec>,
+) -> crate::Result<RecordBatchReaderSource> {
+    let read_args = ReadArgs::new(input_path, FileType::Orc);
+    let mut source: RecordBatchReaderSource = Box::new(OrcRecordBatchReader { args: read_args });
+    if let Some(select_step) = parse_select_step(select) {
+        source = select_step.execute(source).await?;
+    }
+    Ok(source)
+}
+
+/// [`orc_source_after_select`] plus optional head/tail/sample (write/display path).
+async fn orc_source_after_select_and_slice(
+    input_path: String,
+    select: &Option<SelectSpec>,
+    slice: Option<DisplaySlice>,
+) -> crate::Result<RecordBatchReaderSource> {
+    let mut source = orc_source_after_select(input_path.clone(), select).await?;
+    if let Some(slice) = slice {
+        source = match slice {
+            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
+            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
+            DisplaySlice::Sample(n) => RecordBatchSample { input_path, n }.execute(source).await?,
+        };
+    }
+    Ok(source)
+}
+
 /// ORC input via record-batch steps (see `PIPELINE.mermaid` RecordBatch branch).
 pub struct RecordBatchPipeline {
     pub(crate) input_path: String,
@@ -368,12 +398,8 @@ impl RecordBatchPipeline {
                         print_schema_fields(&fields, output_format, schema_sparse)
                             .map_err(|e| Error::GenericError(e.to_string()))?;
                     } else {
-                        let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
-                        let mut source: RecordBatchReaderSource =
-                            Box::new(OrcRecordBatchReader { args: read_args });
-                        if let Some(select_step) = parse_select_step(&select) {
-                            source = select_step.execute(source).await?;
-                        }
+                        let mut source =
+                            orc_source_after_select(input_path.clone(), &select).await?;
                         let reader = source.get().await?;
                         let fields = schema_fields_from_arrow(reader.schema().as_ref());
                         print_schema_fields(&fields, output_format, schema_sparse)
@@ -388,12 +414,8 @@ impl RecordBatchPipeline {
                             .map_err(|e| Error::GenericError(e.to_string()))?;
                         println!("{total}");
                     } else {
-                        let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
-                        let mut source: RecordBatchReaderSource =
-                            Box::new(OrcRecordBatchReader { args: read_args });
-                        if let Some(select_step) = parse_select_step(&select) {
-                            source = select_step.execute(source).await?;
-                        }
+                        let mut source =
+                            orc_source_after_select(input_path.clone(), &select).await?;
                         let reader = source.get().await?;
                         let mut total = 0usize;
                         for batch in reader {
@@ -409,28 +431,9 @@ impl RecordBatchPipeline {
                     json_pretty,
                     progress: _progress,
                 } => {
-                    let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
-                    let mut source: RecordBatchReaderSource =
-                        Box::new(OrcRecordBatchReader { args: read_args });
-
-                    if let Some(select_step) = parse_select_step(&select) {
-                        source = select_step.execute(source).await?;
-                    }
-
-                    if let Some(slice) = slice {
-                        source = match slice {
-                            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
-                            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
-                            DisplaySlice::Sample(n) => {
-                                RecordBatchSample {
-                                    input_path: input_path.clone(),
-                                    n,
-                                }
-                                .execute(source)
-                                .await?
-                            }
-                        };
-                    }
+                    let mut source =
+                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                            .await?;
 
                     let write_args = WriteArgs {
                         path: output_path.clone(),
@@ -490,28 +493,9 @@ impl RecordBatchPipeline {
                     output_format,
                     csv_stdout_headers,
                 } => {
-                    let read_args = ReadArgs::new(input_path.clone(), FileType::Orc);
-                    let mut source: RecordBatchReaderSource =
-                        Box::new(OrcRecordBatchReader { args: read_args });
-
-                    if let Some(select_step) = parse_select_step(&select) {
-                        source = select_step.execute(source).await?;
-                    }
-
-                    if let Some(slice) = slice {
-                        source = match slice {
-                            DisplaySlice::Head(n) => RecordBatchHead { n }.execute(source).await?,
-                            DisplaySlice::Tail(n) => RecordBatchTail { n }.execute(source).await?,
-                            DisplaySlice::Sample(n) => {
-                                RecordBatchSample {
-                                    input_path: input_path.clone(),
-                                    n,
-                                }
-                                .execute(source)
-                                .await?
-                            }
-                        };
-                    }
+                    let source =
+                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                            .await?;
 
                     apply_select_and_display(
                         source,

@@ -8,9 +8,9 @@ use indicatif::ProgressBar;
 use crate::Error;
 use crate::FileType;
 use crate::cli::DisplayOutputFormat;
-use crate::pipeline::ColumnSpec;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
+use crate::pipeline::ProgressRecordBatchReader;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
@@ -24,7 +24,6 @@ use crate::pipeline::sample_from_reader;
 use crate::pipeline::schema::get_schema_fields;
 use crate::pipeline::schema::print_schema_fields;
 use crate::pipeline::schema::schema_fields_from_arrow;
-use crate::pipeline::select::resolve_column_specs;
 use crate::pipeline::tail_batches;
 use crate::pipeline::write::write_record_batches_from_reader;
 
@@ -43,7 +42,7 @@ impl Producer<dyn RecordBatchReader + 'static> for RecordBatchReaderHolder {
 
 /// Pipeline step that filters record batches to only the specified columns.
 pub struct RecordBatchSelect {
-    pub columns: Vec<ColumnSpec>,
+    pub select: SelectSpec,
 }
 
 #[async_trait(?Send)]
@@ -54,7 +53,7 @@ impl Step for RecordBatchSelect {
     async fn execute(self, mut input: Self::Input) -> crate::Result<Self::Output> {
         let reader = input.get().await?;
         let schema = reader.schema();
-        let column_names = resolve_column_specs(&schema, &self.columns)?;
+        let column_names = self.select.resolve_names(&schema)?;
         let indices: Vec<usize> = column_names
             .iter()
             .map(|col| {
@@ -100,14 +99,9 @@ impl Iterator for SelectColumnRecordBatchReader {
 
 /// Builds a [`RecordBatchSelect`] from a resolved [`SelectSpec`].
 /// Returns None when no selection is requested.
-pub fn parse_select_step(select: &Option<SelectSpec>) -> Option<RecordBatchSelect> {
-    let spec = select.as_ref()?;
-    if spec.is_empty() {
-        return None;
-    }
-    Some(RecordBatchSelect {
-        columns: spec.columns.clone(),
-    })
+pub fn parse_select_step(select: Option<SelectSpec>) -> Option<RecordBatchSelect> {
+    select.as_ref()?;
+    select.map(|columns| RecordBatchSelect { select: columns })
 }
 
 /// Skips the first `offset_remaining` logical rows from an underlying [`RecordBatchReader`].
@@ -283,7 +277,6 @@ pub enum RecordBatchSink {
         output_path: String,
         output_file_type: FileType,
         json_pretty: bool,
-        #[allow(dead_code)]
         progress: Option<ProgressBar>,
     },
     Display {
@@ -300,7 +293,7 @@ pub enum RecordBatchSink {
 /// ORC read, then optional column select (schema/count with projection, and base for write/display).
 async fn orc_source_after_select(
     input_path: String,
-    select: &Option<SelectSpec>,
+    select: Option<SelectSpec>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let read_args = ReadArgs::new(input_path, FileType::Orc);
     let mut source: RecordBatchReaderSource = Box::new(OrcRecordBatchReader { args: read_args });
@@ -313,7 +306,7 @@ async fn orc_source_after_select(
 /// [`orc_source_after_select`] plus optional head/tail/sample (write/display path).
 async fn orc_source_after_select_and_slice(
     input_path: String,
-    select: &Option<SelectSpec>,
+    select: Option<SelectSpec>,
     slice: Option<DisplaySlice>,
 ) -> crate::Result<RecordBatchReaderSource> {
     let mut source = orc_source_after_select(input_path.clone(), select).await?;
@@ -393,7 +386,7 @@ impl RecordBatchPipeline {
                             .map_err(|e| Error::GenericError(e.to_string()))?;
                     } else {
                         let mut source =
-                            orc_source_after_select(input_path.clone(), &select).await?;
+                            orc_source_after_select(input_path.clone(), select).await?;
                         let reader = source.get().await?;
                         let fields = schema_fields_from_arrow(reader.schema().as_ref());
                         print_schema_fields(&fields, output_format, schema_sparse)
@@ -407,7 +400,7 @@ impl RecordBatchPipeline {
                         println!("{total}");
                     } else {
                         let mut source =
-                            orc_source_after_select(input_path.clone(), &select).await?;
+                            orc_source_after_select(input_path.clone(), select).await?;
                         let reader = source.get().await?;
                         let mut total = 0usize;
                         for batch in reader {
@@ -421,20 +414,35 @@ impl RecordBatchPipeline {
                     output_path,
                     output_file_type,
                     json_pretty,
-                    progress: _progress,
+                    progress,
                 } => {
                     let mut source =
-                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                        orc_source_after_select_and_slice(input_path.clone(), select, slice)
                             .await?;
 
-                    let mut reader = source.get().await?;
-                    write_record_batches_from_reader(
-                        &mut *reader,
-                        output_path.as_str(),
-                        output_file_type,
-                        sparse,
-                        json_pretty,
-                    )?;
+                    let reader = source.get().await?;
+                    if let Some(pb) = progress {
+                        let mut wrapped = ProgressRecordBatchReader {
+                            inner: reader,
+                            progress: pb,
+                        };
+                        write_record_batches_from_reader(
+                            &mut wrapped,
+                            output_path.as_str(),
+                            output_file_type,
+                            sparse,
+                            json_pretty,
+                        )?;
+                    } else {
+                        let mut reader = reader;
+                        write_record_batches_from_reader(
+                            &mut *reader,
+                            output_path.as_str(),
+                            output_file_type,
+                            sparse,
+                            json_pretty,
+                        )?;
+                    }
                     Ok::<(), Error>(())
                 }
                 RecordBatchSink::Display {
@@ -442,7 +450,7 @@ impl RecordBatchPipeline {
                     csv_stdout_headers,
                 } => {
                     let source =
-                        orc_source_after_select_and_slice(input_path.clone(), &select, slice)
+                        orc_source_after_select_and_slice(input_path.clone(), select, slice)
                             .await?;
 
                     apply_select_and_display(
@@ -501,31 +509,31 @@ mod tests {
 
     #[test]
     fn test_parse_select_step_none() {
-        assert!(parse_select_step(&None).is_none());
+        assert!(parse_select_step(None).is_none());
     }
 
     #[test]
     fn test_parse_select_step_some() {
         let select = SelectSpec::from_cli_args(&Some(vec!["one".to_string(), "two".to_string()]));
-        let step = parse_select_step(&select).expect("should return some");
-        assert_eq!(step.columns.len(), 2);
-        assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
-        assert_eq!(step.columns[1], ColumnSpec::Exact("two".into()));
+        let step = parse_select_step(select).expect("should return some");
+        assert_eq!(step.select.len(), 2);
+        assert_eq!(step.select[0], ColumnSpec::Exact("one".into()));
+        assert_eq!(step.select[1], ColumnSpec::Exact("two".into()));
     }
 
     #[test]
     fn test_parse_select_step_comma_separated() {
         let select = SelectSpec::from_cli_args(&Some(vec!["one, two".to_string()]));
-        let step = parse_select_step(&select).expect("should return some");
-        assert_eq!(step.columns.len(), 2);
-        assert_eq!(step.columns[0], ColumnSpec::Exact("one".into()));
-        assert_eq!(step.columns[1], ColumnSpec::Exact("two".into()));
+        let step = parse_select_step(select).expect("should return some");
+        assert_eq!(step.select.len(), 2);
+        assert_eq!(step.select[0], ColumnSpec::Exact("one".into()));
+        assert_eq!(step.select[1], ColumnSpec::Exact("two".into()));
     }
 
     #[test]
     fn test_parse_select_step_empty_returns_none() {
         let select = SelectSpec::from_cli_args(&Some(vec!["  ,  ".to_string()]));
-        assert!(parse_select_step(&select).is_none());
+        assert!(parse_select_step(select).is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -536,10 +544,12 @@ mod tests {
 
         let source: RecordBatchReaderSource = Box::new(parquet_step);
         let select_step = RecordBatchSelect {
-            columns: vec![
-                ColumnSpec::Exact("two".to_string()),
-                ColumnSpec::Exact("four".to_string()),
-            ],
+            select: SelectSpec {
+                columns: vec![
+                    ColumnSpec::Exact("two".to_string()),
+                    ColumnSpec::Exact("four".to_string()),
+                ],
+            },
         };
         let mut projected_source = select_step
             .execute(source)

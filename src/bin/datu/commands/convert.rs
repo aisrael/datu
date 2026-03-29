@@ -5,6 +5,7 @@ use datu::FileType;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
+use eyre::Result;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 
@@ -58,6 +59,50 @@ pub struct ConvertArgs {
     pub input_headers: Option<bool>,
 }
 
+/// Converts between file formats; reads from input and writes to output, optionally selecting columns.
+pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
+    let progress = create_progress_bar(&args)?;
+
+    let select_spec = SelectSpec::from_cli_args(&args.select);
+
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read(&args.input_path)
+        .write(&args.output_path)
+        .input_type(args.input)
+        .output_type(args.output)
+        .csv_has_header(args.input_headers)
+        .sparse(args.sparse)
+        .json_pretty(args.json_pretty)
+        .progress(Some(progress.clone()));
+
+    if let Some(spec) = select_spec {
+        builder.select_spec(spec);
+    }
+
+    if let Some(n) = args.limit {
+        builder.head(n);
+    }
+
+    let result = builder.build().and_then(|mut pipeline| pipeline.execute());
+
+    match result {
+        Ok(()) => {
+            progress.finish_and_clear();
+            eprintln!("Converted {} to {}", args.input_path, args.output_path);
+            Ok(())
+        }
+        Err(e) => {
+            progress.abandon();
+            eprintln!(
+                "Failed to convert {} to {}",
+                args.input_path, args.output_path
+            );
+            Err(e.into())
+        }
+    }
+}
+
 /// Returns the total number of rows from file metadata, if available.
 fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
     datu::get_total_rows_result(path, file_type)
@@ -65,8 +110,8 @@ fn get_total_rows(path: &str, file_type: FileType) -> Option<u64> {
         .map(|n| n as u64)
 }
 
-/// Converts between file formats; reads from input and writes to output, optionally selecting columns.
-pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
+/// Creates a progress bar for the convert command.
+fn create_progress_bar(args: &ConvertArgs) -> Result<ProgressBar> {
     let input_file_type = resolve_file_type(args.input, &args.input_path)?;
     let output_file_type = resolve_file_type(args.output, &args.output_path)?;
 
@@ -79,7 +124,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         None
     };
 
-    let progress = match total_rows {
+    Ok(match total_rows {
         Some(total) => {
             let pb = ProgressBar::new(total);
             pb.set_style(
@@ -105,49 +150,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
             pb.enable_steady_tick(Duration::from_millis(100));
             pb
         }
-    };
-
-    let select_spec = SelectSpec::from_cli_args(&args.select);
-
-    let mut builder = PipelineBuilder::new();
-    builder
-        .read(&args.input_path)
-        .write(&args.output_path)
-        .input_type(args.input)
-        .output_type(args.output)
-        .csv_has_header(args.input_headers)
-        .sparse(args.sparse)
-        .json_pretty(args.json_pretty)
-        .progress(Some(progress.clone()));
-
-    if let Some(spec) = select_spec {
-        builder.select_spec(spec);
-    }
-
-    if let Some(n) = args.limit {
-        builder.head(n);
-    }
-
-    let result: Result<(), datu::Error> = match builder.build() {
-        Ok(mut built) => built.execute(),
-        Err(e) => Err(e),
-    };
-
-    match result {
-        Ok(()) => {
-            progress.finish_and_clear();
-            eprintln!("Converted {} to {}", args.input_path, args.output_path);
-            Ok(())
-        }
-        Err(e) => {
-            progress.abandon();
-            eprintln!(
-                "Failed to convert {} to {}",
-                args.input_path, args.output_path
-            );
-            Err(e.into())
-        }
-    }
+    })
 }
 
 #[cfg(test)]

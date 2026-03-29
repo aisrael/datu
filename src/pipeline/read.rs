@@ -1,7 +1,9 @@
 use std::fs::File;
 
+use async_trait::async_trait;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::DataFrame;
 use datafusion::prelude::NdJsonReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 use datafusion::prelude::SessionContext;
@@ -12,6 +14,8 @@ use crate::FileType;
 use crate::Result;
 use crate::errors::PipelineExecutionError;
 use crate::errors::PipelinePlanningError;
+use crate::pipeline::Producer;
+use crate::pipeline::Step;
 use crate::pipeline::dataframe::DataFrameSource;
 
 /// Arguments for reading a file (all formats).
@@ -135,6 +139,49 @@ pub async fn read_to_dataframe(
     Ok(ReadResult::DataFrame(DataFrameSource::new(df)))
 }
 
+/// Pipeline step that reads a file into a DataFusion [`DataFrame`] via [`read_to_dataframe`].
+///
+/// [`ReadArgs::file_type`] selects the format (Parquet, Avro, CSV, JSON). [`ReadArgs::offset`] and
+/// [`ReadArgs::limit`] are not applied; use record-batch readers for row slicing.
+pub struct DataframeFormatReader {
+    pub args: ReadArgs,
+}
+
+#[async_trait(?Send)]
+impl Step for DataframeFormatReader {
+    type Input = ();
+    type Output = DataFrameSource;
+
+    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
+        let result = read_to_dataframe(
+            &self.args.path,
+            self.args.file_type,
+            self.args.csv_has_header,
+        )
+        .await?;
+        let ReadResult::DataFrame(source) = result else {
+            unreachable!()
+        };
+        Ok(source)
+    }
+}
+
+#[async_trait(?Send)]
+impl Producer<DataFrame> for DataframeFormatReader {
+    async fn get(&mut self) -> Result<Box<DataFrame>> {
+        let result = read_to_dataframe(
+            &self.args.path,
+            self.args.file_type,
+            self.args.csv_has_header,
+        )
+        .await?;
+        let ReadResult::DataFrame(mut source) = result else {
+            unreachable!()
+        };
+        source.get().await
+    }
+}
+
 /// Opens ORC for record-batch reading; errors for other file types.
 pub fn read_to_record_batches(args: &ReadArgs) -> Result<ReadResult> {
     match args.file_type {
@@ -152,67 +199,34 @@ pub fn read_to_record_batches(args: &ReadArgs) -> Result<ReadResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::Producer as _;
 
     #[tokio::test]
-    async fn test_read_parquet() {
-        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        source.get().await.expect("expected DataFrame");
-    }
-
-    #[tokio::test]
-    async fn test_read_avro() {
-        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_read_csv() {
-        let args = ReadArgs::new("fixtures/table.csv", FileType::Csv);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_read_json() {
-        let args = ReadArgs::new("fixtures/table.json", FileType::Json);
-        let result = read(&args).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(matches!(result, ReadResult::DataFrame(_)));
-        let ReadResult::DataFrame(mut source) = result else {
-            panic!("expected DataFrame");
-        };
-        assert!(source.get().await.is_ok());
+    async fn test_read_datafusion_formats_yield_dataframe() {
+        let cases = [
+            ("fixtures/table.parquet", FileType::Parquet),
+            ("fixtures/userdata5.avro", FileType::Avro),
+            ("fixtures/table.csv", FileType::Csv),
+            ("fixtures/table.json", FileType::Json),
+        ];
+        for (path, file_type) in cases {
+            let args = ReadArgs::new(path, file_type);
+            let result = read(&args)
+                .await
+                .unwrap_or_else(|e| panic!("read {path} ({file_type}): {e}"));
+            let ReadResult::DataFrame(mut source) = result else {
+                panic!("expected DataFrame for {path}, got {result:?}");
+            };
+            source
+                .get()
+                .await
+                .unwrap_or_else(|e| panic!("get DataFrame {path}: {e}"));
+        }
     }
 
     #[tokio::test]
     async fn test_read_orc() {
         let args = ReadArgs::new("fixtures/userdata.orc", FileType::Orc);
-        let result = read(&args).await;
-        println!("result: {:?}", result);
-        assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = read(&args).await.expect("read ORC");
         assert!(matches!(result, ReadResult::OrcReaderBuilder(_)));
     }
 }

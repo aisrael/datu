@@ -15,51 +15,16 @@ use parquet::schema::types::ColumnDescriptor;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
-use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::RecordBatchReaderSource;
 use crate::pipeline::Step;
 use crate::pipeline::read::ReadArgs;
-use crate::pipeline::read::ReadResult;
 use crate::pipeline::read::expect_file_type;
-use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::record_batch::BatchWriteSink;
 use crate::pipeline::record_batch::write_record_batches_with_sink;
 use crate::pipeline::schema::SchemaField;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteResult;
-
-/// Pipeline step that reads a Parquet file into a DataFusion [`DataFrame`].
-pub struct DataframeParquetReader {
-    pub(crate) args: ReadArgs,
-}
-
-#[async_trait(?Send)]
-impl Step for DataframeParquetReader {
-    type Input = ();
-    type Output = DataFrameSource;
-
-    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let result =
-            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
-        let ReadResult::DataFrame(source) = result else {
-            unreachable!()
-        };
-        Ok(source)
-    }
-}
-
-#[async_trait(?Send)]
-impl Producer<DataFrame> for DataframeParquetReader {
-    async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let result =
-            read_to_dataframe(&self.args.path, FileType::Parquet, self.args.csv_has_header).await?;
-        let ReadResult::DataFrame(mut source) = result else {
-            unreachable!()
-        };
-        source.get().await
-    }
-}
 
 /// Pipeline step that writes a [`DataFrame`] to Parquet.
 pub struct DataframeParquetWriter {
@@ -79,8 +44,8 @@ impl Step for DataframeParquetWriter {
     }
 }
 
-/// Pipeline step that reads a Parquet file and produces a record batch reader.
-/// TODO: Deprecate this and use Dataframe
+/// Parquet input for the record-batch pipeline ([`crate::pipeline::build_reader`]): uses the native
+/// Arrow Parquet reader so `offset` / `limit` apply without loading the file through DataFusion first.
 pub struct RecordBatchParquetReader {
     pub args: ReadArgs,
 }
@@ -226,6 +191,7 @@ mod tests {
 
     use super::*;
     use crate::FileType;
+    use crate::pipeline::DataframeParquetReader;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_parque_step_dataframe() {

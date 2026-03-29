@@ -8,15 +8,15 @@ use eyre::Result;
 /// The `datu count` command. Uses metadata for Parquet and ORC (no data read);
 /// streams batches for Avro and CSV.
 pub async fn count(args: CountArgs) -> Result<()> {
-    resolve_file_type(args.input, &args.input_path).map_err(eyre::Report::from)?;
+    resolve_file_type(args.input, &args.input_path)?;
     let mut builder = PipelineBuilder::new();
     builder
         .read(&args.input_path)
         .input_type(args.input)
         .csv_has_header(args.input_headers)
         .row_count();
-    let mut built = builder.build().map_err(eyre::Report::from)?;
-    built.execute().map_err(eyre::Report::from)
+    let mut pipeline = builder.build()?;
+    Ok(pipeline.execute()?)
 }
 
 #[cfg(test)]

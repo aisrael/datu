@@ -32,10 +32,9 @@ pub struct Repl {
 }
 
 enum ReadlineResult {
-    Empty,
+    Continue,
     Line(String),
     Eof,
-    Interrupt,
 }
 
 impl Repl {
@@ -80,15 +79,14 @@ impl Repl {
     async fn repl_loop(&mut self) -> eyre::Result<()> {
         loop {
             match self.readline()? {
-                ReadlineResult::Empty => continue,
+                ReadlineResult::Continue => continue,
                 ReadlineResult::Line(line) => self.handle_line(&line).await,
                 ReadlineResult::Eof => break Ok(()),
-                ReadlineResult::Interrupt => continue,
             }
         }
     }
 
-    /// Reads a line of input from the editor and returns a result.
+    /// Prints a prompt and reads a line of input from the editor and returns a result.
     fn readline(&mut self) -> eyre::Result<ReadlineResult> {
         let prompt = if self.statement_incomplete {
             "|> "
@@ -99,13 +97,13 @@ impl Repl {
             Ok(line) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
-                    Ok(ReadlineResult::Empty)
+                    Ok(ReadlineResult::Continue)
                 } else {
                     Ok(ReadlineResult::Line(trimmed.to_string()))
                 }
             }
             Err(ReadlineError::Eof) => Ok(ReadlineResult::Eof),
-            Err(ReadlineError::Interrupted) => Ok(ReadlineResult::Interrupt),
+            Err(ReadlineError::Interrupted) => Ok(ReadlineResult::Continue),
             Err(e) => Err(e.into()),
         }
     }

@@ -7,7 +7,7 @@ use rustyline::Config;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
-use super::pipeline::ReplPipelinePlanner;
+use super::pipeline::ReplPipeline;
 
 /// Maximum number of inputs to keep in REPL history.
 const REPL_HISTORY_DEPTH: usize = 1000;
@@ -15,7 +15,14 @@ const REPL_HISTORY_DEPTH: usize = 1000;
 /// Interactive REPL with its own line editor, history, and pipeline state.
 pub struct Repl {
     editor: DefaultEditor,
-    pipeline: ReplPipelinePlanner,
+    pipeline: ReplPipeline,
+}
+
+enum ReadlineResult {
+    Empty,
+    Line(String),
+    Eof,
+    Interrupt,
 }
 
 impl Repl {
@@ -29,7 +36,7 @@ impl Repl {
         let _ = load_repl_history(&mut editor);
         Ok(Self {
             editor,
-            pipeline: ReplPipelinePlanner::new(),
+            pipeline: ReplPipeline::default(),
         })
     }
 
@@ -43,48 +50,64 @@ impl Repl {
     /// The main REPL loop.
     async fn repl_loop(&mut self) -> eyre::Result<()> {
         loop {
-            let prompt = if self.pipeline.statement_incomplete {
-                "|> "
-            } else {
-                "> "
-            };
-            let line = match self.editor.readline(prompt) {
-                Ok(line) => line,
-                Err(ReadlineError::Eof) => break Ok(()),
-                Err(ReadlineError::Interrupted) => continue,
-                Err(e) => return Err(e.into()),
-            };
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+            match self.readline()? {
+                ReadlineResult::Empty => continue,
+                ReadlineResult::Line(line) => self.handle_line(&line).await,
+                ReadlineResult::Eof => break Ok(()),
+                ReadlineResult::Interrupt => continue,
             }
-            match parse_expr(line) {
-                Ok((remainder, expr)) => {
-                    let remainder = remainder.trim();
-                    if remainder.is_empty() {
-                        match self.pipeline.eval_incremental(expr) {
-                            Ok(Some(pipeline)) => {
-                                let stages: Vec<String> =
-                                    pipeline.iter().map(|s| s.to_string()).collect();
-                                println!("Pipeline: {}", stages.join(" |> "));
-                                if let Err(e) = self.pipeline.execute_pipeline(pipeline).await {
-                                    eprintln!("error: {e}");
-                                }
+        }
+    }
+
+    /// Handles a line of input in the REPL
+    async fn handle_line(&mut self, line: &str) {
+        match parse_expr(line) {
+            Ok((remainder, expr)) => {
+                let remainder = remainder.trim();
+                if remainder.is_empty() {
+                    match self.pipeline.eval_incremental(expr) {
+                        Ok(Some(pipeline)) => {
+                            let stages: Vec<String> =
+                                pipeline.iter().map(|s| s.to_string()).collect();
+                            println!("Pipeline: {}", stages.join(" |> "));
+                            if let Err(e) = self.pipeline.execute_pipeline(pipeline).await {
+                                eprintln!("error: {e}");
                             }
-                            Ok(None) => {}
-                            Err(e) => eprintln!("error: {e}"),
                         }
-                    } else {
-                        eprintln!(
-                            "parse error: unexpected input after expression: {:?}",
-                            remainder
-                        );
+                        Ok(None) => {}
+                        Err(e) => eprintln!("error: {e}"),
                     }
-                }
-                Err(e) => {
-                    eprintln!("parse error: {:?}", e);
+                } else {
+                    eprintln!(
+                        "parse error: unexpected input after expression: {:?}",
+                        remainder
+                    );
                 }
             }
+            Err(e) => {
+                eprintln!("parse error: {:?}", e);
+            }
+        }
+    }
+
+    fn readline(&mut self) -> eyre::Result<ReadlineResult> {
+        let prompt = if self.pipeline.statement_incomplete {
+            "|> "
+        } else {
+            "> "
+        };
+        match self.editor.readline(prompt) {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    Ok(ReadlineResult::Empty)
+                } else {
+                    Ok(ReadlineResult::Line(trimmed.to_string()))
+                }
+            }
+            Err(ReadlineError::Eof) => Ok(ReadlineResult::Eof),
+            Err(ReadlineError::Interrupted) => Ok(ReadlineResult::Interrupt),
+            Err(e) => Err(e.into()),
         }
     }
 }

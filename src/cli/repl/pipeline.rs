@@ -13,21 +13,14 @@ use crate::Error;
 use crate::cli::DisplayOutputFormat;
 
 /// A general REPL pipeline planner.
-pub struct ReplPipelinePlanner {
+#[derive(Default)]
+pub struct ReplPipeline {
     pub statement_incomplete: bool,
     /// Accumulated expressions until a terminal stage (test assertions).
     pub(crate) pending_exprs: Vec<Expr>,
 }
 
-impl ReplPipelinePlanner {
-    /// Creates an empty pipeline (output path tracked after `write` only).
-    pub fn new() -> Self {
-        Self {
-            statement_incomplete: false,
-            pending_exprs: Vec::new(),
-        }
-    }
-
+impl ReplPipeline {
     /// Constructs a pipeline from a datu REPL expression. Does not execute it.
     pub fn eval(&mut self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
         match expr {

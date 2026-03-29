@@ -6,7 +6,7 @@ use crate::pipeline::ColumnSpec;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
-pub enum PipelineStage {
+pub enum ReplPipelineStage {
     Read { path: String },
     Select { columns: Vec<ColumnSpec> },
     Head { n: usize },
@@ -18,17 +18,17 @@ pub enum PipelineStage {
     Print,
 }
 
-impl PipelineStage {
+impl ReplPipelineStage {
     /// Returns true when a stage closes a REPL statement.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            PipelineStage::Head { .. }
-                | PipelineStage::Tail { .. }
-                | PipelineStage::Sample { .. }
-                | PipelineStage::Schema
-                | PipelineStage::Count
-                | PipelineStage::Write { .. }
+            ReplPipelineStage::Head { .. }
+                | ReplPipelineStage::Tail { .. }
+                | ReplPipelineStage::Sample { .. }
+                | ReplPipelineStage::Schema
+                | ReplPipelineStage::Count
+                | ReplPipelineStage::Write { .. }
         )
     }
 
@@ -38,21 +38,21 @@ impl PipelineStage {
     }
 
     /// Returns any implicit stage that should be appended after this stage.
-    pub fn get_implicit_followup_stage(&self) -> Option<PipelineStage> {
+    pub fn get_implicit_followup_stage(&self) -> Option<ReplPipelineStage> {
         match self {
-            PipelineStage::Head { .. }
-            | PipelineStage::Tail { .. }
-            | PipelineStage::Sample { .. } => Some(PipelineStage::Print),
+            ReplPipelineStage::Head { .. }
+            | ReplPipelineStage::Tail { .. }
+            | ReplPipelineStage::Sample { .. } => Some(ReplPipelineStage::Print),
             _ => None,
         }
     }
 }
 
-impl fmt::Display for PipelineStage {
+impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
-            PipelineStage::Select { columns } => {
+            ReplPipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            ReplPipelineStage::Select { columns } => {
                 let cols: Vec<String> = columns
                     .iter()
                     .map(|c| match c {
@@ -62,13 +62,13 @@ impl fmt::Display for PipelineStage {
                     .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))
             }
-            PipelineStage::Head { n } => write!(f, "head({n})"),
-            PipelineStage::Tail { n } => write!(f, "tail({n})"),
-            PipelineStage::Sample { n } => write!(f, "sample({n})"),
-            PipelineStage::Schema => write!(f, "schema()"),
-            PipelineStage::Count => write!(f, "count()"),
-            PipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
-            PipelineStage::Print => write!(f, "print()"),
+            ReplPipelineStage::Head { n } => write!(f, "head({n})"),
+            ReplPipelineStage::Tail { n } => write!(f, "tail({n})"),
+            ReplPipelineStage::Sample { n } => write!(f, "sample({n})"),
+            ReplPipelineStage::Schema => write!(f, "schema()"),
+            ReplPipelineStage::Count => write!(f, "count()"),
+            ReplPipelineStage::Write { path } => write!(f, r#"write("{path}")"#),
+            ReplPipelineStage::Print => write!(f, "print()"),
         }
     }
 }

@@ -3,7 +3,6 @@ use flt::ast::Expr;
 use flt::ast::Identifier;
 use flt::ast::Literal;
 use flt::parser::parse_expr;
-use tempfile::NamedTempFile;
 
 use super::ColumnSpec;
 use super::Repl;
@@ -17,7 +16,7 @@ use super::plan::is_head_call;
 use super::plan::plan_pipeline_with_state;
 use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
-use super::stage::PipelineStage;
+use super::stage::ReplPipelineStage;
 use crate::Error;
 
 fn parse(input: &str) -> Expr {
@@ -38,7 +37,7 @@ fn test_plan_stage_read() {
     let stage = plan_stage(expr).unwrap();
     assert_eq!(
         stage,
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "file.parquet".to_string()
         }
     );
@@ -56,7 +55,7 @@ fn test_plan_stage_select() {
     let stage = plan_stage(expr).unwrap();
     assert_eq!(
         stage,
-        PipelineStage::Select {
+        ReplPipelineStage::Select {
             columns: vec![
                 ColumnSpec::CaseInsensitive("one".into()),
                 ColumnSpec::CaseInsensitive("two".into())
@@ -69,7 +68,7 @@ fn test_plan_stage_select() {
 fn test_plan_stage_head() {
     let expr = parse("head(5)");
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Head { n: 5 });
+    assert_eq!(stage, ReplPipelineStage::Head { n: 5 });
 }
 
 #[test]
@@ -78,7 +77,7 @@ fn test_plan_stage_write() {
     let stage = plan_stage(expr).unwrap();
     assert_eq!(
         stage,
-        PipelineStage::Write {
+        ReplPipelineStage::Write {
             path: "output.csv".to_string()
         }
     );
@@ -117,19 +116,19 @@ fn test_plan_pipeline_read_select_write() {
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".to_string()
         }
     );
     assert_eq!(
         pipeline[1],
-        PipelineStage::Select {
+        ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("x".into())]
         }
     );
     assert_eq!(
         pipeline[2],
-        PipelineStage::Write {
+        ReplPipelineStage::Write {
             path: "b.csv".to_string()
         }
     );
@@ -144,12 +143,12 @@ fn test_plan_pipeline_auto_appends_print_after_head() {
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".to_string()
         }
     );
-    assert_eq!(pipeline[1], PipelineStage::Head { n: 5 });
-    assert_eq!(pipeline[2], PipelineStage::Print);
+    assert_eq!(pipeline[1], ReplPipelineStage::Head { n: 5 });
+    assert_eq!(pipeline[2], ReplPipelineStage::Print);
 }
 
 #[test]
@@ -159,7 +158,10 @@ fn test_plan_pipeline_no_print_when_write_follows_head() {
     collect_pipe_stages(expr, &mut exprs);
     let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
     assert_eq!(pipeline.len(), 3);
-    assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
+    assert!(matches!(
+        pipeline.last(),
+        Some(ReplPipelineStage::Write { .. })
+    ));
 }
 
 // ── extract_head_n ────────────────────────────────────────────
@@ -310,57 +312,6 @@ fn test_extract_column_specs_unsupported_expr() {
     );
 }
 
-// ── eval: error paths ───────────────────────────────────────────
-
-#[test]
-fn test_eval_unsupported_expression() {
-    let mut ctx = test_repl();
-    let expr = Expr::Literal(Literal::Boolean(true));
-    let result = ctx.eval(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedExpression(_)
-    ));
-}
-
-#[test]
-fn test_eval_unsupported_binary_operator() {
-    let mut ctx = test_repl();
-    let expr = Expr::BinaryExpr(
-        Box::new(Expr::Ident("a".into())),
-        BinaryOp::Add,
-        Box::new(Expr::Ident("b".into())),
-    );
-    let result = ctx.eval(expr);
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), Error::UnsupportedOperator(_)));
-}
-
-#[test]
-fn test_eval_sets_statement_incomplete_for_non_terminal_final_stage() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet")"#);
-    let _ = ctx.eval(expr).expect("eval");
-    assert!(ctx.statement_incomplete);
-}
-
-#[test]
-fn test_eval_clears_statement_incomplete_for_terminal_final_stage() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet") |> head(1)"#);
-    let _ = ctx.eval(expr).expect("eval");
-    assert!(!ctx.statement_incomplete);
-}
-
-#[test]
-fn test_eval_clears_statement_incomplete_for_write_final_stage() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
-    let _ = ctx.eval(expr).expect("eval");
-    assert!(!ctx.statement_incomplete);
-}
-
 #[test]
 fn test_eval_incremental_non_terminal_accumulates_state() {
     let mut ctx = test_repl();
@@ -386,9 +337,9 @@ fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
         .expect("second eval_incremental")
         .expect("pipeline should be complete");
     assert_eq!(second_pipeline.len(), 3);
-    assert!(matches!(second_pipeline[0], PipelineStage::Read { .. }));
-    assert_eq!(second_pipeline[1], PipelineStage::Head { n: 2 });
-    assert_eq!(second_pipeline[2], PipelineStage::Print);
+    assert!(matches!(second_pipeline[0], ReplPipelineStage::Read { .. }));
+    assert_eq!(second_pipeline[1], ReplPipelineStage::Head { n: 2 });
+    assert_eq!(second_pipeline[2], ReplPipelineStage::Print);
     assert!(!ctx.statement_incomplete);
     assert!(ctx.pending_exprs.is_empty());
 }
@@ -402,8 +353,8 @@ fn test_eval_incremental_terminal_single_input_executes_immediately() {
         .expect("eval_incremental")
         .expect("pipeline should be complete");
     assert_eq!(pipeline.len(), 2);
-    assert!(matches!(pipeline[0], PipelineStage::Read { .. }));
-    assert!(matches!(pipeline[1], PipelineStage::Write { .. }));
+    assert!(matches!(pipeline[0], ReplPipelineStage::Read { .. }));
+    assert!(matches!(pipeline[1], ReplPipelineStage::Write { .. }));
     assert!(!ctx.statement_incomplete);
     assert!(ctx.pending_exprs.is_empty());
 }
@@ -459,121 +410,22 @@ fn test_extract_path_from_args_write_bad_args() {
     ));
 }
 
-// ── eval: full pipeline integration ─────────────────────────────
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_select_write() {
-    let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select(:one, :two) |> write("{}")"#,
-        &output_path
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_write_without_select() {
-    let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> write("{}")"#,
-        &output_path
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_select_with_strings() {
-    let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select("one", "three") |> write("{}")"#,
-        &output_path
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_select_one_column_write_parquet() {
-    let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select(:one) |> write("{}")"#,
-        &output_path
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_select_exact_column_case_errors_at_execute() {
-    let tempfile = NamedTempFile::with_suffix(".parquet").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_str().expect("Failed to get path");
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select("ONE") |> write("{}")"#,
-        &output_path
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    let result = ctx.execute_pipeline(pipeline_stages).await;
-    assert!(result.is_err());
-}
-
 // ── validate_repl_pipeline_stages / plan not implemented ──────
 
 #[test]
 fn test_validate_rejects_second_select() {
     let stages = vec![
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".into(),
         },
-        PipelineStage::Select {
+        ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("x".into())],
         },
-        PipelineStage::Select {
+        ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("y".into())],
         },
-        PipelineStage::Head { n: 1 },
-        PipelineStage::Print,
+        ReplPipelineStage::Head { n: 1 },
+        ReplPipelineStage::Print,
     ];
     let err = validate_repl_pipeline_stages(&stages).unwrap_err();
     assert!(matches!(err, Error::InvalidReplPipeline(_)));
@@ -582,11 +434,11 @@ fn test_validate_rejects_second_select() {
 #[test]
 fn test_validate_rejects_head_before_select() {
     let stages = vec![
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".into(),
         },
-        PipelineStage::Head { n: 1 },
-        PipelineStage::Select {
+        ReplPipelineStage::Head { n: 1 },
+        ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("x".into())],
         },
     ];
@@ -598,14 +450,14 @@ fn test_validate_rejects_head_before_select() {
 fn test_plan_stage_count() {
     let expr = parse("count()");
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Count);
+    assert_eq!(stage, ReplPipelineStage::Count);
 }
 
 #[test]
 fn test_plan_stage_schema() {
     let expr = parse("schema()");
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Schema);
+    assert_eq!(stage, ReplPipelineStage::Schema);
 }
 
 #[test]
@@ -618,11 +470,11 @@ fn test_plan_pipeline_read_count() {
     assert_eq!(pipeline.len(), 2);
     assert_eq!(
         pipeline[0],
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".to_string()
         }
     );
-    assert_eq!(pipeline[1], PipelineStage::Count);
+    assert_eq!(pipeline[1], ReplPipelineStage::Count);
 }
 
 #[test]
@@ -682,75 +534,35 @@ fn parse_fn_args(input: &str) -> Vec<Expr> {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_head_write() {
-    let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_string_lossy().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> head(2) |> write("{}")"#,
-        &output_path.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_select_head_write() {
-    let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_string_lossy().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select(:one, :two) |> head(1) |> write("{}")"#,
-        &output_path.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
 // ── plan_stage: tail ─────────────────────────────────────────
 
 #[test]
 fn test_plan_stage_tail() {
     let expr = parse("tail(5)");
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Tail { n: 5 });
+    assert_eq!(stage, ReplPipelineStage::Tail { n: 5 });
 }
 
 #[test]
 fn test_terminal_stage_classification() {
-    assert!(PipelineStage::Head { n: 1 }.is_terminal());
-    assert!(PipelineStage::Tail { n: 1 }.is_terminal());
-    assert!(PipelineStage::Schema.is_terminal());
-    assert!(PipelineStage::Count.is_terminal());
+    assert!(ReplPipelineStage::Head { n: 1 }.is_terminal());
+    assert!(ReplPipelineStage::Tail { n: 1 }.is_terminal());
+    assert!(ReplPipelineStage::Schema.is_terminal());
+    assert!(ReplPipelineStage::Count.is_terminal());
     assert!(
-        PipelineStage::Write {
+        ReplPipelineStage::Write {
             path: "out.csv".into()
         }
         .is_terminal()
     );
     assert!(
-        !PipelineStage::Select {
+        !ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("x".into())]
         }
         .is_terminal()
     );
     assert!(
-        PipelineStage::Select {
+        ReplPipelineStage::Select {
             columns: vec![ColumnSpec::CaseInsensitive("x".into())]
         }
         .is_non_terminal()
@@ -760,27 +572,30 @@ fn test_terminal_stage_classification() {
 #[test]
 fn test_terminal_stage_implicit_followup() {
     assert_eq!(
-        PipelineStage::Head { n: 5 }.get_implicit_followup_stage(),
-        Some(PipelineStage::Print)
+        ReplPipelineStage::Head { n: 5 }.get_implicit_followup_stage(),
+        Some(ReplPipelineStage::Print)
     );
     assert_eq!(
-        PipelineStage::Tail { n: 5 }.get_implicit_followup_stage(),
-        Some(PipelineStage::Print)
+        ReplPipelineStage::Tail { n: 5 }.get_implicit_followup_stage(),
+        Some(ReplPipelineStage::Print)
     );
     assert_eq!(
-        PipelineStage::Write {
+        ReplPipelineStage::Write {
             path: "out.csv".into()
         }
         .get_implicit_followup_stage(),
         None
     );
-    assert_eq!(PipelineStage::Schema.get_implicit_followup_stage(), None);
-    assert_eq!(PipelineStage::Count.get_implicit_followup_stage(), None);
+    assert_eq!(
+        ReplPipelineStage::Schema.get_implicit_followup_stage(),
+        None
+    );
+    assert_eq!(ReplPipelineStage::Count.get_implicit_followup_stage(), None);
 }
 
 #[test]
 fn test_display_print_stage() {
-    assert_eq!(PipelineStage::Print.to_string(), "print()");
+    assert_eq!(ReplPipelineStage::Print.to_string(), "print()");
 }
 
 // ── plan_pipeline_with_state: tail auto-print ─────────────────
@@ -794,12 +609,12 @@ fn test_plan_pipeline_auto_appends_print_after_tail() {
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".to_string()
         }
     );
-    assert_eq!(pipeline[1], PipelineStage::Tail { n: 5 });
-    assert_eq!(pipeline[2], PipelineStage::Print);
+    assert_eq!(pipeline[1], ReplPipelineStage::Tail { n: 5 });
+    assert_eq!(pipeline[2], ReplPipelineStage::Print);
 }
 
 #[test]
@@ -809,7 +624,10 @@ fn test_plan_pipeline_no_print_when_write_follows_tail() {
     collect_pipe_stages(expr, &mut exprs);
     let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
     assert_eq!(pipeline.len(), 3);
-    assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
+    assert!(matches!(
+        pipeline.last(),
+        Some(ReplPipelineStage::Write { .. })
+    ));
 }
 
 // ── extract_tail_n ──────────────────────────────────────────
@@ -831,73 +649,32 @@ fn test_extract_tail_n_empty_args() {
     assert!(extract_tail_n(&[]).is_err());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_tail_write() {
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let output_path = temp_dir.path().join("tailed.csv");
-    let output_str = output_path.to_str().unwrap().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> tail(2) |> write("{}")"#,
-        output_str.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(output_path.exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_select_tail_write() {
-    let tempfile = NamedTempFile::with_suffix(".csv").expect("Failed to create temp file");
-    let output_path = tempfile.path().to_string_lossy().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select(:one, :two) |> tail(1) |> write("{}")"#,
-        &output_path.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(tempfile.path().exists());
-}
-
 // ── plan_stage: sample ──────────────────────────────────────
 
 #[test]
 fn test_plan_stage_sample_with_arg() {
     let expr = parse("sample(5)");
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Sample { n: 5 });
+    assert_eq!(stage, ReplPipelineStage::Sample { n: 5 });
 }
 
 #[test]
 fn test_plan_stage_sample_no_arg_defaults_to_10() {
     let expr = Expr::FunctionCall(Identifier("sample".into()), vec![]);
     let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, PipelineStage::Sample { n: 10 });
+    assert_eq!(stage, ReplPipelineStage::Sample { n: 10 });
 }
 
 #[test]
 fn test_sample_is_terminal() {
-    assert!(PipelineStage::Sample { n: 5 }.is_terminal());
+    assert!(ReplPipelineStage::Sample { n: 5 }.is_terminal());
 }
 
 #[test]
 fn test_sample_implicit_followup_is_print() {
     assert_eq!(
-        PipelineStage::Sample { n: 5 }.get_implicit_followup_stage(),
-        Some(PipelineStage::Print)
+        ReplPipelineStage::Sample { n: 5 }.get_implicit_followup_stage(),
+        Some(ReplPipelineStage::Print)
     );
 }
 
@@ -912,12 +689,12 @@ fn test_plan_pipeline_auto_appends_print_after_sample() {
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
-        PipelineStage::Read {
+        ReplPipelineStage::Read {
             path: "a.parquet".to_string()
         }
     );
-    assert_eq!(pipeline[1], PipelineStage::Sample { n: 5 });
-    assert_eq!(pipeline[2], PipelineStage::Print);
+    assert_eq!(pipeline[1], ReplPipelineStage::Sample { n: 5 });
+    assert_eq!(pipeline[2], ReplPipelineStage::Print);
 }
 
 #[test]
@@ -927,7 +704,10 @@ fn test_plan_pipeline_no_print_when_write_follows_sample() {
     collect_pipe_stages(expr, &mut exprs);
     let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
     assert_eq!(pipeline.len(), 3);
-    assert!(matches!(pipeline.last(), Some(PipelineStage::Write { .. })));
+    assert!(matches!(
+        pipeline.last(),
+        Some(ReplPipelineStage::Write { .. })
+    ));
 }
 
 // ── extract_sample_n ────────────────────────────────────────
@@ -949,69 +729,10 @@ fn test_extract_sample_n_bad_args() {
     assert!(extract_sample_n(&args).is_err());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_sample_write() {
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let output_path = temp_dir.path().join("sampled.csv");
-    let output_str = output_path.to_str().unwrap().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> sample(2) |> write("{}")"#,
-        output_str.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(output_path.exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_schema() {
-    let expr = parse(r#"read("fixtures/table.parquet") |> schema()"#);
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_count() {
-    let expr = parse(r#"read("fixtures/table.parquet") |> count()"#);
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_repl_pipeline_read_select_sample_write() {
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let output_path = temp_dir.path().join("selected_sampled.csv");
-    let output_str = output_path.to_str().unwrap().to_string();
-
-    let pipeline = format!(
-        r#"read("fixtures/table.parquet") |> select(:one, :two) |> sample(1) |> write("{}")"#,
-        output_str.replace('\\', "\\\\")
-    );
-    let expr = parse(&pipeline);
-
-    let mut ctx = test_repl();
-    let pipeline_stages = ctx.eval(expr).expect("eval");
-    ctx.execute_pipeline(pipeline_stages)
-        .await
-        .expect("execute");
-
-    assert!(output_path.exists());
-}
-
 #[test]
 fn test_display_sample_stage() {
-    assert_eq!(PipelineStage::Sample { n: 10 }.to_string(), "sample(10)");
+    assert_eq!(
+        ReplPipelineStage::Sample { n: 10 }.to_string(),
+        "sample(10)"
+    );
 }

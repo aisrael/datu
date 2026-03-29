@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(test)]
-use flt::ast::BinaryOp;
 use flt::ast::Expr;
 use flt::parser::parse_expr;
 use rustyline::Config;
@@ -15,9 +13,7 @@ use super::plan::collect_pipe_stages;
 use super::plan::is_terminal_expr;
 use super::plan::plan_pipeline_with_state;
 use super::plan::validate_repl_pipeline_stages;
-use super::stage::PipelineStage;
-#[cfg(test)]
-use crate::Error;
+use super::stage::ReplPipelineStage;
 use crate::cli::DisplayOutputFormat;
 
 /// Maximum number of inputs to keep in REPL history.
@@ -139,54 +135,12 @@ impl Repl {
         }
     }
 
-    /// Constructs a pipeline from a datu REPL expression. Does not execute it.
-    #[cfg(test)]
-    pub(crate) fn eval(&mut self, expr: Expr) -> crate::Result<Vec<PipelineStage>> {
-        match expr {
-            Expr::BinaryExpr(left, op, right) => self.eval_binary_expr(left, op, right),
-            Expr::FunctionCall(name, args) => self.eval_exprs(vec![Expr::FunctionCall(name, args)]),
-            _ => Err(Error::UnsupportedExpression(expr.to_string())),
-        }
-    }
-
-    /// Evaluates a binary expression to a pipeline.
-    #[cfg(test)]
-    #[allow(clippy::boxed_local)]
-    fn eval_binary_expr(
-        &mut self,
-        left: Box<Expr>,
-        op: BinaryOp,
-        right: Box<Expr>,
-    ) -> crate::Result<Vec<PipelineStage>> {
-        match op {
-            BinaryOp::Pipe => {
-                // Flatten nested `|>` into a single ordered list (e.g. `a |> b |> c` is parsed as a
-                // binary tree); each leaf becomes one pipeline stage for planning.
-                let mut exprs = Vec::new();
-                collect_pipe_stages(*left, &mut exprs);
-                collect_pipe_stages(*right, &mut exprs);
-                self.eval_exprs(exprs)
-            }
-            _ => Err(Error::UnsupportedOperator(op.to_string())),
-        }
-    }
-
-    #[cfg(test)]
-    fn eval_exprs(&mut self, exprs: Vec<Expr>) -> crate::Result<Vec<PipelineStage>> {
-        let (stages, statement_incomplete) = plan_pipeline_with_state(exprs)?;
-        self.statement_incomplete = statement_incomplete;
-        if !statement_incomplete {
-            validate_repl_pipeline_stages(&stages)?;
-        }
-        Ok(stages)
-    }
-
     /// Accumulates REPL input expressions until a terminal stage is reached.
     /// Returns a planned pipeline only when the accumulated statement is complete.
     pub(crate) fn eval_incremental(
         &mut self,
         expr: Expr,
-    ) -> crate::Result<Option<Vec<PipelineStage>>> {
+    ) -> crate::Result<Option<Vec<ReplPipelineStage>>> {
         let mut exprs = Vec::new();
         collect_pipe_stages(expr, &mut exprs);
         self.pending_exprs.extend(exprs);
@@ -206,7 +160,7 @@ impl Repl {
     /// Executes a planned pipeline via [`PipelineBuilder`] (same path as CLI `head` / `convert`).
     pub(crate) async fn execute_pipeline(
         &mut self,
-        stages: Vec<PipelineStage>,
+        stages: Vec<ReplPipelineStage>,
     ) -> crate::Result<()> {
         validate_repl_pipeline_stages(&stages)?;
         let mut builder = repl_stages_to_pipeline_builder(&stages)?;

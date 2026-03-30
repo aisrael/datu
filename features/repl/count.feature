@@ -6,3 +6,4 @@ Feature: Count
       read("fixtures/table.parquet") |> count()
       ```
     Then the command should succeed
+    And the output should contain "3"

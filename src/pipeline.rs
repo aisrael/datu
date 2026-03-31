@@ -17,7 +17,6 @@ pub use dataframe::DataframeSelect;
 pub use dataframe::DataframeTail;
 pub use dataframe::DataframeToRecordBatch;
 pub use json::DataframeJsonPrettyWriter;
-pub use json::DataframeJsonReader;
 pub use json::DataframeJsonWriter;
 pub use json::RecordBatchJsonWriter;
 pub use orc::OrcRecordBatchReader;

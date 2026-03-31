@@ -52,7 +52,7 @@ name = "parquet_to_avro"
 harness = false
 
 [[test]]
-name = "features"
+name = "cli"
 harness = false
 
 [[test]]

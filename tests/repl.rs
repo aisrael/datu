@@ -6,12 +6,24 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use cucumber::World;
+use cucumber::given;
 use cucumber::then;
 use cucumber::when;
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::SessionContext;
 use expectrl::Expect;
 use expectrl::session::OsSession;
 use gherkin::Step;
-use parquet::file::reader::FileReader;
+use tempfile::NamedTempFile;
+
+#[path = "common/assert_output.rs"]
+mod assert_output;
+#[path = "common/row_count.rs"]
+mod row_count;
+
+use assert_output::assert_output_contains;
+use row_count::get_row_count;
 
 const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
 
@@ -51,6 +63,31 @@ fn ensure_temp_dir(world: &mut ReplWorld) -> String {
         .to_str()
         .expect("Temp path is not valid UTF-8")
         .to_string()
+}
+
+#[given(regex = r#"^a Parquet file with the following data:$"#)]
+async fn a_parquet_file_with_the_following_data(world: &mut ReplWorld, step: &Step) {
+    let docstring = step.docstring.as_ref().expect("Step requires a docstring");
+    // Write the docstring to a temporary file
+    let csv_file = NamedTempFile::with_suffix(".csv").expect("Failed to create temporary file");
+    let csv_file_path = csv_file
+        .path()
+        .to_str()
+        .expect("Failed to get temporary file path");
+    std::fs::write(csv_file_path, docstring).expect("Failed to write to temporary file");
+
+    let temp_path = ensure_temp_dir(world);
+    let path = Path::new(&temp_path).join("input.parquet");
+    let path_str = path.to_str().expect("Temp path is not valid UTF-8");
+    let session = SessionContext::new();
+    let df = session
+        .read_csv(csv_file_path, CsvReadOptions::new())
+        .await
+        .expect("Failed to read CSV file");
+    df.write_parquet(path_str, DataFrameWriteOptions::default(), None)
+        .await
+        .expect("Failed to write Parquet file");
+    world.last_file = Some(path_str.to_string());
 }
 
 #[when(regex = r#"^datu is ran without a command$"#)]
@@ -110,6 +147,15 @@ fn command_should_succeed(world: &mut ReplWorld) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[then(regex = r#"^the output should contain "(.+)"$"#)]
+fn output_should_contain(world: &mut ReplWorld, expected: String) {
+    let output = world
+        .last_output
+        .as_ref()
+        .expect("No command output; use 'the REPL is ran and the user types' first");
+    assert_output_contains(output, &expected, world.temp_dir.as_ref());
 }
 
 #[then(regex = r#"^the output should be:$"#)]
@@ -221,22 +267,6 @@ fn that_file_should_be_valid_avro(world: &mut ReplWorld) {
     );
 }
 
-#[then(regex = r#"^that file should be a valid Parquet file$"#)]
-fn that_file_should_be_valid_parquet(world: &mut ReplWorld) {
-    let path = world
-        .last_file
-        .as_ref()
-        .expect("No file has been set; use 'the file \"...\" should exist' first");
-    let file = std::fs::File::open(path).expect("Failed to open file");
-    let reader = parquet::file::reader::SerializedFileReader::new(file)
-        .expect("Expected file to be valid Parquet, but reading failed");
-    let metadata = reader.metadata();
-    assert!(
-        !metadata.file_metadata().schema().get_fields().is_empty(),
-        "Expected Parquet file to have at least one column"
-    );
-}
-
 #[then(regex = r#"^that file should be valid ORC$"#)]
 fn that_file_should_be_valid_orc(world: &mut ReplWorld) {
     let path = world
@@ -298,61 +328,21 @@ fn that_file_should_have_n_lines(world: &mut ReplWorld, n: usize) {
 
 #[then(regex = r#"^that file should have (\d+) records$"#)]
 fn that_file_should_have_n_records(world: &mut ReplWorld, n: usize) {
-    use datu::FileType;
-
     let path = world
         .last_file
         .as_ref()
         .expect("No file has been set; use 'the file \"...\" should exist' first");
-    let file_type = FileType::try_from(path.as_str())
-        .unwrap_or_else(|e| panic!("Cannot determine file type for {path}: {e}"));
-    let row_count = match file_type {
-        FileType::Json => {
-            let content = std::fs::read_to_string(path).expect("Failed to read file");
-            let value: serde_json::Value =
-                serde_json::from_str(content.trim()).expect("Failed to parse JSON");
-            value
-                .as_array()
-                .expect("Expected JSON to be an array")
-                .len()
-        }
-        FileType::Parquet => {
-            let file = std::fs::File::open(path).expect("Failed to open file");
-            let reader = parquet::file::reader::SerializedFileReader::new(file)
-                .expect("Failed to read Parquet file");
-            reader
-                .metadata()
-                .row_groups()
-                .iter()
-                .map(|rg| rg.num_rows())
-                .sum::<i64>() as usize
-        }
-        FileType::Avro => {
-            let file = std::fs::File::open(path).expect("Failed to open file");
-            let reader = arrow_avro::reader::ReaderBuilder::new()
-                .build(BufReader::new(file))
-                .expect("Failed to read Avro file");
-            reader
-                .map(|batch| batch.expect("Failed to read Avro batch").num_rows())
-                .sum()
-        }
-        FileType::Orc => {
-            let file = std::fs::File::open(path).expect("Failed to open file");
-            let builder = orc_rust::arrow_reader::ArrowReaderBuilder::try_new(file)
-                .expect("Failed to read ORC file");
-            let reader = builder.build();
-            reader
-                .map(|batch| batch.expect("Failed to read ORC batch").num_rows())
-                .sum()
-        }
-        other => panic!("Unsupported format for record counting: {other:?}"),
-    };
+    let row_count = get_row_count(path);
     assert!(
         row_count == n,
         "Expected file {path} to have {n} records, but got {row_count}"
     );
 }
 
-fn main() {
-    futures::executor::block_on(ReplWorld::run("features/repl"));
+#[tokio::main]
+async fn main() {
+    ReplWorld::cucumber()
+        .fail_on_skipped()
+        .run_and_exit("features/repl")
+        .await;
 }

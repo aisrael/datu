@@ -11,12 +11,9 @@ use datafusion::prelude::DataFrame;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
-use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
-use crate::pipeline::read::ReadResult;
-use crate::pipeline::read::read_to_dataframe;
 use crate::pipeline::write::WriteArgs;
 use crate::pipeline::write::WriteJsonArgs;
 use crate::pipeline::write::write_record_batches_from_reader;
@@ -74,36 +71,6 @@ impl RecordBatchJsonWriter {
     pub fn write_to_path(&self, reader: &mut dyn RecordBatchReader, path: &str) -> Result<()> {
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
         self.write(reader, file)
-    }
-}
-
-/// Pipeline step that reads a JSON file and produces a DataFrame.
-pub struct DataframeJsonReader {
-    pub path: String,
-}
-
-#[async_trait(?Send)]
-impl Step for DataframeJsonReader {
-    type Input = ();
-    type Output = DataFrameSource;
-
-    async fn execute(self, _input: Self::Input) -> Result<Self::Output> {
-        let result = read_to_dataframe(&self.path, FileType::Json, None).await?;
-        let ReadResult::DataFrame(source) = result else {
-            unreachable!()
-        };
-        Ok(source)
-    }
-}
-
-#[async_trait(?Send)]
-impl Producer<DataFrame> for DataframeJsonReader {
-    async fn get(&mut self) -> Result<Box<DataFrame>> {
-        let result = read_to_dataframe(&self.path, FileType::Json, None).await?;
-        let ReadResult::DataFrame(mut source) = result else {
-            unreachable!()
-        };
-        source.get().await
     }
 }
 

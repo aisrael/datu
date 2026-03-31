@@ -9,18 +9,20 @@ use cucumber::when;
 use datu::utils;
 use gherkin::Step;
 
-const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
+mod common;
+
+use common::TEMPDIR_PLACEHOLDER;
+use common::assert_output_contains;
+use common::get_row_count;
+use common::replace_tempdir;
+use parquet::file::reader::FileReader as _;
 
 #[derive(Debug, Default, World)]
 pub struct CliWorld {
-    output: Option<std::process::Output>,
-    temp_dir: Option<tempfile::TempDir>,
+    pub output: Option<std::process::Output>,
+    pub temp_dir: Option<tempfile::TempDir>,
     /// Last file path used in a "the file \"...\" should exist" step (resolved).
-    last_file: Option<String>,
-}
-
-fn replace_tempdir(s: &str, temp_path: &str) -> String {
-    s.replace(TEMPDIR_PLACEHOLDER, temp_path)
+    pub last_file: Option<String>,
 }
 
 /// Accepts a single JSON document (e.g. an array from the display writer) or NDJSON from DataFusion
@@ -108,6 +110,12 @@ fn command_should_succeed(world: &mut CliWorld) {
     );
 }
 
+#[then(regex = r#"^the output should contain "(.+)"$"#)]
+fn output_should_contain(world: &mut CliWorld, expected: String) {
+    let output = world.output.as_ref().expect("No output captured");
+    assert_output_contains(output, &expected, world.temp_dir.as_ref());
+}
+
 #[then(regex = r#"^the first line of the output should be: (.+)$"#)]
 fn first_line_should_be(world: &mut CliWorld, expected: String) {
     let output = world.output.as_ref().expect("No output captured");
@@ -149,32 +157,6 @@ fn output_should_be_docstring(world: &mut CliWorld, step: &Step) {
         "Expected output to contain the given content, but it did not.\nExpected to find:\n---\n{}\n---\nActual output:\n---\n{}\n---",
         expected_trimmed,
         output_trimmed
-    );
-}
-
-#[then(regex = r#"^the output should contain "(.+)"$"#)]
-fn output_should_contain(world: &mut CliWorld, expected: String) {
-    let output = world.output.as_ref().expect("No output captured");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
-
-    let expected_resolved = if let Some(ref temp_dir) = world.temp_dir {
-        let temp_path = temp_dir
-            .path()
-            .to_str()
-            .expect("Temp path is not valid UTF-8");
-        replace_tempdir(&expected, temp_path)
-    } else {
-        expected
-    };
-
-    assert!(
-        combined.contains(&expected_resolved),
-        "Expected output to contain '{}', but got:\nstdout: {}\nstderr: {}",
-        expected_resolved,
-        stdout,
-        stderr
     );
 }
 
@@ -370,6 +352,22 @@ fn that_file_should_be_valid_yaml(world: &mut CliWorld) {
         .expect("Expected file to contain valid YAML, but parsing failed");
 }
 
+#[then(regex = r#"^that file should be a valid Parquet file$"#)]
+fn that_file_should_be_valid_parquet(world: &mut CliWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let file = std::fs::File::open(path).expect("Failed to open file");
+    let reader = parquet::file::reader::SerializedFileReader::new(file)
+        .expect("Expected file to be valid Parquet, but reading failed");
+    let metadata = reader.metadata();
+    assert!(
+        !metadata.file_metadata().schema().get_fields().is_empty(),
+        "Expected Parquet file to have at least one column"
+    );
+}
+
 #[then(regex = r#"^the file "(.+)" should contain:$"#)]
 fn file_should_contain_docstring(world: &mut CliWorld, path: String, step: &Step) {
     let expected = step
@@ -409,6 +407,19 @@ fn that_file_should_have_n_lines(world: &mut CliWorld, n: usize) {
     );
 }
 
+#[then(regex = r#"^that file should have (\d+) records$"#)]
+fn that_file_should_have_n_records(world: &mut CliWorld, n: usize) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    let row_count = get_row_count(path);
+    assert!(
+        row_count == n,
+        "Expected file {path} to have {n} records, but got {row_count}"
+    );
+}
+
 #[then(expr = "the file {string} should contain {string}")]
 fn the_file_should_contain(world: &mut CliWorld, s: String, s2: String) {
     let path_resolved = resolve_path(world, &s);
@@ -422,5 +433,9 @@ fn the_file_should_contain(world: &mut CliWorld, s: String, s2: String) {
 }
 
 fn main() {
-    futures::executor::block_on(CliWorld::run("features/cli"));
+    futures::executor::block_on(
+        CliWorld::cucumber()
+            .fail_on_skipped()
+            .run_and_exit("features/cli"),
+    );
 }

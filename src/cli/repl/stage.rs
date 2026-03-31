@@ -3,12 +3,14 @@
 use std::fmt;
 
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::SelectItem;
+use crate::pipeline::SelectSpec;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum ReplPipelineStage {
     Read { path: String },
-    Select { columns: Vec<ColumnSpec> },
+    Select { columns: Vec<SelectItem> },
     Head { n: usize },
     Tail { n: usize },
     Sample { n: usize },
@@ -18,18 +20,27 @@ pub enum ReplPipelineStage {
     Print,
 }
 
+fn select_spec_from_items(columns: &[SelectItem]) -> SelectSpec {
+    SelectSpec {
+        columns: columns.to_vec(),
+    }
+}
+
 impl ReplPipelineStage {
     /// Returns true when a stage closes a REPL statement.
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ReplPipelineStage::Head { .. }
-                | ReplPipelineStage::Tail { .. }
-                | ReplPipelineStage::Sample { .. }
-                | ReplPipelineStage::Schema
-                | ReplPipelineStage::Count
-                | ReplPipelineStage::Write { .. }
-        )
+            | ReplPipelineStage::Tail { .. }
+            | ReplPipelineStage::Sample { .. }
+            | ReplPipelineStage::Schema
+            | ReplPipelineStage::Count
+            | ReplPipelineStage::Write { .. } => true,
+            ReplPipelineStage::Select { columns } => {
+                select_spec_from_items(columns).is_aggregate_only()
+            }
+            ReplPipelineStage::Read { .. } | ReplPipelineStage::Print => false,
+        }
     }
 
     /// Returns true for stages that can continue to another explicit stage.
@@ -48,6 +59,13 @@ impl ReplPipelineStage {
     }
 }
 
+fn format_column_spec(c: &ColumnSpec) -> String {
+    match c {
+        ColumnSpec::Exact(s) => format!(r#""{s}""#),
+        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+    }
+}
+
 impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -55,9 +73,9 @@ impl fmt::Display for ReplPipelineStage {
             ReplPipelineStage::Select { columns } => {
                 let cols: Vec<String> = columns
                     .iter()
-                    .map(|c| match c {
-                        ColumnSpec::Exact(s) => format!(r#""{s}""#),
-                        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+                    .map(|item| match item {
+                        SelectItem::Column(c) => format_column_spec(c),
+                        SelectItem::Sum(c) => format!("sum({})", format_column_spec(c)),
                     })
                     .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))

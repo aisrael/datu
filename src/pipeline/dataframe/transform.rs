@@ -6,8 +6,10 @@ use std::sync::Arc;
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
+use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::DataFrame;
+use datafusion::prelude::col;
 use futures::StreamExt;
 
 use super::source::DataFrameSource;
@@ -15,6 +17,7 @@ use crate::Error;
 use crate::FileType;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
+use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::reservoir_sample_from_reader;
 use crate::pipeline::sample_from_reader;
@@ -121,6 +124,39 @@ pub async fn dataframe_apply_sample(
     }
 }
 
+/// Applies `select()` projection or global aggregates to a [`DataFrame`].
+pub(super) fn apply_select_spec_to_dataframe(
+    mut df: DataFrame,
+    spec: &SelectSpec,
+) -> crate::Result<DataFrame> {
+    if spec.is_empty() {
+        return Ok(df);
+    }
+    let schema = df.schema();
+    if spec.has_aggregates() {
+        if !spec.is_aggregate_only() {
+            return Err(Error::GenericError(
+                "mixed column projections and aggregates in select are not supported yet"
+                    .to_string(),
+            ));
+        }
+        let arrow_schema = schema.as_arrow();
+        let mut aggs = Vec::new();
+        for item in &spec.columns {
+            if let SelectItem::Sum(cs) = item {
+                let name = cs.resolve(arrow_schema)?;
+                aggs.push(sum(col(name.as_str())));
+            }
+        }
+        df = df.aggregate(vec![], aggs)?;
+    } else {
+        let resolved = spec.resolve_names(schema.as_arrow())?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+        df = df.select_columns(&col_refs)?;
+    }
+    Ok(df)
+}
+
 /// Applies optional column selection, SQL-style row limit, and display slice to a loaded [`DataFrame`].
 ///
 /// Used by `LegacyDataFrameReader` and `dataframe_pipeline_prepare_source` so read → project →
@@ -136,10 +172,7 @@ pub(super) async fn finalize_dataframe_source(
     if let Some(spec) = select
         && !spec.is_empty()
     {
-        let schema = df.schema();
-        let resolved = spec.resolve_names(schema.as_ref())?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df.select_columns(&col_refs)?;
+        df = apply_select_spec_to_dataframe(df, spec)?;
     }
     if let Some(n) = limit {
         df = dataframe_apply_head(df, n)?;

@@ -25,6 +25,15 @@ pub enum ColumnSpec {
     CaseInsensitive(String),
 }
 
+/// One entry in a `select()`: plain column or aggregate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SelectItem {
+    /// Project a column (CLI `--select`, REPL symbols/strings).
+    Column(ColumnSpec),
+    /// Global sum over one column (REPL `sum(:col)`).
+    Sum(ColumnSpec),
+}
+
 /// Macro to build a [`SelectSpec`] of [`ColumnSpec::Exact`] entries from column names.
 #[macro_export]
 macro_rules! select_spec {
@@ -32,7 +41,9 @@ macro_rules! select_spec {
         $crate::pipeline::SelectSpec {
             columns: vec![
                 $(
-                    $crate::pipeline::ColumnSpec::Exact($col.to_string())
+                    $crate::pipeline::SelectItem::Column(
+                        $crate::pipeline::ColumnSpec::Exact($col.to_string())
+                    )
                 ),+
             ],
         }
@@ -61,10 +72,17 @@ impl ColumnSpec {
     }
 }
 
-/// Column selection: ordered list of [`ColumnSpec`] entries (e.g. from CLI or REPL).
+impl SelectItem {
+    /// Returns true when this item is an aggregate (not a plain projection).
+    pub fn is_aggregate(&self) -> bool {
+        matches!(self, SelectItem::Sum(_))
+    }
+}
+
+/// Column selection: ordered list of items (projections and/or aggregates).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectSpec {
-    pub columns: Vec<ColumnSpec>,
+    pub columns: Vec<SelectItem>,
 }
 
 impl SelectSpec {
@@ -76,6 +94,16 @@ impl SelectSpec {
     /// Returns the number of columns in the selection.
     pub fn len(&self) -> usize {
         self.columns.len()
+    }
+
+    /// True if any entry is an aggregate (`sum`, etc.).
+    pub fn has_aggregates(&self) -> bool {
+        self.columns.iter().any(SelectItem::is_aggregate)
+    }
+
+    /// True when every entry is an aggregate (global aggregation, no plain columns).
+    pub fn is_aggregate_only(&self) -> bool {
+        !self.columns.is_empty() && self.columns.iter().all(SelectItem::is_aggregate)
     }
 
     /// Parses CLI `--select` values from `Option<Vec<String>>`: splits each string on commas,
@@ -90,7 +118,7 @@ impl SelectSpec {
                 if c.is_empty() {
                     None
                 } else {
-                    Some(ColumnSpec::Exact(c.to_string()))
+                    Some(SelectItem::Column(ColumnSpec::Exact(c.to_string())))
                 }
             }));
         }
@@ -101,15 +129,24 @@ impl SelectSpec {
         }
     }
 
-    /// Resolves all column specs against `schema`, returning actual column names in order.
+    /// Resolves plain column specs against `schema`, returning actual column names in order.
+    /// Fails if the spec contains aggregates (use the DataFrame aggregate path instead).
     pub fn resolve_names(&self, schema: &Schema) -> Result<Vec<String>> {
-        self.columns.iter().map(|s| s.resolve(schema)).collect()
+        self.columns
+            .iter()
+            .map(|item| match item {
+                SelectItem::Column(s) => s.resolve(schema),
+                SelectItem::Sum(_) => Err(Error::PipelinePlanningError(
+                    PipelinePlanningError::AggregatesInProjectionSelect,
+                )),
+            })
+            .collect()
     }
 }
 
 /// Indexes into a [`SelectSpec`] by column index.
 impl Index<usize> for SelectSpec {
-    type Output = ColumnSpec;
+    type Output = SelectItem;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.columns[index]
@@ -123,6 +160,7 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use super::ColumnSpec;
+    use super::SelectItem;
     use super::SelectSpec;
 
     fn schema_with_columns(names: &[&str]) -> Schema {
@@ -138,8 +176,8 @@ mod tests {
         let schema = schema_with_columns(&["one", "two", "three"]);
         let spec = SelectSpec {
             columns: vec![
-                ColumnSpec::Exact("one".into()),
-                ColumnSpec::Exact("three".into()),
+                SelectItem::Column(ColumnSpec::Exact("one".into())),
+                SelectItem::Column(ColumnSpec::Exact("three".into())),
             ],
         };
         let resolved = spec.resolve_names(&schema).unwrap();
@@ -150,7 +188,7 @@ mod tests {
     fn test_select_spec_resolve_exact_no_match_wrong_case() {
         let schema = schema_with_columns(&["one", "two"]);
         let spec = SelectSpec {
-            columns: vec![ColumnSpec::Exact("ONE".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::Exact("ONE".into()))],
         };
         let result = spec.resolve_names(&schema);
         assert!(result.is_err());
@@ -161,8 +199,8 @@ mod tests {
         let schema = schema_with_columns(&["one", "two", "Email"]);
         let spec = SelectSpec {
             columns: vec![
-                ColumnSpec::CaseInsensitive("ONE".into()),
-                ColumnSpec::CaseInsensitive("email".into()),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("ONE".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("email".into())),
             ],
         };
         let resolved = spec.resolve_names(&schema).unwrap();
@@ -173,7 +211,9 @@ mod tests {
     fn test_select_spec_resolve_case_insensitive_no_match() {
         let schema = schema_with_columns(&["one", "two"]);
         let spec = SelectSpec {
-            columns: vec![ColumnSpec::CaseInsensitive("missing".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
+                "missing".into(),
+            ))],
         };
         let result = spec.resolve_names(&schema);
         assert!(result.is_err());

@@ -7,6 +7,8 @@ use flt::ast::Literal;
 use super::stage::ReplPipelineStage;
 use crate::Error;
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::SelectItem;
+use crate::pipeline::SelectSpec;
 
 /// Collects pipeline stages from a pipe expression (e.g. a |> b |> c -> [a, b, c]).
 pub(super) fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
@@ -20,14 +22,25 @@ pub(super) fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
 }
 
 pub(super) fn is_terminal_expr(expr: &Expr) -> bool {
-    if let Expr::FunctionCall(name, _) = expr {
-        matches!(
-            name.to_string().as_str(),
-            "count" | "head" | "tail" | "sample" | "schema" | "write"
-        )
-    } else {
-        false
+    match expr {
+        Expr::FunctionCall(name, args) => match name.to_string().as_str() {
+            "count" | "head" | "tail" | "sample" | "schema" | "write" => true,
+            "select" => select_args_are_all_aggregates(args),
+            _ => false,
+        },
+        _ => false,
     }
+}
+
+fn select_args_are_all_aggregates(args: &[Expr]) -> bool {
+    !args.is_empty()
+        && args.iter().all(|e| {
+            matches!(
+                e,
+                Expr::FunctionCall(n, a)
+                    if n.to_string().as_str() == "sum" && a.len() == 1
+            )
+        })
 }
 
 /// Extracts a single path string from a function's argument list.
@@ -40,16 +53,38 @@ pub(super) fn extract_path_from_args(func_name: &str, args: &[Expr]) -> crate::R
     }
 }
 
-/// Extracts column specs from select args. Symbols (:one) and identifiers use case-insensitive
-/// match; strings ("one") use exact match.
-pub(super) fn extract_column_specs(args: &[Expr]) -> crate::Result<Vec<ColumnSpec>> {
+fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
+    match expr {
+        Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
+        Expr::Literal(Literal::String(s)) => Ok(ColumnSpec::Exact(s.clone())),
+        Expr::Ident(s) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
+        _ => Err(Error::UnsupportedFunctionCall(format!(
+            "expected a column (symbol, string, or identifier), got {expr:?}"
+        ))),
+    }
+}
+
+/// Extracts select items: column refs or `sum(column)`.
+pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
     args.iter()
         .map(|expr| match expr {
-            Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
-            Expr::Literal(Literal::String(s)) => Ok(ColumnSpec::Exact(s.clone())),
-            Expr::Ident(s) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
+            Expr::FunctionCall(name, inner) if name.to_string().as_str() == "sum" => {
+                match inner.as_slice() {
+                    [one] => Ok(SelectItem::Sum(extract_one_column_spec(one)?)),
+                    _ => Err(Error::UnsupportedFunctionCall(
+                        "sum() expects exactly one column argument".to_string(),
+                    )),
+                }
+            }
+            Expr::Literal(Literal::Symbol(s)) => {
+                Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone())))
+            }
+            Expr::Literal(Literal::String(s)) => {
+                Ok(SelectItem::Column(ColumnSpec::Exact(s.clone())))
+            }
+            Expr::Ident(s) => Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone()))),
             _ => Err(Error::UnsupportedFunctionCall(format!(
-                "select expects symbol or string column names, got {expr:?}"
+                "select expects column names or sum(column), got {expr:?}"
             ))),
         })
         .collect()
@@ -75,7 +110,7 @@ pub(super) fn plan_stage(expr: Expr) -> crate::Result<ReplPipelineStage> {
                     Ok(ReplPipelineStage::Read { path })
                 }
                 "select" => {
-                    let columns = extract_column_specs(&args)?;
+                    let columns = extract_select_items(&args)?;
                     if columns.is_empty() {
                         return Err(Error::UnsupportedFunctionCall(
                             "select expects at least one column name".to_string(),
@@ -204,9 +239,12 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
             i += 1;
         }
         None => {
-            return Err(Error::InvalidReplPipeline(
-                "pipeline must end with write, head, tail, sample, schema, or count".to_string(),
-            ));
+            if !(body.len() == 2 && body.get(1).is_some_and(repl_select_is_aggregate_only)) {
+                return Err(Error::InvalidReplPipeline(
+                    "pipeline must end with write, head, tail, sample, schema, or count"
+                        .to_string(),
+                ));
+            }
         }
         _ => {
             return Err(Error::InvalidReplPipeline(
@@ -244,6 +282,8 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
             )
             | Some(ReplPipelineStage::Schema)
             | Some(ReplPipelineStage::Count) => {}
+            Some(stage @ ReplPipelineStage::Select { .. })
+                if repl_select_is_aggregate_only(stage) => {}
             _ => {
                 return Err(Error::InvalidReplPipeline(
                     "pipeline must end with write, head, tail, sample, schema, or count"
@@ -254,6 +294,17 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
     }
 
     Ok(())
+}
+
+fn repl_select_is_aggregate_only(stage: &ReplPipelineStage) -> bool {
+    matches!(
+        stage,
+        ReplPipelineStage::Select { columns }
+            if SelectSpec {
+                columns: columns.clone(),
+            }
+            .is_aggregate_only()
+    )
 }
 
 /// Extracts a single positive integer argument from a function call's args.

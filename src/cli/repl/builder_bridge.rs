@@ -28,7 +28,7 @@ pub(super) fn repl_stages_to_pipeline_builder(
     let mut i = 1usize;
     if let Some(ReplPipelineStage::Select { columns }) = body.get(i) {
         builder.select_spec(SelectSpec {
-            columns: columns.clone(),
+            columns: columns.to_vec(),
         });
         i += 1;
     }

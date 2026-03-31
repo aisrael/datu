@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 
 use super::source::DataFrameSource;
+use super::transform::apply_select_spec_to_dataframe;
 use super::transform::dataframe_apply_head;
 use super::transform::dataframe_apply_sample;
 use super::transform::dataframe_apply_tail;
@@ -30,10 +31,7 @@ impl Step for DataframeSelect {
         if let Some(spec) = self.select.as_ref()
             && !spec.is_empty()
         {
-            let schema = df.schema();
-            let resolved = spec.resolve_names(schema.as_ref())?;
-            let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-            df = df.select_columns(&col_refs)?;
+            df = apply_select_spec_to_dataframe(df, spec)?;
         }
         Ok(DataFrameSource::new(df))
     }

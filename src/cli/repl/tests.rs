@@ -6,13 +6,15 @@ use flt::parser::parse_expr;
 
 use super::ColumnSpec;
 use super::Repl;
+use super::SelectItem;
 use super::plan::collect_pipe_stages;
-use super::plan::extract_column_specs;
 use super::plan::extract_head_n;
 use super::plan::extract_path_from_args;
 use super::plan::extract_sample_n;
+use super::plan::extract_select_items;
 use super::plan::extract_tail_n;
 use super::plan::is_head_call;
+use super::plan::is_terminal_expr;
 use super::plan::plan_pipeline_with_state;
 use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
@@ -57,9 +59,31 @@ fn test_plan_stage_select() {
         stage,
         ReplPipelineStage::Select {
             columns: vec![
-                ColumnSpec::CaseInsensitive("one".into()),
-                ColumnSpec::CaseInsensitive("two".into())
+                SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
             ]
+        }
+    );
+}
+
+#[test]
+fn test_is_terminal_expr_select_aggregate_only() {
+    let expr = parse("select(sum(:quantity))");
+    assert!(is_terminal_expr(&expr));
+    let expr = parse("select(:a, sum(:b))");
+    assert!(!is_terminal_expr(&expr));
+}
+
+#[test]
+fn test_plan_stage_select_sum() {
+    let expr = parse("select(sum(:quantity))");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive(
+                "quantity".into(),
+            ))],
         }
     );
 }
@@ -123,7 +147,7 @@ fn test_plan_pipeline_read_select_write() {
     assert_eq!(
         pipeline[1],
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
     );
     assert_eq!(
@@ -229,81 +253,96 @@ fn test_collect_pipe_stages_non_pipe_binary_not_flattened() {
     assert!(matches!(&stages[0], Expr::BinaryExpr(_, BinaryOp::Add, _)));
 }
 
-// ── extract_column_specs ────────────────────────────────────────
+// ── extract_select_items ────────────────────────────────────────
 
 #[test]
-fn test_extract_column_specs_symbols() {
+fn test_extract_select_items_symbols() {
     let args = vec![
         Expr::Literal(Literal::Symbol("one".into())),
         Expr::Literal(Literal::Symbol("two".into())),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("one".into()),
-            ColumnSpec::CaseInsensitive("two".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_strings() {
+fn test_extract_select_items_strings() {
     let args = vec![
         Expr::Literal(Literal::String("col_a".into())),
         Expr::Literal(Literal::String("col_b".into())),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::Exact("col_a".into()),
-            ColumnSpec::Exact("col_b".into())
+            SelectItem::Column(ColumnSpec::Exact("col_a".into())),
+            SelectItem::Column(ColumnSpec::Exact("col_b".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_idents() {
+fn test_extract_select_items_idents() {
     let args = vec![Expr::Ident("foo".into()), Expr::Ident("bar".into())];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("foo".into()),
-            ColumnSpec::CaseInsensitive("bar".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("foo".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("bar".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_mixed() {
+fn test_extract_select_items_mixed() {
     let args = vec![
         Expr::Literal(Literal::Symbol("sym".into())),
         Expr::Literal(Literal::String("str".into())),
         Expr::Ident("ident".into()),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("sym".into()),
-            ColumnSpec::Exact("str".into()),
-            ColumnSpec::CaseInsensitive("ident".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("sym".into())),
+            SelectItem::Column(ColumnSpec::Exact("str".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("ident".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_empty() {
-    let result = extract_column_specs(&[]).unwrap();
+fn test_extract_select_items_sum() {
+    let args = vec![Expr::FunctionCall(
+        Identifier("sum".into()),
+        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
+    )];
+    let result = extract_select_items(&args).unwrap();
+    assert_eq!(
+        result,
+        vec![SelectItem::Sum(ColumnSpec::CaseInsensitive(
+            "quantity".into()
+        ))]
+    );
+}
+
+#[test]
+fn test_extract_select_items_empty() {
+    let result = extract_select_items(&[]).unwrap();
     assert!(result.is_empty());
 }
 
 #[test]
-fn test_extract_column_specs_unsupported_expr() {
+fn test_extract_select_items_unsupported_expr() {
     let args = vec![Expr::Literal(Literal::Boolean(true))];
-    let result = extract_column_specs(&args);
+    let result = extract_select_items(&args);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -419,10 +458,10 @@ fn test_validate_rejects_second_select() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
         },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("y".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("y".into()))],
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Print,
@@ -439,11 +478,24 @@ fn test_validate_rejects_head_before_select() {
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
         },
     ];
     let err = validate_repl_pipeline_stages(&stages).unwrap_err();
     assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_accepts_read_aggregate_select_only() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("q".into()))],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
 }
 
 #[test]
@@ -557,15 +609,21 @@ fn test_terminal_stage_classification() {
     );
     assert!(
         !ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_terminal()
     );
     assert!(
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_non_terminal()
+    );
+    assert!(
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("x".into()))]
+        }
+        .is_terminal()
     );
 }
 

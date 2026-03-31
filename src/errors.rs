@@ -58,6 +58,12 @@ pub enum PipelinePlanningError {
     UnsupportedOutputFileType(String),
     #[error("Column '{0}' not found (case-insensitive match)")]
     ColumnNotFound(String),
+    #[error("select with aggregates cannot be resolved as a plain column list")]
+    AggregatesInProjectionSelect,
+    #[error(
+        "Aggregates in select are not supported for ORC input; use Parquet, CSV, JSON, or Avro"
+    )]
+    AggregatesNotSupportedForOrc,
 }
 
 /// Errors produced while running a pipeline (wrong format, consumed state, etc.).

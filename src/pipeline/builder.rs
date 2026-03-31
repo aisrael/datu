@@ -16,6 +16,7 @@ use crate::pipeline::record_batch::RecordBatchPipeline;
 use crate::pipeline::record_batch::RecordBatchSink;
 use crate::pipeline::spec::ColumnSpec;
 use crate::pipeline::spec::DisplaySlice;
+use crate::pipeline::spec::SelectItem;
 use crate::pipeline::spec::SelectSpec;
 use crate::resolve_file_type;
 
@@ -80,7 +81,7 @@ impl PipelineBuilder {
         self.select = Some(SelectSpec {
             columns: columns
                 .iter()
-                .map(|c| ColumnSpec::Exact(c.to_string()))
+                .map(|c| SelectItem::Column(ColumnSpec::Exact(c.to_string())))
                 .collect(),
         });
         self
@@ -193,6 +194,8 @@ impl PipelineBuilder {
             ));
         }
 
+        reject_orc_with_aggregates(input_file_type, &select)?;
+
         let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
         if input_file_type == FileType::Orc {
             Ok(Pipeline::RecordBatch(RecordBatchPipeline {
@@ -245,6 +248,8 @@ impl PipelineBuilder {
         let input_path = input_path.to_string();
         let csv_has_header = self.csv_has_header;
 
+        reject_orc_with_aggregates(input_file_type, &select)?;
+
         if input_file_type == FileType::Orc {
             Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path,
@@ -288,6 +293,8 @@ impl PipelineBuilder {
         let input_path = input_path.to_string();
         let csv_has_header = self.csv_has_header;
         let sparse = self.sparse;
+
+        reject_orc_with_aggregates(input_file_type, &select)?;
 
         if input_file_type == FileType::Orc {
             Ok(Pipeline::RecordBatch(RecordBatchPipeline {
@@ -339,6 +346,8 @@ impl PipelineBuilder {
         let csv_has_header = self.csv_has_header;
         let sparse = self.sparse;
 
+        reject_orc_with_aggregates(input_file_type, &select)?;
+
         if input_file_type == FileType::Orc {
             Ok(Pipeline::RecordBatch(RecordBatchPipeline {
                 input_path,
@@ -365,6 +374,44 @@ impl PipelineBuilder {
                 },
             }))
         }
+    }
+
+    /// Display pipeline: global aggregate `select(sum(...), ...)` with full result (one row) to stdout.
+    fn build_aggregate_display_pipeline(
+        &self,
+        input_path: &str,
+        select: Option<SelectSpec>,
+    ) -> Result<Pipeline> {
+        let input_file_type = resolve_file_type(self.input_type_override, input_path)?;
+        if !input_file_type.supports_pipeline_display_input() {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
+            ));
+        }
+        if input_file_type == FileType::Orc {
+            return Err(Error::PipelinePlanningError(
+                PipelinePlanningError::AggregatesNotSupportedForOrc,
+            ));
+        }
+        let output_format = self
+            .display_output_format
+            .unwrap_or(DisplayOutputFormat::Csv);
+        let csv_stdout_headers = self.display_csv_headers.unwrap_or(true);
+        let input_path = input_path.to_string();
+        let csv_has_header = self.csv_has_header;
+        let sparse = self.sparse;
+        Ok(Pipeline::DataFrame(DataFramePipeline {
+            input_path,
+            input_file_type,
+            select,
+            slice: None,
+            csv_has_header,
+            sparse,
+            sink: DataFrameSink::Display {
+                output_format,
+                csv_stdout_headers,
+            },
+        }))
     }
 
     /// Consumes configuration and returns a [`Pipeline`] or a planning error.
@@ -406,10 +453,28 @@ impl PipelineBuilder {
             self.build_schema_display_pipeline(input_path, select)
         } else if self.display_row_count {
             self.build_row_count_display_pipeline(input_path, select)
+        } else if select.as_ref().is_some_and(SelectSpec::is_aggregate_only)
+            && self.head.is_none()
+            && self.tail.is_none()
+            && self.sample.is_none()
+        {
+            self.build_aggregate_display_pipeline(input_path, select)
         } else {
             self.build_display_pipeline(input_path, select)
         }
     }
+}
+
+fn reject_orc_with_aggregates(
+    input_file_type: FileType,
+    select: &Option<SelectSpec>,
+) -> Result<()> {
+    if input_file_type == FileType::Orc && select.as_ref().is_some_and(SelectSpec::has_aggregates) {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::AggregatesNotSupportedForOrc,
+        ));
+    }
+    Ok(())
 }
 
 fn slice_from_head_tail_sample(

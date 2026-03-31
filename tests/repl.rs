@@ -19,10 +19,13 @@ use tempfile::NamedTempFile;
 
 #[path = "common/assert_output.rs"]
 mod assert_output;
+#[path = "common/parquet.rs"]
+mod parquet;
 #[path = "common/row_count.rs"]
 mod row_count;
 
 use assert_output::assert_output_contains;
+use parquet::assert_valid_parquet_file;
 use row_count::get_row_count;
 
 const TEMPDIR_PLACEHOLDER: &str = "$TEMPDIR";
@@ -294,6 +297,15 @@ fn that_file_should_be_valid_xlsx(world: &mut ReplWorld) {
         bytes.len() >= 4 && bytes[..4] == [0x50, 0x4B, 0x03, 0x04],
         "Expected file to be a valid XLSX (ZIP archive), but magic bytes did not match"
     );
+}
+
+#[then(regex = r#"^that file should be a valid Parquet file$"#)]
+fn that_file_should_be_valid_parquet(world: &mut ReplWorld) {
+    let path = world
+        .last_file
+        .as_ref()
+        .expect("No file has been set; use 'the file \"...\" should exist' first");
+    assert_valid_parquet_file(path);
 }
 
 #[then(regex = r#"^that file should contain "(.+)"$"#)]

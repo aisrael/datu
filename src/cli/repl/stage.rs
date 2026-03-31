@@ -10,6 +10,7 @@ use crate::pipeline::SelectSpec;
 #[derive(Debug, PartialEq)]
 pub enum ReplPipelineStage {
     Read { path: String },
+    GroupBy { columns: Vec<ColumnSpec> },
     Select { columns: Vec<SelectItem> },
     Head { n: usize },
     Tail { n: usize },
@@ -23,7 +24,34 @@ pub enum ReplPipelineStage {
 fn select_spec_from_items(columns: &[SelectItem]) -> SelectSpec {
     SelectSpec {
         columns: columns.to_vec(),
+        group_by: None,
     }
+}
+
+/// True when grouped + `select` stages form a complete statement (including `select(...) |> group_by(...)`).
+pub(super) fn repl_pipeline_last_select_is_terminal(stages: &[ReplPipelineStage]) -> bool {
+    let has_group_by = stages
+        .iter()
+        .any(|s| matches!(s, ReplPipelineStage::GroupBy { .. }));
+    let has_select = stages
+        .iter()
+        .any(|s| matches!(s, ReplPipelineStage::Select { .. }));
+
+    if let Some(ReplPipelineStage::Select { columns }) = stages.last() {
+        let spec = SelectSpec {
+            columns: columns.clone(),
+            group_by: None,
+        };
+        if spec.is_aggregate_only() {
+            return true;
+        }
+        if has_group_by {
+            return true;
+        }
+        return false;
+    }
+
+    matches!(stages.last(), Some(ReplPipelineStage::GroupBy { .. })) && has_select
 }
 
 impl ReplPipelineStage {
@@ -37,8 +65,10 @@ impl ReplPipelineStage {
             | ReplPipelineStage::Count
             | ReplPipelineStage::Write { .. } => true,
             ReplPipelineStage::Select { columns } => {
+                // Single-stage check: full pipeline uses `repl_pipeline_last_select_is_terminal`.
                 select_spec_from_items(columns).is_aggregate_only()
             }
+            ReplPipelineStage::GroupBy { .. } => false,
             ReplPipelineStage::Read { .. } | ReplPipelineStage::Print => false,
         }
     }
@@ -70,6 +100,10 @@ impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReplPipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            ReplPipelineStage::GroupBy { columns } => {
+                let cols: Vec<String> = columns.iter().map(format_column_spec).collect();
+                write!(f, "group_by({})", cols.join(", "))
+            }
             ReplPipelineStage::Select { columns } => {
                 let cols: Vec<String> = columns
                     .iter()

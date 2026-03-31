@@ -1,11 +1,13 @@
 //! Maps validated REPL stages to [`crate::pipeline::PipelineBuilder`].
 
 use super::stage::ReplPipelineStage;
+use crate::pipeline::ColumnSpec;
 use crate::pipeline::PipelineBuilder;
+use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 
 /// Maps validated REPL stages to a [`PipelineBuilder`] (caller sets display defaults if needed).
-pub(super) fn repl_stages_to_pipeline_builder(
+pub(crate) fn repl_stages_to_pipeline_builder(
     stages: &[ReplPipelineStage],
 ) -> crate::Result<PipelineBuilder> {
     let body = match stages.last() {
@@ -26,11 +28,29 @@ pub(super) fn repl_stages_to_pipeline_builder(
     builder.read(path);
 
     let mut i = 1usize;
-    if let Some(ReplPipelineStage::Select { columns }) = body.get(i) {
-        builder.select_spec(SelectSpec {
-            columns: columns.to_vec(),
-        });
-        i += 1;
+    let mut group_keys: Option<Vec<ColumnSpec>> = None;
+    let mut select_columns: Option<Vec<SelectItem>> = None;
+
+    for _ in 0..2 {
+        match body.get(i) {
+            Some(ReplPipelineStage::GroupBy { columns }) => {
+                group_keys = Some(columns.clone());
+                i += 1;
+            }
+            Some(ReplPipelineStage::Select { columns }) => {
+                select_columns = Some(columns.clone());
+                i += 1;
+            }
+            _ => break,
+        }
+    }
+
+    if let Some(columns) = select_columns {
+        let spec = SelectSpec {
+            columns,
+            group_by: group_keys,
+        };
+        builder.select_spec(spec);
     }
 
     match body.get(i) {

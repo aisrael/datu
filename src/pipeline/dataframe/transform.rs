@@ -15,6 +15,7 @@ use futures::StreamExt;
 use super::source::DataFrameSource;
 use crate::Error;
 use crate::FileType;
+use crate::pipeline::ColumnSpec;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
 use crate::pipeline::SelectItem;
@@ -124,7 +125,11 @@ pub async fn dataframe_apply_sample(
     }
 }
 
-/// Applies `select()` projection or global aggregates to a [`DataFrame`].
+fn column_spec_in_group_keys(cs: &ColumnSpec, keys: &[ColumnSpec]) -> bool {
+    keys.iter().any(|k| k == cs)
+}
+
+/// Applies `select()` projection, global aggregates, or grouped aggregates to a [`DataFrame`].
 pub(super) fn apply_select_spec_to_dataframe(
     mut df: DataFrame,
     spec: &SelectSpec,
@@ -133,14 +138,79 @@ pub(super) fn apply_select_spec_to_dataframe(
         return Ok(df);
     }
     let schema = df.schema();
+    let arrow_schema = schema.as_arrow();
+
+    if spec.has_group_by() {
+        let keys = spec.group_by.as_ref().expect("has_group_by implies Some");
+        for key in keys {
+            let mut found = false;
+            for item in &spec.columns {
+                if let SelectItem::Column(c) = item
+                    && c == key
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(Error::GenericError(
+                    "every group_by column must appear in select() as a plain column".to_string(),
+                ));
+            }
+        }
+        for item in &spec.columns {
+            match item {
+                SelectItem::Column(c) => {
+                    if !column_spec_in_group_keys(c, keys) {
+                        return Err(Error::GenericError(
+                            "select with group_by: non-key columns must use sum(), not plain columns"
+                                .to_string(),
+                        ));
+                    }
+                }
+                SelectItem::Sum(_) => {}
+            }
+        }
+
+        let mut group_exprs = Vec::new();
+        for key in keys {
+            let name = key.resolve(arrow_schema)?;
+            group_exprs.push(col(name.as_str()));
+        }
+
+        let mut aggs = Vec::new();
+        for item in &spec.columns {
+            if let SelectItem::Sum(cs) = item {
+                let name = cs.resolve(arrow_schema)?;
+                aggs.push(sum(col(name.as_str())));
+            }
+        }
+
+        if aggs.is_empty() {
+            eprintln!(
+                "warning: group_by() with no aggregates in select(); showing distinct group keys only (behavior may change)"
+            );
+            let key_names: Vec<String> = keys
+                .iter()
+                .map(|k| k.resolve(arrow_schema))
+                .collect::<crate::Result<Vec<_>>>()?;
+            let col_refs: Vec<&str> = key_names.iter().map(String::as_str).collect();
+            df = df.select_columns(&col_refs)?;
+            df = df.distinct()?;
+        } else {
+            df = df.aggregate(group_exprs, aggs)?;
+        }
+        return Ok(df);
+    }
+
     if spec.has_aggregates() {
         if !spec.is_aggregate_only() {
             return Err(Error::GenericError(
-                "mixed column projections and aggregates in select are not supported yet"
+                "mixed column projections and aggregates in select require group_by(); \
+                 put every group key in group_by() and list them as columns in select()"
                     .to_string(),
             ));
         }
-        let arrow_schema = schema.as_arrow();
         let mut aggs = Vec::new();
         for item in &spec.columns {
             if let SelectItem::Sum(cs) = item {
@@ -150,7 +220,7 @@ pub(super) fn apply_select_spec_to_dataframe(
         }
         df = df.aggregate(vec![], aggs)?;
     } else {
-        let resolved = spec.resolve_names(schema.as_arrow())?;
+        let resolved = spec.resolve_names(arrow_schema)?;
         let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
         df = df.select_columns(&col_refs)?;
     }

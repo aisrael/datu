@@ -562,6 +562,7 @@ mod tests {
                     SelectItem::Column(ColumnSpec::Exact("two".to_string())),
                     SelectItem::Column(ColumnSpec::Exact("four".to_string())),
                 ],
+                group_by: None,
             },
         };
         let mut projected_source = select_step

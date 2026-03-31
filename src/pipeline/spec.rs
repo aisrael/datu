@@ -34,10 +34,12 @@ pub enum SelectItem {
     Sum(ColumnSpec),
 }
 
-/// Macro to build a [`SelectSpec`] of [`ColumnSpec::Exact`] entries from column names.
+/// Macro to build a [`SelectSpec`] from homogeneous column forms:
+/// - string literals (`"col"`) -> [`ColumnSpec::Exact`]
+/// - symbol-like idents (`:col`) -> [`ColumnSpec::CaseInsensitive`]
 #[macro_export]
 macro_rules! select_spec {
-    ( $($col:expr),+ $(,)? ) => {
+    ( $($col:literal),+ $(,)? ) => {
         $crate::pipeline::SelectSpec {
             columns: vec![
                 $(
@@ -46,6 +48,19 @@ macro_rules! select_spec {
                     )
                 ),+
             ],
+            group_by: None,
+        }
+    };
+    ( $(:$col:ident),+ $(,)? ) => {
+        $crate::pipeline::SelectSpec {
+            columns: vec![
+                $(
+                    $crate::pipeline::SelectItem::Column(
+                        $crate::pipeline::ColumnSpec::CaseInsensitive(stringify!($col).to_string())
+                    )
+                ),+
+            ],
+            group_by: None,
         }
     };
 }
@@ -83,6 +98,8 @@ impl SelectItem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectSpec {
     pub columns: Vec<SelectItem>,
+    /// REPL `group_by(...)` keys; `None` for CLI and plain projection.
+    pub group_by: Option<Vec<ColumnSpec>>,
 }
 
 impl SelectSpec {
@@ -106,6 +123,11 @@ impl SelectSpec {
         !self.columns.is_empty() && self.columns.iter().all(SelectItem::is_aggregate)
     }
 
+    /// True when the REPL attached `group_by(...)`.
+    pub fn has_group_by(&self) -> bool {
+        self.group_by.as_ref().is_some_and(|g| !g.is_empty())
+    }
+
     /// Parses CLI `--select` values from `Option<Vec<String>>`: splits each string on commas,
     /// trims, drops empties, maps to [`ColumnSpec::Exact`]. Returns `None` when `select` is `None`
     /// or yields no column names.
@@ -125,7 +147,10 @@ impl SelectSpec {
         if columns.is_empty() {
             None
         } else {
-            Some(Self { columns })
+            Some(Self {
+                columns,
+                group_by: None,
+            })
         }
     }
 
@@ -161,7 +186,6 @@ mod tests {
 
     use super::ColumnSpec;
     use super::SelectItem;
-    use super::SelectSpec;
 
     fn schema_with_columns(names: &[&str]) -> Schema {
         let fields: Vec<Field> = names
@@ -174,12 +198,7 @@ mod tests {
     #[test]
     fn test_select_spec_resolve_exact_match() {
         let schema = schema_with_columns(&["one", "two", "three"]);
-        let spec = SelectSpec {
-            columns: vec![
-                SelectItem::Column(ColumnSpec::Exact("one".into())),
-                SelectItem::Column(ColumnSpec::Exact("three".into())),
-            ],
-        };
+        let spec = crate::select_spec!("one", "three");
         let resolved = spec.resolve_names(&schema).unwrap();
         assert_eq!(resolved, vec!["one", "three"]);
     }
@@ -187,35 +206,50 @@ mod tests {
     #[test]
     fn test_select_spec_resolve_exact_no_match_wrong_case() {
         let schema = schema_with_columns(&["one", "two"]);
-        let spec = SelectSpec {
-            columns: vec![SelectItem::Column(ColumnSpec::Exact("ONE".into()))],
-        };
+        let spec = crate::select_spec!("ONE");
         let result = spec.resolve_names(&schema);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_select_spec_resolve_case_insensitive_match() {
-        let schema = schema_with_columns(&["one", "two", "Email"]);
-        let spec = SelectSpec {
-            columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("ONE".into())),
-                SelectItem::Column(ColumnSpec::CaseInsensitive("email".into())),
-            ],
-        };
+        let schema = schema_with_columns(&["One", "two", "Email"]);
+        let spec = crate::select_spec!(:ONE, :email);
         let resolved = spec.resolve_names(&schema).unwrap();
-        assert_eq!(resolved, vec!["one", "Email"]);
+        assert_eq!(resolved, vec!["One", "Email"]);
     }
 
     #[test]
     fn test_select_spec_resolve_case_insensitive_no_match() {
         let schema = schema_with_columns(&["one", "two"]);
-        let spec = SelectSpec {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
-                "missing".into(),
-            ))],
-        };
+        let spec = crate::select_spec!(:missing);
         let result = spec.resolve_names(&schema);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_select_spec_macro_strings_create_exact_columns() {
+        let spec = crate::select_spec!("one", "two");
+        assert_eq!(
+            spec.columns,
+            vec![
+                SelectItem::Column(ColumnSpec::Exact("one".into())),
+                SelectItem::Column(ColumnSpec::Exact("two".into())),
+            ]
+        );
+        assert_eq!(spec.group_by, None);
+    }
+
+    #[test]
+    fn test_select_spec_macro_symbols_create_case_insensitive_columns() {
+        let spec = crate::select_spec!(:one, :two);
+        assert_eq!(
+            spec.columns,
+            vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
+            ]
+        );
+        assert_eq!(spec.group_by, None);
     }
 }

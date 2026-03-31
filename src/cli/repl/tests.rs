@@ -7,6 +7,7 @@ use flt::parser::parse_expr;
 use super::ColumnSpec;
 use super::Repl;
 use super::SelectItem;
+use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::plan::collect_pipe_stages;
 use super::plan::extract_head_n;
 use super::plan::extract_path_from_args;
@@ -14,12 +15,15 @@ use super::plan::extract_sample_n;
 use super::plan::extract_select_items;
 use super::plan::extract_tail_n;
 use super::plan::is_head_call;
-use super::plan::is_terminal_expr;
+use super::plan::is_statement_complete;
 use super::plan::plan_pipeline_with_state;
 use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
 use crate::Error;
+use crate::pipeline::DataFramePipeline;
+use crate::pipeline::Pipeline;
+use crate::pipeline::SelectSpec;
 
 fn parse(input: &str) -> Expr {
     let (remainder, expr) = parse_expr(input).expect("parse");
@@ -67,11 +71,27 @@ fn test_plan_stage_select() {
 }
 
 #[test]
-fn test_is_terminal_expr_select_aggregate_only() {
+fn test_is_statement_complete_select_aggregate_only() {
     let expr = parse("select(sum(:quantity))");
-    assert!(is_terminal_expr(&expr));
+    assert!(is_statement_complete(std::slice::from_ref(&expr)));
     let expr = parse("select(:a, sum(:b))");
-    assert!(!is_terminal_expr(&expr));
+    assert!(!is_statement_complete(std::slice::from_ref(&expr)));
+}
+
+#[test]
+fn test_is_statement_complete_grouped_select_one_line() {
+    let expr = parse(r#"read("f.parquet") |> group_by(:id) |> select(:id, sum(:qty))"#);
+    let mut exprs = Vec::new();
+    collect_pipe_stages(expr, &mut exprs);
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
+fn test_is_statement_complete_select_then_group_by() {
+    let expr = parse(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
+    let mut exprs = Vec::new();
+    collect_pipe_stages(expr, &mut exprs);
+    assert!(is_statement_complete(&exprs));
 }
 
 #[test]
@@ -496,6 +516,158 @@ fn test_validate_accepts_read_aggregate_select_only() {
         },
     ];
     validate_repl_pipeline_stages(&stages).unwrap();
+}
+
+#[test]
+fn test_plan_stage_group_by() {
+    let expr = parse("group_by(:id, :region)");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                ColumnSpec::CaseInsensitive("id".into()),
+                ColumnSpec::CaseInsensitive("region".into()),
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_validate_group_by_select_either_order() {
+    let gb_then_sel = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    validate_repl_pipeline_stages(&gb_then_sel).unwrap();
+
+    let sel_then_gb = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+    ];
+    validate_repl_pipeline_stages(&sel_then_gb).unwrap();
+}
+
+#[test]
+fn test_validate_rejects_mixed_select_without_group_by() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+    assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_rejects_extra_plain_column_with_group_by() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("extra".into())),
+            ],
+        },
+    ];
+    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+    assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_accepts_column_only_grouped_select() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("id".into()))],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
+}
+
+#[test]
+fn test_builder_bridge_merges_group_by_order_agnostic() {
+    let keys = vec![ColumnSpec::CaseInsensitive("id".into())];
+    let items = vec![
+        SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+        SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+    ];
+    let stages_a = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: keys.clone(),
+        },
+        ReplPipelineStage::Select {
+            columns: items.clone(),
+        },
+    ];
+    let stages_b = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: items.clone(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: keys.clone(),
+        },
+    ];
+    let mut builder_a = repl_stages_to_pipeline_builder(&stages_a).unwrap();
+    let mut builder_b = repl_stages_to_pipeline_builder(&stages_b).unwrap();
+    let Pipeline::DataFrame(DataFramePipeline { select: sa, .. }) = builder_a.build().unwrap()
+    else {
+        panic!("expected DataFrame pipeline");
+    };
+    let Pipeline::DataFrame(DataFramePipeline { select: sb, .. }) = builder_b.build().unwrap()
+    else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(
+        sa,
+        Some(SelectSpec {
+            columns: items,
+            group_by: Some(keys),
+        })
+    );
+    assert_eq!(sa, sb);
 }
 
 #[test]

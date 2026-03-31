@@ -83,6 +83,7 @@ impl PipelineBuilder {
                 .iter()
                 .map(|c| SelectItem::Column(ColumnSpec::Exact(c.to_string())))
                 .collect(),
+            group_by: None,
         });
         self
     }
@@ -388,7 +389,9 @@ impl PipelineBuilder {
                 PipelinePlanningError::UnsupportedInputFileType(input_file_type.to_string()),
             ));
         }
-        if input_file_type == FileType::Orc {
+        if input_file_type == FileType::Orc
+            && select.as_ref().is_some_and(SelectSpec::has_aggregates)
+        {
             return Err(Error::PipelinePlanningError(
                 PipelinePlanningError::AggregatesNotSupportedForOrc,
             ));
@@ -453,10 +456,12 @@ impl PipelineBuilder {
             self.build_schema_display_pipeline(input_path, select)
         } else if self.display_row_count {
             self.build_row_count_display_pipeline(input_path, select)
-        } else if select.as_ref().is_some_and(SelectSpec::is_aggregate_only)
-            && self.head.is_none()
+        } else if self.head.is_none()
             && self.tail.is_none()
             && self.sample.is_none()
+            && select.as_ref().is_some_and(|spec| {
+                spec.is_aggregate_only() || (spec.has_group_by() && !spec.is_empty())
+            })
         {
             self.build_aggregate_display_pipeline(input_path, select)
         } else {

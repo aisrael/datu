@@ -32,6 +32,8 @@ pub enum SelectItem {
     Column(ColumnSpec),
     /// Global sum over one column (REPL `sum(:col)`).
     Sum(ColumnSpec),
+    /// Global average over one column (REPL `avg(:col)`).
+    Avg(ColumnSpec),
 }
 
 /// Macro to build a [`SelectSpec`] from homogeneous column forms:
@@ -90,7 +92,7 @@ impl ColumnSpec {
 impl SelectItem {
     /// Returns true when this item is an aggregate (not a plain projection).
     pub fn is_aggregate(&self) -> bool {
-        matches!(self, SelectItem::Sum(_))
+        matches!(self, SelectItem::Sum(_) | SelectItem::Avg(_))
     }
 }
 
@@ -161,7 +163,7 @@ impl SelectSpec {
             .iter()
             .map(|item| match item {
                 SelectItem::Column(s) => s.resolve(schema),
-                SelectItem::Sum(_) => Err(Error::PipelinePlanningError(
+                SelectItem::Sum(_) | SelectItem::Avg(_) => Err(Error::PipelinePlanningError(
                     PipelinePlanningError::AggregatesInProjectionSelect,
                 )),
             })
@@ -186,6 +188,12 @@ mod tests {
 
     use super::ColumnSpec;
     use super::SelectItem;
+
+    #[test]
+    fn test_select_item_avg_is_aggregate() {
+        let item = SelectItem::Avg(ColumnSpec::CaseInsensitive("x".into()));
+        assert!(item.is_aggregate());
+    }
 
     fn schema_with_columns(names: &[&str]) -> Schema {
         let fields: Vec<Field> = names

@@ -67,7 +67,7 @@ fn select_args_are_all_aggregates(args: &[Expr]) -> bool {
             matches!(
                 e,
                 Expr::FunctionCall(n, a)
-                    if n.to_string().as_str() == "sum" && a.len() == 1
+                    if matches!(n.to_string().as_str(), "sum" | "avg") && a.len() == 1
             )
         })
 }
@@ -93,18 +93,27 @@ fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
     }
 }
 
-/// Extracts select items: column refs or `sum(column)`.
+/// Extracts select items: column refs or `sum(column)` / `avg(column)`.
 pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
     args.iter()
         .map(|expr| match expr {
-            Expr::FunctionCall(name, inner) if name.to_string().as_str() == "sum" => {
-                match inner.as_slice() {
+            Expr::FunctionCall(name, inner) => match name.to_string().as_str() {
+                "sum" => match inner.as_slice() {
                     [one] => Ok(SelectItem::Sum(extract_one_column_spec(one)?)),
                     _ => Err(Error::UnsupportedFunctionCall(
                         "sum() expects exactly one column argument".to_string(),
                     )),
-                }
-            }
+                },
+                "avg" => match inner.as_slice() {
+                    [one] => Ok(SelectItem::Avg(extract_one_column_spec(one)?)),
+                    _ => Err(Error::UnsupportedFunctionCall(
+                        "avg() expects exactly one column argument".to_string(),
+                    )),
+                },
+                _ => Err(Error::UnsupportedFunctionCall(format!(
+                    "select expects column names, sum(column), or avg(column), got {expr:?}"
+                ))),
+            },
             Expr::Literal(Literal::Symbol(s)) => {
                 Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone())))
             }
@@ -113,7 +122,7 @@ pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectIte
             }
             Expr::Ident(s) => Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone()))),
             _ => Err(Error::UnsupportedFunctionCall(format!(
-                "select expects column names or sum(column), got {expr:?}"
+                "select expects column names, sum(column), or avg(column), got {expr:?}"
             ))),
         })
         .collect()
@@ -248,12 +257,12 @@ fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::
             SelectItem::Column(c) => {
                 if !keys.iter().any(|k| k == c) {
                     return Err(Error::InvalidReplPipeline(
-                        "select with group_by: non-key columns must use sum(), not plain columns"
+                        "select with group_by: non-key columns must use an aggregate (sum or avg), not plain columns"
                             .to_string(),
                     ));
                 }
             }
-            SelectItem::Sum(_) => {}
+            SelectItem::Sum(_) | SelectItem::Avg(_) => {}
         }
     }
     Ok(())

@@ -110,6 +110,7 @@ impl fmt::Display for ReplPipelineStage {
                     .map(|item| match item {
                         SelectItem::Column(c) => format_column_spec(c),
                         SelectItem::Sum(c) => format!("sum({})", format_column_spec(c)),
+                        SelectItem::Avg(c) => format!("avg({})", format_column_spec(c)),
                     })
                     .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))

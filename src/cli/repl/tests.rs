@@ -87,6 +87,14 @@ fn test_is_statement_complete_grouped_select_one_line() {
 }
 
 #[test]
+fn test_is_statement_complete_select_avg_only() {
+    let expr = parse("select(avg(:quantity))");
+    let mut exprs = Vec::new();
+    collect_pipe_stages(expr, &mut exprs);
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
 fn test_is_statement_complete_select_then_group_by() {
     let expr = parse(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
     let mut exprs = Vec::new();
@@ -102,6 +110,20 @@ fn test_plan_stage_select_sum() {
         stage,
         ReplPipelineStage::Select {
             columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive(
+                "quantity".into(),
+            ))],
+        }
+    );
+}
+
+#[test]
+fn test_plan_stage_select_avg() {
+    let expr = parse("select(avg(:quantity))");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive(
                 "quantity".into(),
             ))],
         }
@@ -354,6 +376,21 @@ fn test_extract_select_items_sum() {
 }
 
 #[test]
+fn test_extract_select_items_avg() {
+    let args = vec![Expr::FunctionCall(
+        Identifier("avg".into()),
+        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
+    )];
+    let result = extract_select_items(&args).unwrap();
+    assert_eq!(
+        result,
+        vec![SelectItem::Avg(ColumnSpec::CaseInsensitive(
+            "quantity".into()
+        ))]
+    );
+}
+
+#[test]
 fn test_extract_select_items_empty() {
     let result = extract_select_items(&[]).unwrap();
     assert!(result.is_empty());
@@ -513,6 +550,19 @@ fn test_validate_accepts_read_aggregate_select_only() {
         },
         ReplPipelineStage::Select {
             columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("q".into()))],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
+}
+
+#[test]
+fn test_validate_accepts_read_aggregate_avg_select_only() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive("q".into()))],
         },
     ];
     validate_repl_pipeline_stages(&stages).unwrap();
@@ -794,6 +844,12 @@ fn test_terminal_stage_classification() {
     assert!(
         ReplPipelineStage::Select {
             columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("x".into()))]
+        }
+        .is_terminal()
+    );
+    assert!(
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_terminal()
     );

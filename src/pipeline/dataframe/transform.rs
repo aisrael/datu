@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
+use datafusion::functions_aggregate::expr_fn::avg;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::DataFrame;
@@ -163,12 +164,12 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Column(c) => {
                     if !column_spec_in_group_keys(c, keys) {
                         return Err(Error::GenericError(
-                            "select with group_by: non-key columns must use sum(), not plain columns"
+                            "select with group_by: non-key columns must use an aggregate (sum or avg), not plain columns"
                                 .to_string(),
                         ));
                     }
                 }
-                SelectItem::Sum(_) => {}
+                SelectItem::Sum(_) | SelectItem::Avg(_) => {}
             }
         }
 
@@ -180,9 +181,16 @@ pub(super) fn apply_select_spec_to_dataframe(
 
         let mut aggs = Vec::new();
         for item in &spec.columns {
-            if let SelectItem::Sum(cs) = item {
-                let name = cs.resolve(arrow_schema)?;
-                aggs.push(sum(col(name.as_str())));
+            match item {
+                SelectItem::Sum(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(sum(col(name.as_str())));
+                }
+                SelectItem::Avg(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(avg(col(name.as_str())));
+                }
+                SelectItem::Column(_) => {}
             }
         }
 
@@ -213,9 +221,16 @@ pub(super) fn apply_select_spec_to_dataframe(
         }
         let mut aggs = Vec::new();
         for item in &spec.columns {
-            if let SelectItem::Sum(cs) = item {
-                let name = cs.resolve(arrow_schema)?;
-                aggs.push(sum(col(name.as_str())));
+            match item {
+                SelectItem::Sum(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(sum(col(name.as_str())));
+                }
+                SelectItem::Avg(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(avg(col(name.as_str())));
+                }
+                SelectItem::Column(_) => {}
             }
         }
         df = df.aggregate(vec![], aggs)?;

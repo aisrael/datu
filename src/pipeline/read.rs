@@ -138,7 +138,11 @@ pub async fn read_to_dataframe(
         }
     };
     let table_provider = df.into_temporary_view();
-    let basename = Path::new(input_path).file_stem().unwrap().to_string_lossy().to_string();
+    let basename = Path::new(input_path)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     ctx.register_table(&basename, table_provider)?;
     let registered_df = ctx.table(&basename).await?;
     Ok(ReadResult::DataFrame(DataFrameSource::new(registered_df)))

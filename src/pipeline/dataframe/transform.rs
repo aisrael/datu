@@ -7,6 +7,8 @@ use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::expr_fn::avg;
+use datafusion::functions_aggregate::expr_fn::max;
+use datafusion::functions_aggregate::expr_fn::min;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::DataFrame;
@@ -142,18 +144,13 @@ pub(super) fn apply_select_spec_to_dataframe(
     let arrow_schema = schema.as_arrow();
 
     if spec.has_group_by() {
-        let keys = spec.group_by.as_ref().expect("has_group_by implies Some");
-        for key in keys {
-            let mut found = false;
-            for item in &spec.columns {
-                if let SelectItem::Column(c) = item
-                    && c == key
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
+        let group_by_keys = spec.group_by.as_ref().expect("has_group_by implies Some");
+        for key in group_by_keys {
+            if !spec
+                .columns
+                .iter()
+                .any(|item| matches!(item, SelectItem::Column(c) if c == key))
+            {
                 return Err(Error::GenericError(
                     "every group_by column must appear in select() as a plain column".to_string(),
                 ));
@@ -162,19 +159,22 @@ pub(super) fn apply_select_spec_to_dataframe(
         for item in &spec.columns {
             match item {
                 SelectItem::Column(c) => {
-                    if !column_spec_in_group_keys(c, keys) {
+                    if !column_spec_in_group_keys(c, group_by_keys) {
                         return Err(Error::GenericError(
-                            "select with group_by: non-key columns must use an aggregate (sum or avg), not plain columns"
+                            "select with group_by: non-key columns must use an aggregate (sum, avg, min, or max), not plain columns"
                                 .to_string(),
                         ));
                     }
                 }
-                SelectItem::Sum(_) | SelectItem::Avg(_) => {}
+                SelectItem::Sum(_)
+                | SelectItem::Avg(_)
+                | SelectItem::Min(_)
+                | SelectItem::Max(_) => {}
             }
         }
 
         let mut group_exprs = Vec::new();
-        for key in keys {
+        for key in group_by_keys {
             let name = key.resolve(arrow_schema)?;
             group_exprs.push(col(name.as_str()));
         }
@@ -190,6 +190,14 @@ pub(super) fn apply_select_spec_to_dataframe(
                     let name = cs.resolve(arrow_schema)?;
                     aggs.push(avg(col(name.as_str())));
                 }
+                SelectItem::Min(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(min(col(name.as_str())));
+                }
+                SelectItem::Max(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(max(col(name.as_str())));
+                }
                 SelectItem::Column(_) => {}
             }
         }
@@ -198,7 +206,7 @@ pub(super) fn apply_select_spec_to_dataframe(
             eprintln!(
                 "warning: group_by() with no aggregates in select(); showing distinct group keys only (behavior may change)"
             );
-            let key_names: Vec<String> = keys
+            let key_names: Vec<String> = group_by_keys
                 .iter()
                 .map(|k| k.resolve(arrow_schema))
                 .collect::<crate::Result<Vec<_>>>()?;
@@ -229,6 +237,14 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Avg(cs) => {
                     let name = cs.resolve(arrow_schema)?;
                     aggs.push(avg(col(name.as_str())));
+                }
+                SelectItem::Min(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(min(col(name.as_str())));
+                }
+                SelectItem::Max(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(max(col(name.as_str())));
                 }
                 SelectItem::Column(_) => {}
             }

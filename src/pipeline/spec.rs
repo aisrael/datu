@@ -34,6 +34,10 @@ pub enum SelectItem {
     Sum(ColumnSpec),
     /// Global average over one column (REPL `avg(:col)`).
     Avg(ColumnSpec),
+    /// Global minimum over one column (REPL `min(:col)`).
+    Min(ColumnSpec),
+    /// Global maximum over one column (REPL `max(:col)`).
+    Max(ColumnSpec),
 }
 
 /// Macro to build a [`SelectSpec`] from homogeneous column forms:
@@ -92,7 +96,10 @@ impl ColumnSpec {
 impl SelectItem {
     /// Returns true when this item is an aggregate (not a plain projection).
     pub fn is_aggregate(&self) -> bool {
-        matches!(self, SelectItem::Sum(_) | SelectItem::Avg(_))
+        matches!(
+            self,
+            SelectItem::Sum(_) | SelectItem::Avg(_) | SelectItem::Min(_) | SelectItem::Max(_)
+        )
     }
 }
 
@@ -163,7 +170,10 @@ impl SelectSpec {
             .iter()
             .map(|item| match item {
                 SelectItem::Column(s) => s.resolve(schema),
-                SelectItem::Sum(_) | SelectItem::Avg(_) => Err(Error::PipelinePlanningError(
+                SelectItem::Sum(_)
+                | SelectItem::Avg(_)
+                | SelectItem::Min(_)
+                | SelectItem::Max(_) => Err(Error::PipelinePlanningError(
                     PipelinePlanningError::AggregatesInProjectionSelect,
                 )),
             })
@@ -193,6 +203,14 @@ mod tests {
     fn test_select_item_avg_is_aggregate() {
         let item = SelectItem::Avg(ColumnSpec::CaseInsensitive("x".into()));
         assert!(item.is_aggregate());
+    }
+
+    #[test]
+    fn test_select_item_min_max_are_aggregate() {
+        let min_item = SelectItem::Min(ColumnSpec::CaseInsensitive("x".into()));
+        let max_item = SelectItem::Max(ColumnSpec::CaseInsensitive("y".into()));
+        assert!(min_item.is_aggregate());
+        assert!(max_item.is_aggregate());
     }
 
     fn schema_with_columns(names: &[&str]) -> Schema {

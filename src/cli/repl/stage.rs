@@ -111,6 +111,8 @@ impl fmt::Display for ReplPipelineStage {
                         SelectItem::Column(c) => format_column_spec(c),
                         SelectItem::Sum(c) => format!("sum({})", format_column_spec(c)),
                         SelectItem::Avg(c) => format!("avg({})", format_column_spec(c)),
+                        SelectItem::Min(c) => format!("min({})", format_column_spec(c)),
+                        SelectItem::Max(c) => format!("max({})", format_column_spec(c)),
                     })
                     .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))

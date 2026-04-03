@@ -198,36 +198,20 @@ impl PipelineBuilder {
         reject_orc_with_aggregates(input_file_type, &select)?;
 
         let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
-        if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
-                input_path: input_path.to_string(),
-                input_file_type,
-                select,
-                slice,
-                sparse: self.sparse,
-                sink: RecordBatchSink::Write {
-                    output_path: output_path.to_string(),
-                    output_file_type,
-                    json_pretty: self.json_pretty,
-                    progress: self.progress.clone(),
-                },
-            }))
-        } else {
-            Ok(Pipeline::DataFrame(DataFramePipeline {
-                input_path: input_path.to_string(),
-                input_file_type,
-                select,
-                slice,
-                csv_has_header: self.csv_has_header,
-                sparse: self.sparse,
-                sink: DataFrameSink::Write {
-                    output_path: output_path.to_string(),
-                    output_file_type,
-                    json_pretty: self.json_pretty,
-                    progress: self.progress.clone(),
-                },
-            }))
-        }
+        Ok(dispatch_pipeline(
+            input_path.to_string(),
+            input_file_type,
+            select,
+            slice,
+            self.sparse,
+            self.csv_has_header,
+            UnifiedSink::Write {
+                output_path: output_path.to_string(),
+                output_file_type,
+                json_pretty: self.json_pretty,
+                progress: self.progress.clone(),
+            },
+        ))
     }
 
     fn build_schema_display_pipeline(
@@ -251,32 +235,18 @@ impl PipelineBuilder {
 
         reject_orc_with_aggregates(input_file_type, &select)?;
 
-        if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: None,
+        Ok(dispatch_pipeline(
+            input_path,
+            input_file_type,
+            select,
+            None,
+            sparse,
+            csv_has_header,
+            UnifiedSink::Schema {
+                output_format,
                 sparse,
-                sink: RecordBatchSink::Schema {
-                    output_format,
-                    sparse,
-                },
-            }))
-        } else {
-            Ok(Pipeline::DataFrame(DataFramePipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: None,
-                csv_has_header,
-                sparse,
-                sink: DataFrameSink::Schema {
-                    output_format,
-                    sparse,
-                },
-            }))
-        }
+            },
+        ))
     }
 
     fn build_row_count_display_pipeline(
@@ -297,26 +267,15 @@ impl PipelineBuilder {
 
         reject_orc_with_aggregates(input_file_type, &select)?;
 
-        if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: None,
-                sparse,
-                sink: RecordBatchSink::Count,
-            }))
-        } else {
-            Ok(Pipeline::DataFrame(DataFramePipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: None,
-                csv_has_header,
-                sparse,
-                sink: DataFrameSink::Count,
-            }))
-        }
+        Ok(dispatch_pipeline(
+            input_path,
+            input_file_type,
+            select,
+            None,
+            sparse,
+            csv_has_header,
+            UnifiedSink::Count,
+        ))
     }
 
     /// Builds a display pipeline from the builder's configuration.
@@ -349,32 +308,18 @@ impl PipelineBuilder {
 
         reject_orc_with_aggregates(input_file_type, &select)?;
 
-        if input_file_type == FileType::Orc {
-            Ok(Pipeline::RecordBatch(RecordBatchPipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: Some(slice),
-                sparse,
-                sink: RecordBatchSink::Display {
-                    output_format,
-                    csv_stdout_headers,
-                },
-            }))
-        } else {
-            Ok(Pipeline::DataFrame(DataFramePipeline {
-                input_path,
-                input_file_type,
-                select,
-                slice: Some(slice),
-                csv_has_header,
-                sparse,
-                sink: DataFrameSink::Display {
-                    output_format,
-                    csv_stdout_headers,
-                },
-            }))
-        }
+        Ok(dispatch_pipeline(
+            input_path,
+            input_file_type,
+            select,
+            Some(slice),
+            sparse,
+            csv_has_header,
+            UnifiedSink::Display {
+                output_format,
+                csv_stdout_headers,
+            },
+        ))
     }
 
     /// Display pipeline: global aggregate `select(sum(...), avg(...), min(...), max(...), ...)` with full result (one row) to stdout.
@@ -467,6 +412,118 @@ impl PipelineBuilder {
         } else {
             self.build_display_pipeline(input_path, select)
         }
+    }
+}
+
+/// Sink description shared by dataframe and record-batch sinks (isomorphic variants) for dispatch.
+enum UnifiedSink {
+    Write {
+        output_path: String,
+        output_file_type: FileType,
+        json_pretty: bool,
+        progress: Option<ProgressBar>,
+    },
+    Display {
+        output_format: DisplayOutputFormat,
+        csv_stdout_headers: bool,
+    },
+    Schema {
+        output_format: DisplayOutputFormat,
+        sparse: bool,
+    },
+    Count,
+}
+
+fn dispatch_pipeline(
+    input_path: String,
+    input_file_type: FileType,
+    select: Option<SelectSpec>,
+    slice: Option<DisplaySlice>,
+    sparse: bool,
+    csv_has_header: Option<bool>,
+    sink: UnifiedSink,
+) -> Pipeline {
+    if input_file_type == FileType::Orc {
+        Pipeline::RecordBatch(RecordBatchPipeline {
+            input_path,
+            input_file_type,
+            select,
+            slice,
+            sparse,
+            sink: unified_to_record_batch_sink(sink),
+        })
+    } else {
+        Pipeline::DataFrame(DataFramePipeline {
+            input_path,
+            input_file_type,
+            select,
+            slice,
+            csv_has_header,
+            sparse,
+            sink: unified_to_dataframe_sink(sink),
+        })
+    }
+}
+
+fn unified_to_dataframe_sink(sink: UnifiedSink) -> DataFrameSink {
+    match sink {
+        UnifiedSink::Write {
+            output_path,
+            output_file_type,
+            json_pretty,
+            progress,
+        } => DataFrameSink::Write {
+            output_path,
+            output_file_type,
+            json_pretty,
+            progress,
+        },
+        UnifiedSink::Display {
+            output_format,
+            csv_stdout_headers,
+        } => DataFrameSink::Display {
+            output_format,
+            csv_stdout_headers,
+        },
+        UnifiedSink::Schema {
+            output_format,
+            sparse,
+        } => DataFrameSink::Schema {
+            output_format,
+            sparse,
+        },
+        UnifiedSink::Count => DataFrameSink::Count,
+    }
+}
+
+fn unified_to_record_batch_sink(sink: UnifiedSink) -> RecordBatchSink {
+    match sink {
+        UnifiedSink::Write {
+            output_path,
+            output_file_type,
+            json_pretty,
+            progress,
+        } => RecordBatchSink::Write {
+            output_path,
+            output_file_type,
+            json_pretty,
+            progress,
+        },
+        UnifiedSink::Display {
+            output_format,
+            csv_stdout_headers,
+        } => RecordBatchSink::Display {
+            output_format,
+            csv_stdout_headers,
+        },
+        UnifiedSink::Schema {
+            output_format,
+            sparse,
+        } => RecordBatchSink::Schema {
+            output_format,
+            sparse,
+        },
+        UnifiedSink::Count => RecordBatchSink::Count,
     }
 }
 

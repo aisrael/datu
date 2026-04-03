@@ -1,22 +1,25 @@
 ---
 name: make-release
 description: >-
-  Prepares a semver release branch from main: compares Cargo.toml to the latest
-  git tag, bumps the patch version when needed, updates CLI version tests,
-  writes CHANGELOG.md, pushes release/{version}, then runs make-pr. Use when
-  cutting a release, bumping versions, or when the user says make-release.
+  Prepares a semver release branch from main or continues on an existing
+  release/* branch: compares Cargo.toml to the latest git tag, bumps the patch
+  version when needed, updates CLI version tests, writes CHANGELOG.md, pushes
+  release/{version}, then runs make-pr. Use when cutting a release, bumping
+  versions, or when the user says make-release.
 ---
 
 # Make Release
 
 End-to-end release prep for this repo. Execute steps in order using the shell; stop with a clear error if any check fails.
 
-**Prerequisites:** `git`, `gh` (GitHub CLI, authenticated), clean `main` (stash or commit unrelated work first).
+**Prerequisites:** `git`, `gh` (GitHub CLI, authenticated), clean working tree on `main` or `release/*` (stash or commit unrelated work first).
 
 ## 1. Verify branch
 
-- Run `git branch --show-current`. Must be exactly `main`. If not, stop.
-- Recommended: `git fetch origin main` and `git status` — if behind `origin/main`, stop and ask to pull/rebase first.
+- Run `git branch --show-current`. The branch must be **exactly** `main`, **or** match `release/<semver>` where `<semver>` is `x.y.z` (digits and dots only, e.g. `release/0.3.4`). If it matches neither, stop.
+- **Sync check:**
+  - On `main`: `git fetch origin main` and `git status` — if behind `origin/main`, stop and ask to pull/rebase first.
+  - On `release/x.y.z`: `git fetch origin` — if the branch tracks a remote and is behind `origin/release/x.y.z`, stop and ask to pull/rebase first.
 
 ## 2. Read crate version
 
@@ -31,7 +34,7 @@ End-to-end release prep for this repo. Execute steps in order using the shell; s
 git tag --list --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -1
 ```
 
-Use the matched ref string as **T** (e.g. `v0.3.2`) for `git log`/`git diff`. Strip a leading `v` from **T** for numeric comparison only; call that **L**. If there is no match, set **T** empty, **L** = `0.0.0`, and treat the changelog range as the full history on `main` (state that in the notes).
+Use the matched ref string as **T** (e.g. `v0.3.2`) for `git log`/`git diff`. Strip a leading `v` from **T** for numeric comparison only; call that **L**. If there is no match, set **T** empty, **L** = `0.0.0`, and treat the changelog range as the full history on **RANGE** (see §6: `main` on `main`, `HEAD` on `release/*`; state that in the notes).
 
 ## 4. Decide target version **V**
 
@@ -46,24 +49,32 @@ When bumping:
 2. Search for hard-coded crate versions (e.g. `grep -r 'datu [0-9]' features/` or the CLI feature file). Update expectations such as `Then the first line of the output should be: datu X.Y.Z` in `features/cli/cli.feature` to match **V**.
 3. Run `cargo test` (and `cargo clippy --all-targets -- -D warnings` if the project uses it) and fix failures.
 
-## 5. Create release branch
+## 5. Create or align release branch
 
-- Run `git checkout -b "release/$(echo "$V" | tr -d '\n')"` (branch name `release/x.y.z`).
-- If version/tests changed on main before branching: ensure those edits are included in the branch (either commit on branch in next steps, or branch was created after edits — working tree should contain all release changes).
+- If current branch is `main`: run `git checkout -b "release/$(echo "$V" | tr -d '\n')"` (branch name `release/x.y.z`).
+- If current branch is already `release/$V` (same **V** as resolved above): stay on it; do not create a new branch.
+- If current branch is `release/x.y.z` but **x.y.z** ≠ **V**: stop with a clear error (branch name and target version disagree; resolve manually or rename/checkout).
+
+If version/tests changed before branching: ensure those edits are on the branch you use (working tree should contain all release changes).
 
 ## 6. Changelog (always)
 
-Compare current `main` (the commit you branched from — use `main` as the ref if it still points there, or `origin/main`) against **T**:
+Set **RANGE** for `git log` / `git diff`:
 
-- If **T** is set: `git log T..main --oneline`, `git diff T..main --stat`, and `git diff T..main --shortstat` for stats.
-- If **T** is empty: summarize `git log main --oneline` and note first release or missing prior tag.
+- On `main`: `main` (prefer `origin/main` after fetch if that is the integration point).
+- On `release/x.y.z`: `HEAD` (the current release branch tip).
 
-Do this **before** or **after** creating the branch, but use the same **T** so the notes describe everything merged to `main` since the last tag.
+Compare **RANGE** against **T**:
+
+- If **T** is set: `git log T..RANGE --oneline`, `git diff T..RANGE --stat`, and `git diff T..RANGE --shortstat` for stats.
+- If **T** is empty: summarize `git log RANGE --oneline` and note first release or missing prior tag.
+
+Do this **before** or **after** creating the branch from `main`, but use the same **T** and **RANGE** so the notes describe the right commit range.
 
 Write a new section at the **top** of `CHANGELOG.md` (after the title block), matching existing style in that file:
 
 - Title: `## vX.Y.Z` (use **V**).
-- Sections like **Highlights**, **Improvements**, **Changelog Stats** (commit count, files changed, insertions/deletions from `git diff --shortstat T..main` or equivalent).
+- Sections like **Highlights**, **Improvements**, **Changelog Stats** (commit count, files changed, insertions/deletions from `git diff --shortstat T..RANGE` or equivalent).
 
 Keep prose consistent with prior entries in `CHANGELOG.md`.
 
@@ -85,8 +96,9 @@ Ensure the reported PR URL is the full GitHub URL (clickable).
 
 | Condition | Action |
 |-----------|--------|
-| Not on `main` | Stop |
-| V₀ > L | Keep Cargo.toml version; still branch + changelog + PR |
+| Not on `main` or `release/x.y.z` | Stop |
+| On `release/x.y.z` but name ≠ **V** | Stop (align branch name and version) |
+| V₀ > L | Keep Cargo.toml version; still branch (if needed) + changelog + PR |
 | V₀ ≤ L | Bump patch to **V**, fix CLI version tests, then continue |
 
 **Files often touched:** `Cargo.toml`, `Cargo.lock`, `features/cli/cli.feature`, `CHANGELOG.md`.

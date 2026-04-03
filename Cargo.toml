@@ -1,6 +1,6 @@
 [package]
 name = "datu"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -52,7 +52,7 @@ name = "parquet_to_avro"
 harness = false
 
 [[test]]
-name = "features"
+name = "cli"
 harness = false
 
 [[test]]

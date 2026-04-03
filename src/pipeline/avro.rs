@@ -241,8 +241,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_and_write_avro_steps() {
-        let read_args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
-        let read_step = DataframeAvroReader { args: read_args };
+        let args = ReadArgs::new("fixtures/userdata5.avro", FileType::Avro);
+        let read_step = DataframeAvroReader { args };
 
         let tempfile = NamedTempFile::with_suffix(".avro").expect("Failed to create temp file");
         let args = WriteArgs {

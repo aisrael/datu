@@ -10,7 +10,7 @@ use rustyline::error::ReadlineError;
 
 use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::plan::collect_pipe_stages;
-use super::plan::is_terminal_expr;
+use super::plan::is_statement_complete;
 use super::plan::plan_pipeline_with_state;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
@@ -145,7 +145,7 @@ impl Repl {
         collect_pipe_stages(expr, &mut exprs);
         self.pending_exprs.extend(exprs);
 
-        let statement_complete = self.pending_exprs.last().is_some_and(is_terminal_expr);
+        let statement_complete = is_statement_complete(&self.pending_exprs);
         self.statement_incomplete = !statement_complete;
         if !statement_complete {
             return Ok(None);

@@ -8,6 +8,7 @@
 
 - When writing imports, use one `use` statement per line. DO NOT use grouped `use` statements
 - When writing `println!()` statements, use named arguments whenever possible.
+- When writing comments, explain _why_ not _what_
 - When running `cargo fmt`, use `cargo +nightly fmt`
 
 # Cursor-specific

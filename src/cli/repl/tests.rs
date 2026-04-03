@@ -6,18 +6,24 @@ use flt::parser::parse_expr;
 
 use super::ColumnSpec;
 use super::Repl;
+use super::SelectItem;
+use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::plan::collect_pipe_stages;
-use super::plan::extract_column_specs;
 use super::plan::extract_head_n;
 use super::plan::extract_path_from_args;
 use super::plan::extract_sample_n;
+use super::plan::extract_select_items;
 use super::plan::extract_tail_n;
 use super::plan::is_head_call;
+use super::plan::is_statement_complete;
 use super::plan::plan_pipeline_with_state;
 use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
 use crate::Error;
+use crate::pipeline::DataFramePipeline;
+use crate::pipeline::Pipeline;
+use crate::pipeline::SelectSpec;
 
 fn parse(input: &str) -> Expr {
     let (remainder, expr) = parse_expr(input).expect("parse");
@@ -27,6 +33,21 @@ fn parse(input: &str) -> Expr {
 
 fn test_repl() -> Repl {
     Repl::new_for_tests().expect("repl for tests")
+}
+
+fn pipe_exprs(input: &str) -> Vec<Expr> {
+    let expr = parse(input);
+    let mut exprs = Vec::new();
+    collect_pipe_stages(expr, &mut exprs);
+    exprs
+}
+
+fn plan_pipeline_result(input: &str) -> (Vec<ReplPipelineStage>, bool) {
+    plan_pipeline_with_state(pipe_exprs(input)).unwrap()
+}
+
+fn plan_pipeline(input: &str) -> Vec<ReplPipelineStage> {
+    plan_pipeline_result(input).0
 }
 
 // ── plan_stage ─────────────────────────────────────────────────
@@ -57,11 +78,67 @@ fn test_plan_stage_select() {
         stage,
         ReplPipelineStage::Select {
             columns: vec![
-                ColumnSpec::CaseInsensitive("one".into()),
-                ColumnSpec::CaseInsensitive("two".into())
+                SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
             ]
         }
     );
+}
+
+#[test]
+fn test_is_statement_complete_select_aggregate_only() {
+    let expr = parse("select(sum(:quantity))");
+    assert!(is_statement_complete(std::slice::from_ref(&expr)));
+    let expr = parse("select(:a, sum(:b))");
+    assert!(!is_statement_complete(std::slice::from_ref(&expr)));
+}
+
+#[test]
+fn test_is_statement_complete_grouped_select_one_line() {
+    let exprs = pipe_exprs(r#"read("f.parquet") |> group_by(:id) |> select(:id, sum(:qty))"#);
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
+fn test_is_statement_complete_select_avg_only() {
+    let exprs = pipe_exprs("select(avg(:quantity))");
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
+fn test_is_statement_complete_select_min_only() {
+    let expr = parse("select(min(:quantity))");
+    assert!(is_statement_complete(std::slice::from_ref(&expr)));
+    let exprs = pipe_exprs("select(min(:quantity))");
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
+fn test_is_statement_complete_select_then_group_by() {
+    let exprs = pipe_exprs(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
+fn test_plan_stage_select_aggregates() {
+    let qty = ColumnSpec::CaseInsensitive("quantity".into());
+    let cases = [
+        ("select(sum(:quantity))", SelectItem::Sum(qty.clone())),
+        ("select(avg(:quantity))", SelectItem::Avg(qty.clone())),
+        ("select(min(:quantity))", SelectItem::Min(qty.clone())),
+        ("select(max(:quantity))", SelectItem::Max(qty)),
+    ];
+    for (input, expected_col) in cases {
+        let expr = parse(input);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            ReplPipelineStage::Select {
+                columns: vec![expected_col],
+            },
+            "case: {input}"
+        );
+    }
 }
 
 #[test]
@@ -109,10 +186,7 @@ fn test_plan_stage_non_function_expr() {
 
 #[test]
 fn test_plan_pipeline_read_select_write() {
-    let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
+    let pipeline = plan_pipeline(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
@@ -123,7 +197,7 @@ fn test_plan_pipeline_read_select_write() {
     assert_eq!(
         pipeline[1],
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
     );
     assert_eq!(
@@ -135,33 +209,41 @@ fn test_plan_pipeline_read_select_write() {
 }
 
 #[test]
-fn test_plan_pipeline_auto_appends_print_after_head() {
-    let expr = parse(r#"read("a.parquet") |> head(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Head { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
+fn test_plan_pipeline_auto_appends_print_after_slice() {
+    let read_a = ReplPipelineStage::Read {
+        path: "a.parquet".to_string(),
+    };
+    let cases = [
+        ("head", "head(5)", ReplPipelineStage::Head { n: 5 }),
+        ("tail", "tail(5)", ReplPipelineStage::Tail { n: 5 }),
+        ("sample", "sample(5)", ReplPipelineStage::Sample { n: 5 }),
+    ];
+    for (name, middle, expected_slice) in cases {
+        let input = format!(r#"read("a.parquet") |> {middle}"#);
+        let pipeline = plan_pipeline(&input);
+        assert_eq!(pipeline.len(), 3, "case: {name}");
+        assert_eq!(pipeline[0], read_a, "case: {name}");
+        assert_eq!(pipeline[1], expected_slice, "case: {name}");
+        assert_eq!(pipeline[2], ReplPipelineStage::Print, "case: {name}");
+    }
 }
 
 #[test]
-fn test_plan_pipeline_no_print_when_write_follows_head() {
-    let expr = parse(r#"read("a.parquet") |> head(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
+fn test_plan_pipeline_no_print_when_write_follows_slice() {
+    let cases = [
+        ("head", "head(5)"),
+        ("tail", "tail(5)"),
+        ("sample", "sample(5)"),
+    ];
+    for (name, middle) in cases {
+        let input = format!(r#"read("a.parquet") |> {middle} |> write("b.csv")"#);
+        let pipeline = plan_pipeline(&input);
+        assert_eq!(pipeline.len(), 3, "case: {name}");
+        assert!(
+            matches!(pipeline.last(), Some(ReplPipelineStage::Write { .. })),
+            "case: {name}"
+        );
+    }
 }
 
 // ── extract_head_n ────────────────────────────────────────────
@@ -210,9 +292,7 @@ fn test_collect_pipe_stages_two_stages() {
 
 #[test]
 fn test_collect_pipe_stages_three_stages() {
-    let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
-    let mut stages = Vec::new();
-    collect_pipe_stages(expr, &mut stages);
+    let stages = pipe_exprs(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
     assert_eq!(stages.len(), 3);
 }
 
@@ -229,81 +309,100 @@ fn test_collect_pipe_stages_non_pipe_binary_not_flattened() {
     assert!(matches!(&stages[0], Expr::BinaryExpr(_, BinaryOp::Add, _)));
 }
 
-// ── extract_column_specs ────────────────────────────────────────
+// ── extract_select_items ────────────────────────────────────────
 
 #[test]
-fn test_extract_column_specs_symbols() {
+fn test_extract_select_items_symbols() {
     let args = vec![
         Expr::Literal(Literal::Symbol("one".into())),
         Expr::Literal(Literal::Symbol("two".into())),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("one".into()),
-            ColumnSpec::CaseInsensitive("two".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_strings() {
+fn test_extract_select_items_strings() {
     let args = vec![
         Expr::Literal(Literal::String("col_a".into())),
         Expr::Literal(Literal::String("col_b".into())),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::Exact("col_a".into()),
-            ColumnSpec::Exact("col_b".into())
+            SelectItem::Column(ColumnSpec::Exact("col_a".into())),
+            SelectItem::Column(ColumnSpec::Exact("col_b".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_idents() {
+fn test_extract_select_items_idents() {
     let args = vec![Expr::Ident("foo".into()), Expr::Ident("bar".into())];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("foo".into()),
-            ColumnSpec::CaseInsensitive("bar".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("foo".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("bar".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_mixed() {
+fn test_extract_select_items_mixed() {
     let args = vec![
         Expr::Literal(Literal::Symbol("sym".into())),
         Expr::Literal(Literal::String("str".into())),
         Expr::Ident("ident".into()),
     ];
-    let result = extract_column_specs(&args).unwrap();
+    let result = extract_select_items(&args).unwrap();
     assert_eq!(
         result,
         vec![
-            ColumnSpec::CaseInsensitive("sym".into()),
-            ColumnSpec::Exact("str".into()),
-            ColumnSpec::CaseInsensitive("ident".into())
+            SelectItem::Column(ColumnSpec::CaseInsensitive("sym".into())),
+            SelectItem::Column(ColumnSpec::Exact("str".into())),
+            SelectItem::Column(ColumnSpec::CaseInsensitive("ident".into()))
         ]
     );
 }
 
 #[test]
-fn test_extract_column_specs_empty() {
-    let result = extract_column_specs(&[]).unwrap();
+fn test_extract_select_items_aggregates() {
+    let qty = ColumnSpec::CaseInsensitive("quantity".into());
+    let cases = [
+        ("sum", SelectItem::Sum(qty.clone())),
+        ("avg", SelectItem::Avg(qty.clone())),
+        ("min", SelectItem::Min(qty.clone())),
+        ("max", SelectItem::Max(qty)),
+    ];
+    for (fn_name, expected) in cases {
+        let args = vec![Expr::FunctionCall(
+            Identifier(fn_name.into()),
+            vec![Expr::Literal(Literal::Symbol("quantity".into()))],
+        )];
+        let result = extract_select_items(&args).unwrap();
+        assert_eq!(result, vec![expected], "case: {fn_name}");
+    }
+}
+
+#[test]
+fn test_extract_select_items_empty() {
+    let result = extract_select_items(&[]).unwrap();
     assert!(result.is_empty());
 }
 
 #[test]
-fn test_extract_column_specs_unsupported_expr() {
+fn test_extract_select_items_unsupported_expr() {
     let args = vec![Expr::Literal(Literal::Boolean(true))];
-    let result = extract_column_specs(&args);
+    let result = extract_select_items(&args);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -419,10 +518,10 @@ fn test_validate_rejects_second_select() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
         },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("y".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("y".into()))],
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Print,
@@ -439,11 +538,185 @@ fn test_validate_rejects_head_before_select() {
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())],
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
         },
     ];
     let err = validate_repl_pipeline_stages(&stages).unwrap_err();
     assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_accepts_read_aggregate_select_only() {
+    let q = ColumnSpec::CaseInsensitive("q".into());
+    let aggregates = [
+        SelectItem::Sum(q.clone()),
+        SelectItem::Avg(q.clone()),
+        SelectItem::Min(q.clone()),
+        SelectItem::Max(q),
+    ];
+    for item in aggregates {
+        let stages = vec![
+            ReplPipelineStage::Read {
+                path: "a.parquet".into(),
+            },
+            ReplPipelineStage::Select {
+                columns: vec![item],
+            },
+        ];
+        validate_repl_pipeline_stages(&stages).unwrap();
+    }
+}
+
+#[test]
+fn test_plan_stage_group_by() {
+    let expr = parse("group_by(:id, :region)");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                ColumnSpec::CaseInsensitive("id".into()),
+                ColumnSpec::CaseInsensitive("region".into()),
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_validate_group_by_select_either_order() {
+    let gb_then_sel = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    validate_repl_pipeline_stages(&gb_then_sel).unwrap();
+
+    let sel_then_gb = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+    ];
+    validate_repl_pipeline_stages(&sel_then_gb).unwrap();
+}
+
+#[test]
+fn test_validate_rejects_mixed_select_without_group_by() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+    assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_rejects_extra_plain_column_with_group_by() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::Column(ColumnSpec::CaseInsensitive("extra".into())),
+            ],
+        },
+    ];
+    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+    assert!(matches!(err, Error::InvalidReplPipeline(_)));
+}
+
+#[test]
+fn test_validate_accepts_column_only_grouped_select() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("id".into()))],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
+}
+
+#[test]
+fn test_builder_bridge_merges_group_by_order_agnostic() {
+    let keys = vec![ColumnSpec::CaseInsensitive("id".into())];
+    let items = vec![
+        SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
+        SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+    ];
+    let stages_a = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: keys.clone(),
+        },
+        ReplPipelineStage::Select {
+            columns: items.clone(),
+        },
+    ];
+    let stages_b = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: items.clone(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: keys.clone(),
+        },
+    ];
+    let mut builder_a = repl_stages_to_pipeline_builder(&stages_a).unwrap();
+    let mut builder_b = repl_stages_to_pipeline_builder(&stages_b).unwrap();
+    let Pipeline::DataFrame(DataFramePipeline { select: sa, .. }) = builder_a.build().unwrap()
+    else {
+        panic!("expected DataFrame pipeline");
+    };
+    let Pipeline::DataFrame(DataFramePipeline { select: sb, .. }) = builder_b.build().unwrap()
+    else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(
+        sa,
+        Some(SelectSpec {
+            columns: items,
+            group_by: Some(keys),
+        })
+    );
+    assert_eq!(sa, sb);
 }
 
 #[test]
@@ -462,10 +735,7 @@ fn test_plan_stage_schema() {
 
 #[test]
 fn test_plan_pipeline_read_count() {
-    let expr = parse(r#"read("a.parquet") |> count()"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, incomplete) = plan_pipeline_with_state(exprs).unwrap();
+    let (pipeline, incomplete) = plan_pipeline_result(r#"read("a.parquet") |> count()"#);
     assert!(!incomplete);
     assert_eq!(pipeline.len(), 2);
     assert_eq!(
@@ -557,16 +827,30 @@ fn test_terminal_stage_classification() {
     );
     assert!(
         !ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_terminal()
     );
     assert!(
         ReplPipelineStage::Select {
-            columns: vec![ColumnSpec::CaseInsensitive("x".into())]
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_non_terminal()
     );
+    let col_x = ColumnSpec::CaseInsensitive("x".into());
+    for item in [
+        SelectItem::Sum(col_x.clone()),
+        SelectItem::Avg(col_x.clone()),
+        SelectItem::Min(col_x.clone()),
+        SelectItem::Max(col_x),
+    ] {
+        assert!(
+            ReplPipelineStage::Select {
+                columns: vec![item],
+            }
+            .is_terminal()
+        );
+    }
 }
 
 #[test]
@@ -596,38 +880,6 @@ fn test_terminal_stage_implicit_followup() {
 #[test]
 fn test_display_print_stage() {
     assert_eq!(ReplPipelineStage::Print.to_string(), "print()");
-}
-
-// ── plan_pipeline_with_state: tail auto-print ─────────────────
-
-#[test]
-fn test_plan_pipeline_auto_appends_print_after_tail() {
-    let expr = parse(r#"read("a.parquet") |> tail(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Tail { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
-}
-
-#[test]
-fn test_plan_pipeline_no_print_when_write_follows_tail() {
-    let expr = parse(r#"read("a.parquet") |> tail(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
 }
 
 // ── extract_tail_n ──────────────────────────────────────────
@@ -676,38 +928,6 @@ fn test_sample_implicit_followup_is_print() {
         ReplPipelineStage::Sample { n: 5 }.get_implicit_followup_stage(),
         Some(ReplPipelineStage::Print)
     );
-}
-
-// ── plan_pipeline_with_state: sample auto-print ───────────────
-
-#[test]
-fn test_plan_pipeline_auto_appends_print_after_sample() {
-    let expr = parse(r#"read("a.parquet") |> sample(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Sample { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
-}
-
-#[test]
-fn test_plan_pipeline_no_print_when_write_follows_sample() {
-    let expr = parse(r#"read("a.parquet") |> sample(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
 }
 
 // ── extract_sample_n ────────────────────────────────────────

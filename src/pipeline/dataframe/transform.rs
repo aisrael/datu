@@ -6,15 +6,22 @@ use std::sync::Arc;
 use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
+use datafusion::functions_aggregate::expr_fn::avg;
+use datafusion::functions_aggregate::expr_fn::max;
+use datafusion::functions_aggregate::expr_fn::min;
+use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::DataFrame;
+use datafusion::prelude::col;
 use futures::StreamExt;
 
 use super::source::DataFrameSource;
 use crate::Error;
 use crate::FileType;
+use crate::pipeline::ColumnSpec;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
+use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::reservoir_sample_from_reader;
 use crate::pipeline::sample_from_reader;
@@ -121,6 +128,136 @@ pub async fn dataframe_apply_sample(
     }
 }
 
+fn column_spec_in_group_keys(cs: &ColumnSpec, keys: &[ColumnSpec]) -> bool {
+    keys.iter().any(|k| k == cs)
+}
+
+/// Applies `select()` projection, global aggregates, or grouped aggregates to a [`DataFrame`].
+pub(super) fn apply_select_spec_to_dataframe(
+    mut df: DataFrame,
+    spec: &SelectSpec,
+) -> crate::Result<DataFrame> {
+    if spec.is_empty() {
+        return Ok(df);
+    }
+    let schema = df.schema();
+    let arrow_schema = schema.as_arrow();
+
+    if spec.has_group_by() {
+        let group_by_keys = spec.group_by.as_ref().expect("has_group_by implies Some");
+        for key in group_by_keys {
+            if !spec
+                .columns
+                .iter()
+                .any(|item| matches!(item, SelectItem::Column(c) if c == key))
+            {
+                return Err(Error::GenericError(
+                    "every group_by column must appear in select() as a plain column".to_string(),
+                ));
+            }
+        }
+        for item in &spec.columns {
+            match item {
+                SelectItem::Column(c) => {
+                    if !column_spec_in_group_keys(c, group_by_keys) {
+                        return Err(Error::GenericError(
+                            "select with group_by: non-key columns must use an aggregate (sum, avg, min, or max), not plain columns"
+                                .to_string(),
+                        ));
+                    }
+                }
+                SelectItem::Sum(_)
+                | SelectItem::Avg(_)
+                | SelectItem::Min(_)
+                | SelectItem::Max(_) => {}
+            }
+        }
+
+        let mut group_exprs = Vec::new();
+        for key in group_by_keys {
+            let name = key.resolve(arrow_schema)?;
+            group_exprs.push(col(name.as_str()));
+        }
+
+        let mut aggs = Vec::new();
+        for item in &spec.columns {
+            match item {
+                SelectItem::Sum(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(sum(col(name.as_str())));
+                }
+                SelectItem::Avg(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(avg(col(name.as_str())));
+                }
+                SelectItem::Min(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(min(col(name.as_str())));
+                }
+                SelectItem::Max(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(max(col(name.as_str())));
+                }
+                SelectItem::Column(_) => {}
+            }
+        }
+
+        if aggs.is_empty() {
+            eprintln!(
+                "warning: group_by() with no aggregates in select(); showing distinct group keys only (behavior may change)"
+            );
+            let key_names: Vec<String> = group_by_keys
+                .iter()
+                .map(|k| k.resolve(arrow_schema))
+                .collect::<crate::Result<Vec<_>>>()?;
+            let col_refs: Vec<&str> = key_names.iter().map(String::as_str).collect();
+            df = df.select_columns(&col_refs)?;
+            df = df.distinct()?;
+        } else {
+            df = df.aggregate(group_exprs, aggs)?;
+        }
+        return Ok(df);
+    }
+
+    if spec.has_aggregates() {
+        if !spec.is_aggregate_only() {
+            return Err(Error::GenericError(
+                "mixed column projections and aggregates in select require group_by(); \
+                 put every group key in group_by() and list them as columns in select()"
+                    .to_string(),
+            ));
+        }
+        let mut aggs = Vec::new();
+        for item in &spec.columns {
+            match item {
+                SelectItem::Sum(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(sum(col(name.as_str())));
+                }
+                SelectItem::Avg(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(avg(col(name.as_str())));
+                }
+                SelectItem::Min(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(min(col(name.as_str())));
+                }
+                SelectItem::Max(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(max(col(name.as_str())));
+                }
+                SelectItem::Column(_) => {}
+            }
+        }
+        df = df.aggregate(vec![], aggs)?;
+    } else {
+        let resolved = spec.resolve_names(arrow_schema)?;
+        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+        df = df.select_columns(&col_refs)?;
+    }
+    Ok(df)
+}
+
 /// Applies optional column selection, SQL-style row limit, and display slice to a loaded [`DataFrame`].
 ///
 /// Used by `LegacyDataFrameReader` and `dataframe_pipeline_prepare_source` so read → project →
@@ -136,10 +273,7 @@ pub(super) async fn finalize_dataframe_source(
     if let Some(spec) = select
         && !spec.is_empty()
     {
-        let schema = df.schema();
-        let resolved = spec.resolve_names(schema.as_ref())?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df.select_columns(&col_refs)?;
+        df = apply_select_spec_to_dataframe(df, spec)?;
     }
     if let Some(n) = limit {
         df = dataframe_apply_head(df, n)?;

@@ -503,6 +503,7 @@ mod tests {
     use crate::FileType;
     use crate::pipeline::ColumnSpec;
     use crate::pipeline::RecordBatchReaderSource;
+    use crate::pipeline::SelectItem;
     use crate::pipeline::SelectSpec;
     use crate::pipeline::parquet::RecordBatchParquetReader;
     use crate::pipeline::read::ReadArgs;
@@ -517,8 +518,14 @@ mod tests {
         let select = SelectSpec::from_cli_args(&Some(vec!["one".to_string(), "two".to_string()]));
         let step = parse_select_step(select).expect("should return some");
         assert_eq!(step.select.len(), 2);
-        assert_eq!(step.select[0], ColumnSpec::Exact("one".into()));
-        assert_eq!(step.select[1], ColumnSpec::Exact("two".into()));
+        assert_eq!(
+            step.select[0],
+            SelectItem::Column(ColumnSpec::Exact("one".into()))
+        );
+        assert_eq!(
+            step.select[1],
+            SelectItem::Column(ColumnSpec::Exact("two".into()))
+        );
     }
 
     #[test]
@@ -526,8 +533,14 @@ mod tests {
         let select = SelectSpec::from_cli_args(&Some(vec!["one, two".to_string()]));
         let step = parse_select_step(select).expect("should return some");
         assert_eq!(step.select.len(), 2);
-        assert_eq!(step.select[0], ColumnSpec::Exact("one".into()));
-        assert_eq!(step.select[1], ColumnSpec::Exact("two".into()));
+        assert_eq!(
+            step.select[0],
+            SelectItem::Column(ColumnSpec::Exact("one".into()))
+        );
+        assert_eq!(
+            step.select[1],
+            SelectItem::Column(ColumnSpec::Exact("two".into()))
+        );
     }
 
     #[test]
@@ -546,9 +559,10 @@ mod tests {
         let select_step = RecordBatchSelect {
             select: SelectSpec {
                 columns: vec![
-                    ColumnSpec::Exact("two".to_string()),
-                    ColumnSpec::Exact("four".to_string()),
+                    SelectItem::Column(ColumnSpec::Exact("two".to_string())),
+                    SelectItem::Column(ColumnSpec::Exact("four".to_string())),
                 ],
+                group_by: None,
             },
         };
         let mut projected_source = select_step

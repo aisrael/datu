@@ -3,12 +3,15 @@
 use std::fmt;
 
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::SelectItem;
+use crate::pipeline::SelectSpec;
 
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum ReplPipelineStage {
     Read { path: String },
-    Select { columns: Vec<ColumnSpec> },
+    GroupBy { columns: Vec<ColumnSpec> },
+    Select { columns: Vec<SelectItem> },
     Head { n: usize },
     Tail { n: usize },
     Sample { n: usize },
@@ -18,18 +21,56 @@ pub enum ReplPipelineStage {
     Print,
 }
 
+fn select_spec_from_items(columns: &[SelectItem]) -> SelectSpec {
+    SelectSpec {
+        columns: columns.to_vec(),
+        group_by: None,
+    }
+}
+
+/// True when grouped + `select` stages form a complete statement (including `select(...) |> group_by(...)`).
+pub(super) fn repl_pipeline_last_select_is_terminal(stages: &[ReplPipelineStage]) -> bool {
+    let has_group_by = stages
+        .iter()
+        .any(|s| matches!(s, ReplPipelineStage::GroupBy { .. }));
+    let has_select = stages
+        .iter()
+        .any(|s| matches!(s, ReplPipelineStage::Select { .. }));
+
+    if let Some(ReplPipelineStage::Select { columns }) = stages.last() {
+        let spec = SelectSpec {
+            columns: columns.clone(),
+            group_by: None,
+        };
+        if spec.is_aggregate_only() {
+            return true;
+        }
+        if has_group_by {
+            return true;
+        }
+        return false;
+    }
+
+    matches!(stages.last(), Some(ReplPipelineStage::GroupBy { .. })) && has_select
+}
+
 impl ReplPipelineStage {
     /// Returns true when a stage closes a REPL statement.
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ReplPipelineStage::Head { .. }
-                | ReplPipelineStage::Tail { .. }
-                | ReplPipelineStage::Sample { .. }
-                | ReplPipelineStage::Schema
-                | ReplPipelineStage::Count
-                | ReplPipelineStage::Write { .. }
-        )
+            | ReplPipelineStage::Tail { .. }
+            | ReplPipelineStage::Sample { .. }
+            | ReplPipelineStage::Schema
+            | ReplPipelineStage::Count
+            | ReplPipelineStage::Write { .. } => true,
+            ReplPipelineStage::Select { columns } => {
+                // Single-stage check: full pipeline uses `repl_pipeline_last_select_is_terminal`.
+                select_spec_from_items(columns).is_aggregate_only()
+            }
+            ReplPipelineStage::GroupBy { .. } => false,
+            ReplPipelineStage::Read { .. } | ReplPipelineStage::Print => false,
+        }
     }
 
     /// Returns true for stages that can continue to another explicit stage.
@@ -48,16 +89,30 @@ impl ReplPipelineStage {
     }
 }
 
+fn format_column_spec(c: &ColumnSpec) -> String {
+    match c {
+        ColumnSpec::Exact(s) => format!(r#""{s}""#),
+        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+    }
+}
+
 impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReplPipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            ReplPipelineStage::GroupBy { columns } => {
+                let cols: Vec<String> = columns.iter().map(format_column_spec).collect();
+                write!(f, "group_by({})", cols.join(", "))
+            }
             ReplPipelineStage::Select { columns } => {
                 let cols: Vec<String> = columns
                     .iter()
-                    .map(|c| match c {
-                        ColumnSpec::Exact(s) => format!(r#""{s}""#),
-                        ColumnSpec::CaseInsensitive(s) => format!(":{s}"),
+                    .map(|item| match item {
+                        SelectItem::Column(c) => format_column_spec(c),
+                        SelectItem::Sum(c) => format!("sum({})", format_column_spec(c)),
+                        SelectItem::Avg(c) => format!("avg({})", format_column_spec(c)),
+                        SelectItem::Min(c) => format!("min({})", format_column_spec(c)),
+                        SelectItem::Max(c) => format!("max({})", format_column_spec(c)),
                     })
                     .collect::<Vec<_>>();
                 write!(f, "select({})", cols.join(", "))

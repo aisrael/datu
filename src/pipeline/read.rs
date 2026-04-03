@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::path::Path;
 
 use async_trait::async_trait;
 use datafusion::prelude::AvroReadOptions;
@@ -136,7 +137,15 @@ pub async fn read_to_dataframe(
             ));
         }
     };
-    Ok(ReadResult::DataFrame(DataFrameSource::new(df)))
+    let table_provider = df.into_temporary_view();
+    let basename = Path::new(input_path)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    ctx.register_table(&basename, table_provider)?;
+    let registered_df = ctx.table(&basename).await?;
+    Ok(ReadResult::DataFrame(DataFrameSource::new(registered_df)))
 }
 
 /// Pipeline step that reads a file into a DataFusion [`DataFrame`] via [`read_to_dataframe`].

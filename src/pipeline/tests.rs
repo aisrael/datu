@@ -8,6 +8,7 @@ use crate::Error;
 use crate::FileType;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DataframeParquetReader;
+use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::avro::DataframeAvroWriter;
 use crate::pipeline::avro::get_schema_fields_avro;
@@ -346,16 +347,19 @@ fn test_select_spec_from_cli_args_parsing() {
         .expect("non-empty");
     assert_eq!(
         spec.columns,
-        vec![ColumnSpec::Exact("a".into()), ColumnSpec::Exact("b".into()),]
+        vec![
+            SelectItem::Column(ColumnSpec::Exact("a".into())),
+            SelectItem::Column(ColumnSpec::Exact("b".into())),
+        ]
     );
     let spec = SelectSpec::from_cli_args(&Some(vec!["a, b".to_string(), "c".to_string()]))
         .expect("non-empty");
     assert_eq!(
         spec.columns,
         vec![
-            ColumnSpec::Exact("a".into()),
-            ColumnSpec::Exact("b".into()),
-            ColumnSpec::Exact("c".into()),
+            SelectItem::Column(ColumnSpec::Exact("a".into())),
+            SelectItem::Column(ColumnSpec::Exact("b".into())),
+            SelectItem::Column(ColumnSpec::Exact("c".into())),
         ]
     );
     let spec =
@@ -363,8 +367,8 @@ fn test_select_spec_from_cli_args_parsing() {
     assert_eq!(
         spec.columns,
         vec![
-            ColumnSpec::Exact("one".into()),
-            ColumnSpec::Exact("two".into()),
+            SelectItem::Column(ColumnSpec::Exact("one".into())),
+            SelectItem::Column(ColumnSpec::Exact("two".into())),
         ]
     );
 }

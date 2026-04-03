@@ -10,6 +10,7 @@ pub use stage::ReplPipelineStage;
 
 /// Column selection in REPL expressions (re-export of [`crate::pipeline::ColumnSpec`]).
 pub use crate::pipeline::ColumnSpec;
+pub use crate::pipeline::SelectItem;
 
 #[cfg(test)]
 mod tests;

@@ -35,6 +35,21 @@ fn test_repl() -> Repl {
     Repl::new_for_tests().expect("repl for tests")
 }
 
+fn pipe_exprs(input: &str) -> Vec<Expr> {
+    let expr = parse(input);
+    let mut exprs = Vec::new();
+    collect_pipe_stages(expr, &mut exprs);
+    exprs
+}
+
+fn plan_pipeline_result(input: &str) -> (Vec<ReplPipelineStage>, bool) {
+    plan_pipeline_with_state(pipe_exprs(input)).unwrap()
+}
+
+fn plan_pipeline(input: &str) -> Vec<ReplPipelineStage> {
+    plan_pipeline_result(input).0
+}
+
 // ── plan_stage ─────────────────────────────────────────────────
 
 #[test]
@@ -80,17 +95,13 @@ fn test_is_statement_complete_select_aggregate_only() {
 
 #[test]
 fn test_is_statement_complete_grouped_select_one_line() {
-    let expr = parse(r#"read("f.parquet") |> group_by(:id) |> select(:id, sum(:qty))"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
+    let exprs = pipe_exprs(r#"read("f.parquet") |> group_by(:id) |> select(:id, sum(:qty))"#);
     assert!(is_statement_complete(&exprs));
 }
 
 #[test]
 fn test_is_statement_complete_select_avg_only() {
-    let expr = parse("select(avg(:quantity))");
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
+    let exprs = pipe_exprs("select(avg(:quantity))");
     assert!(is_statement_complete(&exprs));
 }
 
@@ -98,73 +109,36 @@ fn test_is_statement_complete_select_avg_only() {
 fn test_is_statement_complete_select_min_only() {
     let expr = parse("select(min(:quantity))");
     assert!(is_statement_complete(std::slice::from_ref(&expr)));
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
+    let exprs = pipe_exprs("select(min(:quantity))");
     assert!(is_statement_complete(&exprs));
 }
 
 #[test]
 fn test_is_statement_complete_select_then_group_by() {
-    let expr = parse(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
+    let exprs = pipe_exprs(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
     assert!(is_statement_complete(&exprs));
 }
 
 #[test]
-fn test_plan_stage_select_sum() {
-    let expr = parse("select(sum(:quantity))");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive(
-                "quantity".into(),
-            ))],
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select_avg() {
-    let expr = parse("select(avg(:quantity))");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive(
-                "quantity".into(),
-            ))],
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select_min() {
-    let expr = parse("select(min(:quantity))");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Min(ColumnSpec::CaseInsensitive(
-                "quantity".into(),
-            ))],
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select_max() {
-    let expr = parse("select(max(:quantity))");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Max(ColumnSpec::CaseInsensitive(
-                "quantity".into(),
-            ))],
-        }
-    );
+fn test_plan_stage_select_aggregates() {
+    let qty = ColumnSpec::CaseInsensitive("quantity".into());
+    let cases = [
+        ("select(sum(:quantity))", SelectItem::Sum(qty.clone())),
+        ("select(avg(:quantity))", SelectItem::Avg(qty.clone())),
+        ("select(min(:quantity))", SelectItem::Min(qty.clone())),
+        ("select(max(:quantity))", SelectItem::Max(qty)),
+    ];
+    for (input, expected_col) in cases {
+        let expr = parse(input);
+        let stage = plan_stage(expr).unwrap();
+        assert_eq!(
+            stage,
+            ReplPipelineStage::Select {
+                columns: vec![expected_col],
+            },
+            "case: {input}"
+        );
+    }
 }
 
 #[test]
@@ -212,10 +186,7 @@ fn test_plan_stage_non_function_expr() {
 
 #[test]
 fn test_plan_pipeline_read_select_write() {
-    let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
+    let pipeline = plan_pipeline(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
     assert_eq!(pipeline.len(), 3);
     assert_eq!(
         pipeline[0],
@@ -238,33 +209,41 @@ fn test_plan_pipeline_read_select_write() {
 }
 
 #[test]
-fn test_plan_pipeline_auto_appends_print_after_head() {
-    let expr = parse(r#"read("a.parquet") |> head(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Head { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
+fn test_plan_pipeline_auto_appends_print_after_slice() {
+    let read_a = ReplPipelineStage::Read {
+        path: "a.parquet".to_string(),
+    };
+    let cases = [
+        ("head", "head(5)", ReplPipelineStage::Head { n: 5 }),
+        ("tail", "tail(5)", ReplPipelineStage::Tail { n: 5 }),
+        ("sample", "sample(5)", ReplPipelineStage::Sample { n: 5 }),
+    ];
+    for (name, middle, expected_slice) in cases {
+        let input = format!(r#"read("a.parquet") |> {middle}"#);
+        let pipeline = plan_pipeline(&input);
+        assert_eq!(pipeline.len(), 3, "case: {name}");
+        assert_eq!(pipeline[0], read_a, "case: {name}");
+        assert_eq!(pipeline[1], expected_slice, "case: {name}");
+        assert_eq!(pipeline[2], ReplPipelineStage::Print, "case: {name}");
+    }
 }
 
 #[test]
-fn test_plan_pipeline_no_print_when_write_follows_head() {
-    let expr = parse(r#"read("a.parquet") |> head(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
+fn test_plan_pipeline_no_print_when_write_follows_slice() {
+    let cases = [
+        ("head", "head(5)"),
+        ("tail", "tail(5)"),
+        ("sample", "sample(5)"),
+    ];
+    for (name, middle) in cases {
+        let input = format!(r#"read("a.parquet") |> {middle} |> write("b.csv")"#);
+        let pipeline = plan_pipeline(&input);
+        assert_eq!(pipeline.len(), 3, "case: {name}");
+        assert!(
+            matches!(pipeline.last(), Some(ReplPipelineStage::Write { .. })),
+            "case: {name}"
+        );
+    }
 }
 
 // ── extract_head_n ────────────────────────────────────────────
@@ -313,9 +292,7 @@ fn test_collect_pipe_stages_two_stages() {
 
 #[test]
 fn test_collect_pipe_stages_three_stages() {
-    let expr = parse(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
-    let mut stages = Vec::new();
-    collect_pipe_stages(expr, &mut stages);
+    let stages = pipe_exprs(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
     assert_eq!(stages.len(), 3);
 }
 
@@ -398,63 +375,22 @@ fn test_extract_select_items_mixed() {
 }
 
 #[test]
-fn test_extract_select_items_sum() {
-    let args = vec![Expr::FunctionCall(
-        Identifier("sum".into()),
-        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
-    )];
-    let result = extract_select_items(&args).unwrap();
-    assert_eq!(
-        result,
-        vec![SelectItem::Sum(ColumnSpec::CaseInsensitive(
-            "quantity".into()
-        ))]
-    );
-}
-
-#[test]
-fn test_extract_select_items_avg() {
-    let args = vec![Expr::FunctionCall(
-        Identifier("avg".into()),
-        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
-    )];
-    let result = extract_select_items(&args).unwrap();
-    assert_eq!(
-        result,
-        vec![SelectItem::Avg(ColumnSpec::CaseInsensitive(
-            "quantity".into()
-        ))]
-    );
-}
-
-#[test]
-fn test_extract_select_items_min() {
-    let args = vec![Expr::FunctionCall(
-        Identifier("min".into()),
-        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
-    )];
-    let result = extract_select_items(&args).unwrap();
-    assert_eq!(
-        result,
-        vec![SelectItem::Min(ColumnSpec::CaseInsensitive(
-            "quantity".into()
-        ))]
-    );
-}
-
-#[test]
-fn test_extract_select_items_max() {
-    let args = vec![Expr::FunctionCall(
-        Identifier("max".into()),
-        vec![Expr::Literal(Literal::Symbol("quantity".into()))],
-    )];
-    let result = extract_select_items(&args).unwrap();
-    assert_eq!(
-        result,
-        vec![SelectItem::Max(ColumnSpec::CaseInsensitive(
-            "quantity".into()
-        ))]
-    );
+fn test_extract_select_items_aggregates() {
+    let qty = ColumnSpec::CaseInsensitive("quantity".into());
+    let cases = [
+        ("sum", SelectItem::Sum(qty.clone())),
+        ("avg", SelectItem::Avg(qty.clone())),
+        ("min", SelectItem::Min(qty.clone())),
+        ("max", SelectItem::Max(qty)),
+    ];
+    for (fn_name, expected) in cases {
+        let args = vec![Expr::FunctionCall(
+            Identifier(fn_name.into()),
+            vec![Expr::Literal(Literal::Symbol("quantity".into()))],
+        )];
+        let result = extract_select_items(&args).unwrap();
+        assert_eq!(result, vec![expected], "case: {fn_name}");
+    }
 }
 
 #[test]
@@ -611,54 +547,24 @@ fn test_validate_rejects_head_before_select() {
 
 #[test]
 fn test_validate_accepts_read_aggregate_select_only() {
-    let stages = vec![
-        ReplPipelineStage::Read {
-            path: "a.parquet".into(),
-        },
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("q".into()))],
-        },
+    let q = ColumnSpec::CaseInsensitive("q".into());
+    let aggregates = [
+        SelectItem::Sum(q.clone()),
+        SelectItem::Avg(q.clone()),
+        SelectItem::Min(q.clone()),
+        SelectItem::Max(q),
     ];
-    validate_repl_pipeline_stages(&stages).unwrap();
-}
-
-#[test]
-fn test_validate_accepts_read_aggregate_avg_select_only() {
-    let stages = vec![
-        ReplPipelineStage::Read {
-            path: "a.parquet".into(),
-        },
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive("q".into()))],
-        },
-    ];
-    validate_repl_pipeline_stages(&stages).unwrap();
-}
-
-#[test]
-fn test_validate_accepts_read_aggregate_min_select_only() {
-    let stages = vec![
-        ReplPipelineStage::Read {
-            path: "a.parquet".into(),
-        },
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Min(ColumnSpec::CaseInsensitive("q".into()))],
-        },
-    ];
-    validate_repl_pipeline_stages(&stages).unwrap();
-}
-
-#[test]
-fn test_validate_accepts_read_aggregate_max_select_only() {
-    let stages = vec![
-        ReplPipelineStage::Read {
-            path: "a.parquet".into(),
-        },
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Max(ColumnSpec::CaseInsensitive("q".into()))],
-        },
-    ];
-    validate_repl_pipeline_stages(&stages).unwrap();
+    for item in aggregates {
+        let stages = vec![
+            ReplPipelineStage::Read {
+                path: "a.parquet".into(),
+            },
+            ReplPipelineStage::Select {
+                columns: vec![item],
+            },
+        ];
+        validate_repl_pipeline_stages(&stages).unwrap();
+    }
 }
 
 #[test]
@@ -829,10 +735,7 @@ fn test_plan_stage_schema() {
 
 #[test]
 fn test_plan_pipeline_read_count() {
-    let expr = parse(r#"read("a.parquet") |> count()"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, incomplete) = plan_pipeline_with_state(exprs).unwrap();
+    let (pipeline, incomplete) = plan_pipeline_result(r#"read("a.parquet") |> count()"#);
     assert!(!incomplete);
     assert_eq!(pipeline.len(), 2);
     assert_eq!(
@@ -934,30 +837,20 @@ fn test_terminal_stage_classification() {
         }
         .is_non_terminal()
     );
-    assert!(
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Sum(ColumnSpec::CaseInsensitive("x".into()))]
-        }
-        .is_terminal()
-    );
-    assert!(
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Avg(ColumnSpec::CaseInsensitive("x".into()))]
-        }
-        .is_terminal()
-    );
-    assert!(
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Min(ColumnSpec::CaseInsensitive("x".into()))]
-        }
-        .is_terminal()
-    );
-    assert!(
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::Max(ColumnSpec::CaseInsensitive("x".into()))]
-        }
-        .is_terminal()
-    );
+    let col_x = ColumnSpec::CaseInsensitive("x".into());
+    for item in [
+        SelectItem::Sum(col_x.clone()),
+        SelectItem::Avg(col_x.clone()),
+        SelectItem::Min(col_x.clone()),
+        SelectItem::Max(col_x),
+    ] {
+        assert!(
+            ReplPipelineStage::Select {
+                columns: vec![item],
+            }
+            .is_terminal()
+        );
+    }
 }
 
 #[test]
@@ -987,38 +880,6 @@ fn test_terminal_stage_implicit_followup() {
 #[test]
 fn test_display_print_stage() {
     assert_eq!(ReplPipelineStage::Print.to_string(), "print()");
-}
-
-// ── plan_pipeline_with_state: tail auto-print ─────────────────
-
-#[test]
-fn test_plan_pipeline_auto_appends_print_after_tail() {
-    let expr = parse(r#"read("a.parquet") |> tail(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Tail { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
-}
-
-#[test]
-fn test_plan_pipeline_no_print_when_write_follows_tail() {
-    let expr = parse(r#"read("a.parquet") |> tail(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
 }
 
 // ── extract_tail_n ──────────────────────────────────────────
@@ -1067,38 +928,6 @@ fn test_sample_implicit_followup_is_print() {
         ReplPipelineStage::Sample { n: 5 }.get_implicit_followup_stage(),
         Some(ReplPipelineStage::Print)
     );
-}
-
-// ── plan_pipeline_with_state: sample auto-print ───────────────
-
-#[test]
-fn test_plan_pipeline_auto_appends_print_after_sample() {
-    let expr = parse(r#"read("a.parquet") |> sample(5)"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Sample { n: 5 });
-    assert_eq!(pipeline[2], ReplPipelineStage::Print);
-}
-
-#[test]
-fn test_plan_pipeline_no_print_when_write_follows_sample() {
-    let expr = parse(r#"read("a.parquet") |> sample(5) |> write("b.csv")"#);
-    let mut exprs = Vec::new();
-    collect_pipe_stages(expr, &mut exprs);
-    let (pipeline, _) = plan_pipeline_with_state(exprs).unwrap();
-    assert_eq!(pipeline.len(), 3);
-    assert!(matches!(
-        pipeline.last(),
-        Some(ReplPipelineStage::Write { .. })
-    ));
 }
 
 // ── extract_sample_n ────────────────────────────────────────

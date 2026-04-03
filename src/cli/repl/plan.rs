@@ -94,41 +94,39 @@ fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
     }
 }
 
+fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
+    match name {
+        "sum" => SelectItem::Sum(col),
+        "avg" => SelectItem::Avg(col),
+        "min" => SelectItem::Min(col),
+        "max" => SelectItem::Max(col),
+        _ => unreachable!("select_aggregate_item only called for sum, avg, min, max"),
+    }
+}
+
 /// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)`.
 pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
     const SELECT_AGG_EXPECTED: &str =
         "select expects column names, sum(column), avg(column), min(column), or max(column)";
     args.iter()
         .map(|expr| match expr {
-            Expr::FunctionCall(name, inner) => match name.to_string().as_str() {
-                "sum" => match inner.as_slice() {
-                    [one] => Ok(SelectItem::Sum(extract_one_column_spec(one)?)),
-                    _ => Err(Error::UnsupportedFunctionCall(
-                        "sum() expects exactly one column argument".to_string(),
-                    )),
-                },
-                "avg" => match inner.as_slice() {
-                    [one] => Ok(SelectItem::Avg(extract_one_column_spec(one)?)),
-                    _ => Err(Error::UnsupportedFunctionCall(
-                        "avg() expects exactly one column argument".to_string(),
-                    )),
-                },
-                "min" => match inner.as_slice() {
-                    [one] => Ok(SelectItem::Min(extract_one_column_spec(one)?)),
-                    _ => Err(Error::UnsupportedFunctionCall(
-                        "min() expects exactly one column argument".to_string(),
-                    )),
-                },
-                "max" => match inner.as_slice() {
-                    [one] => Ok(SelectItem::Max(extract_one_column_spec(one)?)),
-                    _ => Err(Error::UnsupportedFunctionCall(
-                        "max() expects exactly one column argument".to_string(),
-                    )),
-                },
-                _ => Err(Error::UnsupportedFunctionCall(format!(
-                    "{SELECT_AGG_EXPECTED}, got {expr:?}"
-                ))),
-            },
+            Expr::FunctionCall(name, inner) => {
+                let name_str = name.to_string();
+                match name_str.as_str() {
+                    "sum" | "avg" | "min" | "max" => match inner.as_slice() {
+                        [one] => Ok(select_aggregate_item(
+                            name_str.as_str(),
+                            extract_one_column_spec(one)?,
+                        )),
+                        _ => Err(Error::UnsupportedFunctionCall(format!(
+                            "{name_str}() expects exactly one column argument"
+                        ))),
+                    },
+                    _ => Err(Error::UnsupportedFunctionCall(format!(
+                        "{SELECT_AGG_EXPECTED}, got {expr:?}"
+                    ))),
+                }
+            }
             Expr::Literal(Literal::Symbol(s)) => {
                 Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone())))
             }

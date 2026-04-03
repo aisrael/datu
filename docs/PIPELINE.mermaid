@@ -4,60 +4,68 @@ config:
   layout: dagre
 ---
 flowchart LR
-    PipelineBuilder --> mode{"Display or Write?"}
-    mode --> Input{"input FileType?"}
-    Input --"orc"--> OrcReader["OrcReader (RecordBatch)"]
-    Input --"parquet|avro|csv|json"--> read_to_dataframe["read_to_dataframe (read.rs)"]
+    PipelineBuilder --> stage{"Builder stage"}
+    stage --"write(path)"--> dispatch["dispatch_pipeline"]
+    stage --"schema()"--> dispatch
+    stage --"row_count()"--> dispatch
+    stage --"head / tail / sample display"--> dispatch
+    stage --"aggregate or group_by display only"--> AggDF["DataFramePipeline only"]
+    dispatch --> inputFT{"input FileType?"}
     subgraph RecordBatchPipeline
-        OrcReader --> rbSelect{"select?"}
+        OrcReader["OrcRecordBatchReader"] --> rbSelect{"select? projection only"}
         rbSelect --Y--> RecordBatchSelect["RecordBatchSelect"]
-        RecordBatchSelect --> rbHeadTailSample
-        rbSelect --N--> rbHeadTailSample
-        rbHeadTailSample{"head/tail/sample?"}
-        rbHeadTailSample --head--> RecordBatchHead
-        rbHeadTailSample --tail--> RecordBatchTail
-        rbHeadTailSample --sample--> RecordBatchSample["RecordBatchSample"]
-        RecordBatchHead["RecordBatchHead"] --> rbDisplayOrWrite
-        RecordBatchTail["RecordBatchTail"] --> rbDisplayOrWrite
-        RecordBatchSample["RecordBatchSample"] --> rbDisplayOrWrite
-        rbDisplayOrWrite{"display or write?"}
-        rbDisplayOrWrite --display--> rbOutputFormat
-        rbDisplayOrWrite --write--> rbOutputFileType
-        rbOutputFormat{"output format?"}
-        rbOutputFileType{"output FileType?"}
-        rbOutputFileType --parquet--> RecordBatchParquetWriter
-        rbOutputFileType --avro--> RecordBatchAvroWriter
-        rbOutputFileType --csv--> RecordBatchCsvWriter
-        rbOutputFileType --json--> RecordBatchJsonWriter
-        rbOutputFileType --"orc"--> RecordBatchOrcWriter
-        rbOutputFileType --"xlsx|yaml"--> rbWriteDispatch["write_record_batches (dispatch)"]
-        rbOutputFormat --csv--> RecordBatchCsvPrinter
-        rbOutputFormat --json--> RecordBatchJsonPrinter
-        rbOutputFormat --"json-pretty"--> RecordBatchJsonPrettyPrinter
-        rbOutputFormat --yaml--> RecordBatchYamlPrinter
+        RecordBatchSelect --> rbHTS
+        rbSelect --N--> rbHTS
+        rbHTS{"head / tail / sample?"}
+        rbHTS --head--> RecordBatchHead
+        rbHTS --tail--> RecordBatchTail
+        rbHTS --sample--> RecordBatchSample["RecordBatchSample"]
+        rbHTS --"omit"--> rbSink
+        RecordBatchHead --> rbSink
+        RecordBatchTail --> rbSink
+        RecordBatchSample --> rbSink
+        rbSink{"RecordBatchSink"}
+        rbSink --Write--> rbOutFT{"output FileType?"}
+        rbSink --Display--> rbDispFmt{"stdout format?"}
+        rbSink --Schema--> rbSchemaOut["print_schema_fields"]
+        rbSink --Count--> rbCountOut["count_rows / df.count"]
+        rbOutFT --parquet--> RecordBatchParquetWriter
+        rbOutFT --avro--> RecordBatchAvroWriter
+        rbOutFT --csv--> RecordBatchCsvWriter
+        rbOutFT --json--> RecordBatchJsonWriter
+        rbOutFT --orc--> RecordBatchOrcWriter
+        rbOutFT --"xlsx | yaml"--> rbWriteDispatch["write_record_batches_from_reader"]
+        rbDispFmt --csv--> RecordBatchCsvPrinter
+        rbDispFmt --json--> RecordBatchJsonPrinter
+        rbDispFmt --"json-pretty"--> RecordBatchJsonPrettyPrinter
+        rbDispFmt --yaml--> RecordBatchYamlPrinter
     end
     subgraph DataframePipeline
-        read_to_dataframe --> dfSelect{"select?"}
-        dfSelect --Y--> DataframeSelect["DataframeSelect"]
-        DataframeSelect --> dfHeadTailSample
-        dfSelect --N--> dfHeadTailSample
-        dfHeadTailSample{"head/tail/sample?"}
-        dfHeadTailSample --head--> DataframeHead
-        dfHeadTailSample --tail--> DataframeTail
-        dfHeadTailSample --sample--> DataframeSample
-        DataframeHead["DataframeHead"] --> dfDisplayOrWrite
-        DataframeTail["DataframeTail"] --> dfDisplayOrWrite
-        DataframeSample["DataframeSample"] --> dfDisplayOrWrite
-        dfDisplayOrWrite{"display or write?"}
-        dfDisplayOrWrite --display--> dfOutputFormat
-        dfDisplayOrWrite --write--> dfOutputFileType
-        dfOutputFormat{"output format?"}
-        dfOutputFileType{"output FileType?"}
-        dfOutputFileType --"parquet|csv|json"--> write_dataframe_pipeline_output["write_dataframe_pipeline_output"]
-        dfOutputFileType --avro--> DataframeAvroWriter
-        dfOutputFileType --"orc|xlsx|yaml"--> dfCollectBatchWrite["collect → ProgressVecRecordBatchReader → write_record_batches_from_reader"]
-        dfOutputFormat --csv--> DataframeCsvPrinter
-        dfOutputFormat --json--> DataframeJsonPrinter
-        dfOutputFormat --"json-pretty"--> DataframeJsonPrettyPrinter
-        dfOutputFormat --yaml--> DataframeYamlPrinter
+        read_df["read_dataframe_from_path"] --> dfSelect{"select? project | sum | avg | min | max | group_by"}
+        dfSelect --Y--> DataframeSelectApply["apply_select_spec_to_dataframe"]
+        DataframeSelectApply --> dfHTS
+        dfSelect --N--> dfHTS
+        dfHTS{"head / tail / sample?"}
+        dfHTS --head--> DataframeHead
+        dfHTS --tail--> DataframeTail
+        dfHTS --sample--> DataframeSample
+        dfHTS --"omit"--> dfSink
+        DataframeHead --> dfSink
+        DataframeTail --> dfSink
+        DataframeSample --> dfSink
+        dfSink{"DataFrameSink"}
+        dfSink --Write--> dfOutFT{"output FileType?"}
+        dfSink --Display--> dfDispFmt{"stdout format?"}
+        dfSink --Schema--> dfSchemaOut["print_schema_fields"]
+        dfSink --Count--> dfCountOut["count_rows / df.count"]
+        dfOutFT --"parquet | csv | json"--> write_dataframe_pipeline_output["write_dataframe_pipeline_output"]
+        dfOutFT --avro--> DataframeAvroWriter
+        dfOutFT --"orc | xlsx | yaml"--> dfCollectBatchWrite["collect → ProgressVecRecordBatchReader → write_record_batches_from_reader"]
+        dfDispFmt --csv--> DataframeCsvPrinter
+        dfDispFmt --json--> DataframeJsonPrinter
+        dfDispFmt --"json-pretty"--> DataframeJsonPrettyPrinter
+        dfDispFmt --yaml--> DataframeYamlPrinter
     end
+    inputFT --"orc"--> OrcReader
+    inputFT --"parquet | avro | csv | json"--> read_df
+    AggDF --> read_df

@@ -1,5 +1,32 @@
 # datu Version Notes
 
+## v0.3.4
+
+### Highlights
+
+- **REPL and pipeline**: Aggregate functions (`avg`, `min`, `max`) with validation and clearer selection and error handling.
+- **XLSX**: Refactored writing to use newer Arrow array APIs.
+- **Quality**: Parquet validation helper; REPL and conversion tests refactored for clarity.
+- **Docs**: Pipeline diagram and documentation layout updates.
+
+### Improvements
+
+- **Pipeline**
+  - Unified dispatch for construction; continued modularization after the v0.3.3 pipeline work.
+
+- **REPL**
+  - Aggregate support and incremental test cleanup.
+
+- **Tooling**
+  - Release workflow docs updated so `make-release` can run on `release/*` branches.
+
+### Changelog Stats
+
+- 18 commits
+- 53 files changed
+- 5528 insertions
+- 5252 deletions
+
 ## v0.3.3
 
 ### Highlights

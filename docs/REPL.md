@@ -168,29 +168,35 @@ If the column name is specified as a `Symbol` (`:name`) or a bare identifier (`n
 
 If the column name is specified as a `String` (`"_one"`), then `select()` performs an exact, case-sensitive match.
 
-The same rules apply to column arguments inside `sum(...)`, `avg(...)`, `min(...)`, and `max(...)`.
+The same rules apply to column arguments inside `sum(...)`, `avg(...)`, `min(...)`, `max(...)`, `count(...)`, and `count_distinct(...)`.
 
-#### Global aggregates (`sum` / `avg` / `min` / `max` without `group_by`)
+#### Global aggregates (`sum` / `avg` / `min` / `max` / `count` / `count_distinct` without `group_by`)
 
-With no `group_by()`, you may use `select()` with only aggregate arguments (`sum(...)`, `avg(...)`, `min(...)`, and/or `max(...)`). That aggregates the whole table (for example, one row of totals/averages/minima/maxima).
+With no `group_by()`, you may use `select()` with only aggregate arguments (`sum(...)`, `avg(...)`, `min(...)`, `max(...)`, `count(...)`, and/or `count_distinct(...)`). That aggregates the whole table (for example, one row of totals, averages, extrema, or counts).
+
+- `count(:col)` counts non-null values in `:col`.
+- `count_distinct(:col)` counts distinct non-null values in `:col`.
 
 ```flt
 read("input.parquet") |> select(sum(:quantity))
 read("input.parquet") |> select(avg(:amount))
 read("input.parquet") |> select(min(:amount), max(:amount))
+read("input.parquet") |> select(count(:id))
+read("input.parquet") |> select(count_distinct(:user_id))
 ```
 
 Mixing plain column projections with aggregates in the same `select()` without `group_by()` is not allowed—use `group_by()` for the key columns first, or use only aggregates for a global summary.
 
 #### Grouped aggregates (`group_by` + `select`)
 
-`group_by(:key1, ...)` is a separate pipeline step. Every column in `group_by` _MUST_ be included as a plain column in `select()`. Any other selected column must use an aggregate (`sum()`, `avg()`, `min()`, or `max()`).
+`group_by(:key1, ...)` is a separate pipeline step. Every column in `group_by` _MUST_ be included as a plain column in `select()`. Any other selected column must use an aggregate (`sum()`, `avg()`, `min()`, `max()`, `count()`, or `count_distinct()`).
 
 ```flt
 read("input.parquet") |> group_by(:country_code) |> select(:country_code, avg(:amount))
+read("input.parquet") |> group_by(:country_code) |> select(:country_code, count(:order_id))
 ```
 
-`select(:country_code, avg(:amount)) |> group_by(:country_code)` is equivalent to the form above (and you can use `sum()`, `min()`, or `max()` instead of `avg()` where appropriate).
+`select(:country_code, avg(:amount)) |> group_by(:country_code)` is equivalent to the form above (and you can use `sum()`, `min()`, `max()`, `count()`, or `count_distinct()` instead of `avg()` where appropriate).
 
 If `group_by()` is present but `select()` lists only key columns (no aggregates), the statement is still valid (distinct group keys); the REPL prints this warning to stderr:
 
@@ -218,8 +224,10 @@ read("input.parquet") |> head(5) # first 5 rows
 head("input.parquet", 5)         # equivalent to the previous statement
 ```
 
-### Metadata functions: `schema` and `count`
+### Metadata functions: `schema` and `count()`
 
-`schema` prints the table schema.
+`schema()` prints the table schema. It takes no arguments.
 
-`count` prints the row count. Neither takes arguments.
+`count()` (as a pipeline stage after `read`, e.g. `read("file.parquet") |> count()`) prints the total row count. It takes no arguments.
+
+Do not confuse that with **`count(:column)` inside `select()`**, which is an aggregate: it counts non-null values in that column (globally or per group when used with `group_by`). Use `count_distinct(:column)` for distinct non-null values.

@@ -38,6 +38,10 @@ pub enum SelectItem {
     Min(ColumnSpec),
     /// Global maximum over one column (REPL `max(:col)`).
     Max(ColumnSpec),
+    /// Count of non-null values in one column (REPL `count(:col)`).
+    Count(ColumnSpec),
+    /// Count of distinct non-null values in one column (REPL `count_distinct(:col)`).
+    CountDistinct(ColumnSpec),
 }
 
 /// Macro to build a [`SelectSpec`] from homogeneous column forms:
@@ -98,7 +102,12 @@ impl SelectItem {
     pub fn is_aggregate(&self) -> bool {
         matches!(
             self,
-            SelectItem::Sum(_) | SelectItem::Avg(_) | SelectItem::Min(_) | SelectItem::Max(_)
+            SelectItem::Sum(_)
+                | SelectItem::Avg(_)
+                | SelectItem::Min(_)
+                | SelectItem::Max(_)
+                | SelectItem::Count(_)
+                | SelectItem::CountDistinct(_)
         )
     }
 }
@@ -173,7 +182,9 @@ impl SelectSpec {
                 SelectItem::Sum(_)
                 | SelectItem::Avg(_)
                 | SelectItem::Min(_)
-                | SelectItem::Max(_) => Err(Error::PipelinePlanningError(
+                | SelectItem::Max(_)
+                | SelectItem::Count(_)
+                | SelectItem::CountDistinct(_) => Err(Error::PipelinePlanningError(
                     PipelinePlanningError::AggregatesInProjectionSelect,
                 )),
             })
@@ -211,6 +222,13 @@ mod tests {
         let max_item = SelectItem::Max(ColumnSpec::CaseInsensitive("y".into()));
         assert!(min_item.is_aggregate());
         assert!(max_item.is_aggregate());
+    }
+
+    #[test]
+    fn test_select_item_count_aggregates_are_aggregate() {
+        let c = ColumnSpec::CaseInsensitive("x".into());
+        assert!(SelectItem::Count(c.clone()).is_aggregate());
+        assert!(SelectItem::CountDistinct(c).is_aggregate());
     }
 
     fn schema_with_columns(names: &[&str]) -> Schema {

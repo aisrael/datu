@@ -445,6 +445,13 @@ Columns appear in the output in the order they are listed, so `select` can also 
 > read("data.parquet") |> select(:email, :id) |> write("reordered.csv")
 ```
 
+With optional `group_by(...)`, you can use aggregates in `select`: `sum`, `avg`, `min`, `max`, `count` (non-null values in a column), and `count_distinct` (distinct non-null values). A `select` of only aggregates (no `group_by`) summarizes the whole table.
+
+```text
+> read("data.parquet") |> select(count(:id))
+> read("data.parquet") |> group_by(:country) |> select(:country, count_distinct(:user_id))
+```
+
 #### `head(n)`
 
 Take the first _n_ rows.

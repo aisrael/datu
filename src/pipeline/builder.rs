@@ -322,7 +322,7 @@ impl PipelineBuilder {
         ))
     }
 
-    /// Display pipeline: global aggregate `select(sum(...), avg(...), min(...), max(...), ...)` with full result (one row) to stdout.
+    /// Display pipeline: global aggregate `select(sum(...), avg(...), min(...), max(...), count(...), count_distinct(...), ...)` with full result (one row) to stdout.
     fn build_aggregate_display_pipeline(
         &self,
         input_path: &str,

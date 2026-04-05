@@ -67,8 +67,10 @@ fn select_args_are_all_aggregates(args: &[Expr]) -> bool {
             matches!(
                 e,
                 Expr::FunctionCall(n, a)
-                    if matches!(n.to_string().as_str(), "sum" | "avg" | "min" | "max")
-                        && a.len() == 1
+                    if matches!(
+                        n.to_string().as_str(),
+                        "sum" | "avg" | "min" | "max" | "count" | "count_distinct"
+                    ) && a.len() == 1
             )
         })
 }
@@ -100,28 +102,34 @@ fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
         "avg" => SelectItem::Avg(col),
         "min" => SelectItem::Min(col),
         "max" => SelectItem::Max(col),
-        _ => unreachable!("select_aggregate_item only called for sum, avg, min, max"),
+        "count" => SelectItem::Count(col),
+        "count_distinct" => SelectItem::CountDistinct(col),
+        _ => unreachable!(
+            "select_aggregate_item only called for sum, avg, min, max, count, or count_distinct"
+        ),
     }
 }
 
-/// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)`.
+/// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)` /
+/// `count(column)` / `count_distinct(column)`.
 pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
-    const SELECT_AGG_EXPECTED: &str =
-        "select expects column names, sum(column), avg(column), min(column), or max(column)";
+    const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
     args.iter()
         .map(|expr| match expr {
             Expr::FunctionCall(name, inner) => {
                 let name_str = name.to_string();
                 match name_str.as_str() {
-                    "sum" | "avg" | "min" | "max" => match inner.as_slice() {
-                        [one] => Ok(select_aggregate_item(
-                            name_str.as_str(),
-                            extract_one_column_spec(one)?,
-                        )),
-                        _ => Err(Error::UnsupportedFunctionCall(format!(
-                            "{name_str}() expects exactly one column argument"
-                        ))),
-                    },
+                    "sum" | "avg" | "min" | "max" | "count" | "count_distinct" => {
+                        match inner.as_slice() {
+                            [one] => Ok(select_aggregate_item(
+                                name_str.as_str(),
+                                extract_one_column_spec(one)?,
+                            )),
+                            _ => Err(Error::UnsupportedFunctionCall(format!(
+                                "{name_str}() expects exactly one column argument"
+                            ))),
+                        }
+                    }
                     _ => Err(Error::UnsupportedFunctionCall(format!(
                         "{SELECT_AGG_EXPECTED}, got {expr:?}"
                     ))),
@@ -270,12 +278,17 @@ fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::
             SelectItem::Column(c) => {
                 if !keys.iter().any(|k| k == c) {
                     return Err(Error::InvalidReplPipeline(
-                        "select with group_by: non-key columns must use an aggregate (sum, avg, min, or max), not plain columns"
+                        "select with group_by: non-key columns must use an aggregate (sum, avg, min, max, count, or count_distinct), not plain columns"
                             .to_string(),
                     ));
                 }
             }
-            SelectItem::Sum(_) | SelectItem::Avg(_) | SelectItem::Min(_) | SelectItem::Max(_) => {}
+            SelectItem::Sum(_)
+            | SelectItem::Avg(_)
+            | SelectItem::Min(_)
+            | SelectItem::Max(_)
+            | SelectItem::Count(_)
+            | SelectItem::CountDistinct(_) => {}
         }
     }
     Ok(())

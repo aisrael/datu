@@ -7,6 +7,8 @@ use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::expr_fn::avg;
+use datafusion::functions_aggregate::expr_fn::count;
+use datafusion::functions_aggregate::expr_fn::count_distinct;
 use datafusion::functions_aggregate::expr_fn::max;
 use datafusion::functions_aggregate::expr_fn::min;
 use datafusion::functions_aggregate::expr_fn::sum;
@@ -161,7 +163,7 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Column(c) => {
                     if !column_spec_in_group_keys(c, group_by_keys) {
                         return Err(Error::GenericError(
-                            "select with group_by: non-key columns must use an aggregate (sum, avg, min, or max), not plain columns"
+                            "select with group_by: non-key columns must use an aggregate (sum, avg, min, max, count, or count_distinct), not plain columns"
                                 .to_string(),
                         ));
                     }
@@ -169,7 +171,9 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Sum(_)
                 | SelectItem::Avg(_)
                 | SelectItem::Min(_)
-                | SelectItem::Max(_) => {}
+                | SelectItem::Max(_)
+                | SelectItem::Count(_)
+                | SelectItem::CountDistinct(_) => {}
             }
         }
 
@@ -197,6 +201,14 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Max(cs) => {
                     let name = cs.resolve(arrow_schema)?;
                     aggs.push(max(col(name.as_str())));
+                }
+                SelectItem::Count(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(count(col(name.as_str())));
+                }
+                SelectItem::CountDistinct(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(count_distinct(col(name.as_str())));
                 }
                 SelectItem::Column(_) => {}
             }
@@ -245,6 +257,14 @@ pub(super) fn apply_select_spec_to_dataframe(
                 SelectItem::Max(cs) => {
                     let name = cs.resolve(arrow_schema)?;
                     aggs.push(max(col(name.as_str())));
+                }
+                SelectItem::Count(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(count(col(name.as_str())));
+                }
+                SelectItem::CountDistinct(cs) => {
+                    let name = cs.resolve(arrow_schema)?;
+                    aggs.push(count_distinct(col(name.as_str())));
                 }
                 SelectItem::Column(_) => {}
             }

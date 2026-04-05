@@ -114,6 +114,14 @@ fn test_is_statement_complete_select_min_only() {
 }
 
 #[test]
+fn test_is_statement_complete_select_count_only() {
+    let expr = parse("select(count(:quantity))");
+    assert!(is_statement_complete(std::slice::from_ref(&expr)));
+    let exprs = pipe_exprs("select(count_distinct(:id))");
+    assert!(is_statement_complete(&exprs));
+}
+
+#[test]
 fn test_is_statement_complete_select_then_group_by() {
     let exprs = pipe_exprs(r#"read("f.parquet") |> select(:id, sum(:qty)) |> group_by(:id)"#);
     assert!(is_statement_complete(&exprs));
@@ -126,7 +134,12 @@ fn test_plan_stage_select_aggregates() {
         ("select(sum(:quantity))", SelectItem::Sum(qty.clone())),
         ("select(avg(:quantity))", SelectItem::Avg(qty.clone())),
         ("select(min(:quantity))", SelectItem::Min(qty.clone())),
-        ("select(max(:quantity))", SelectItem::Max(qty)),
+        ("select(max(:quantity))", SelectItem::Max(qty.clone())),
+        ("select(count(:quantity))", SelectItem::Count(qty.clone())),
+        (
+            "select(count_distinct(:quantity))",
+            SelectItem::CountDistinct(qty),
+        ),
     ];
     for (input, expected_col) in cases {
         let expr = parse(input);
@@ -381,7 +394,9 @@ fn test_extract_select_items_aggregates() {
         ("sum", SelectItem::Sum(qty.clone())),
         ("avg", SelectItem::Avg(qty.clone())),
         ("min", SelectItem::Min(qty.clone())),
-        ("max", SelectItem::Max(qty)),
+        ("max", SelectItem::Max(qty.clone())),
+        ("count", SelectItem::Count(qty.clone())),
+        ("count_distinct", SelectItem::CountDistinct(qty)),
     ];
     for (fn_name, expected) in cases {
         let args = vec![Expr::FunctionCall(
@@ -552,7 +567,9 @@ fn test_validate_accepts_read_aggregate_select_only() {
         SelectItem::Sum(q.clone()),
         SelectItem::Avg(q.clone()),
         SelectItem::Min(q.clone()),
-        SelectItem::Max(q),
+        SelectItem::Max(q.clone()),
+        SelectItem::Count(q.clone()),
+        SelectItem::CountDistinct(q),
     ];
     for item in aggregates {
         let stages = vec![
@@ -842,7 +859,9 @@ fn test_terminal_stage_classification() {
         SelectItem::Sum(col_x.clone()),
         SelectItem::Avg(col_x.clone()),
         SelectItem::Min(col_x.clone()),
-        SelectItem::Max(col_x),
+        SelectItem::Max(col_x.clone()),
+        SelectItem::Count(col_x.clone()),
+        SelectItem::CountDistinct(col_x),
     ] {
         assert!(
             ReplPipelineStage::Select {

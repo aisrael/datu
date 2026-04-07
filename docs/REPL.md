@@ -111,7 +111,7 @@ For the following functions, note that the function signatures and types provide
 
 ### Pipeline shape
 
-A REPL pipeline must start with `read(...)`. You may use at most one `group_by(...)` and one `select(...)` per pipeline (in either order). Further stages—`head`, `tail`, `sample`, `schema`, `count`, or `write`—are added when needed (for example, `read("x.parquet") |> head(5)` skips `select` entirely). You cannot repeat `select` or `group_by` in the same pipeline. If `group_by(...)` appears, a matching `select(...)` is required.
+A REPL pipeline must start with `read(...)`. You may use at most one `filter("...")`, one `group_by(...)`, and one `select(...)` per pipeline, in **any order**, except that when both `filter` and `group_by` are used, **`filter` must come before `group_by`** (for example `read(...) |> filter("...") |> group_by(...) |> select(...)`). Further stages—`head`, `tail`, `sample`, `schema`, `count`, or `write`—are added when needed (for example, `read("x.parquet") |> head(5)` skips `select` entirely). You cannot repeat `select`, `group_by`, or `filter` in the same pipeline. If `group_by(...)` appears, a matching `select(...)` is required.
 
 ### `read`
 
@@ -130,6 +130,22 @@ Reads a Parquet, Avro, ORC, CSV, or JSON file at the given `path`. If `file_type
 | `.orc`                | ORC       |
 | `.csv`                | CSV       |
 | `.json`               | JSON      |
+
+### `filter`
+
+```flt
+filter(data: Data, sql: String) -> Data
+```
+
+`filter` takes a single string that is a SQL predicate fragment (as in a `WHERE` clause). It is parsed with Apache DataFusion. Whether the predicate applies to **source** columns or **post-`select`** columns depends on where `filter` appears relative to `select` in the pipeline: `filter` **before** `select` filters raw rows; `filter` **after** `select` filters the projected or aggregated result (column names must match that step’s schema).
+
+```flt
+read("input.parquet") |> filter("amount > 0") |> select(:amount, :status) |> head(10)
+read("input.parquet") |> select(:amount, :status) |> filter("amount > 0 AND status = 'active'") |> head(10)
+read("input.parquet") |> filter("amount > 0") |> group_by(:country) |> select(:country, sum(:amount)) |> head(10)
+```
+
+`filter` is only supported for inputs read through DataFusion (Parquet, Avro, CSV, JSON). It is **not** supported for ORC files in the REPL; convert or use another format first.
 
 ### `write`
 

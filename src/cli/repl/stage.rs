@@ -9,15 +9,33 @@ use crate::pipeline::SelectSpec;
 /// A planned pipeline stage with validated, extracted arguments.
 #[derive(Debug, PartialEq)]
 pub enum ReplPipelineStage {
-    Read { path: String },
-    GroupBy { columns: Vec<ColumnSpec> },
-    Select { columns: Vec<SelectItem> },
-    Head { n: usize },
-    Tail { n: usize },
-    Sample { n: usize },
+    Read {
+        path: String,
+    },
+    /// SQL predicate (`parse_sql_expr` + `filter`); runs before or after `select` per pipeline order.
+    Filter {
+        sql: String,
+    },
+    GroupBy {
+        columns: Vec<ColumnSpec>,
+    },
+    Select {
+        columns: Vec<SelectItem>,
+    },
+    Head {
+        n: usize,
+    },
+    Tail {
+        n: usize,
+    },
+    Sample {
+        n: usize,
+    },
     Schema,
     Count,
-    Write { path: String },
+    Write {
+        path: String,
+    },
     Print,
 }
 
@@ -68,7 +86,7 @@ impl ReplPipelineStage {
                 // Single-stage check: full pipeline uses `repl_pipeline_last_select_is_terminal`.
                 select_spec_from_items(columns).is_aggregate_only()
             }
-            ReplPipelineStage::GroupBy { .. } => false,
+            ReplPipelineStage::GroupBy { .. } | ReplPipelineStage::Filter { .. } => false,
             ReplPipelineStage::Read { .. } | ReplPipelineStage::Print => false,
         }
     }
@@ -100,6 +118,7 @@ impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReplPipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
+            ReplPipelineStage::Filter { sql } => write!(f, "filter({sql:?})"),
             ReplPipelineStage::GroupBy { columns } => {
                 let cols: Vec<String> = columns.iter().map(format_column_spec).collect();
                 write!(f, "group_by({})", cols.join(", "))

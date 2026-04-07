@@ -166,6 +166,62 @@ fn test_pipeline_builder_read_head_display_orc_uses_record_batch_pipeline() {
 }
 
 #[test]
+fn test_pipeline_builder_filter_sql_rejected_for_orc() {
+    use crate::errors::PipelinePlanningError;
+
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/userdata.orc")
+        .select(&["col"])
+        .filter_sql("col IS NOT NULL")
+        .filter_runs_after_select(true)
+        .head(3);
+    let err = match builder.build() {
+        Err(e) => e,
+        Ok(_) => panic!("ORC + filter should fail at plan time"),
+    };
+    assert!(matches!(
+        err,
+        Error::PipelinePlanningError(PipelinePlanningError::FilterNotSupportedForOrc)
+    ));
+}
+
+#[test]
+fn test_pipeline_builder_read_filter_head_sets_filter_sql() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .select(&["one"])
+        .filter_sql("true")
+        .filter_runs_after_select(true)
+        .head(3);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_sql.as_deref(), Some("true"));
+    assert!(p.filter_runs_after_select);
+    assert_eq!(p.slice, Some(DisplaySlice::Head(3)));
+}
+
+#[test]
+fn test_pipeline_builder_filter_before_select_sets_placement() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .filter_sql("true")
+        .filter_runs_after_select(false)
+        .select(&["one"])
+        .head(2);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_sql.as_deref(), Some("true"));
+    assert!(!p.filter_runs_after_select);
+}
+
+#[test]
 fn test_pipeline_builder_read_sample_display_parquet() {
     let mut builder = PipelineBuilder::new();
     builder.read("fixtures/table.parquet").sample(2);

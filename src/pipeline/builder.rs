@@ -23,6 +23,10 @@ use crate::resolve_file_type;
 /// Fluent builder for a [`Pipeline`] (file conversion or stdout display: head/tail/sample, schema, or row count).
 pub struct PipelineBuilder {
     read: Option<String>,
+    /// REPL: SQL predicate for DataFusion `parse_sql_expr` + `filter`.
+    filter_sql: Option<String>,
+    /// When true, apply `filter_sql` after `select`; when false, before (or on raw data if no select).
+    filter_runs_after_select: bool,
     select: Option<SelectSpec>,
     head: Option<usize>,
     tail: Option<usize>,
@@ -44,6 +48,8 @@ impl Default for PipelineBuilder {
     fn default() -> Self {
         Self {
             read: None,
+            filter_sql: None,
+            filter_runs_after_select: false,
             select: None,
             head: None,
             tail: None,
@@ -76,6 +82,19 @@ impl PipelineBuilder {
         self.read = Some(path.to_string());
         self
     }
+
+    /// SQL `WHERE`-style predicate for DataFusion (REPL `filter("...")`).
+    pub fn filter_sql(&mut self, sql: &str) -> &mut Self {
+        self.filter_sql = Some(sql.to_string());
+        self
+    }
+
+    /// When set with [`filter_sql`](Self::filter_sql), apply the filter after `select` if true, before if false.
+    pub fn filter_runs_after_select(&mut self, v: bool) -> &mut Self {
+        self.filter_runs_after_select = v;
+        self
+    }
+
     /// Sets column selection as exact name matches.
     pub fn select(&mut self, columns: &[&str]) -> &mut Self {
         self.select = Some(SelectSpec {
@@ -196,6 +215,7 @@ impl PipelineBuilder {
         }
 
         reject_orc_with_aggregates(input_file_type, &select)?;
+        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
 
         let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
         Ok(dispatch_pipeline(
@@ -205,6 +225,8 @@ impl PipelineBuilder {
             slice,
             self.sparse,
             self.csv_has_header,
+            self.filter_sql.clone(),
+            self.filter_runs_after_select,
             UnifiedSink::Write {
                 output_path: output_path.to_string(),
                 output_file_type,
@@ -234,6 +256,7 @@ impl PipelineBuilder {
         let csv_has_header = self.csv_has_header;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
+        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -242,6 +265,8 @@ impl PipelineBuilder {
             None,
             sparse,
             csv_has_header,
+            self.filter_sql.clone(),
+            self.filter_runs_after_select,
             UnifiedSink::Schema {
                 output_format,
                 sparse,
@@ -266,6 +291,7 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
+        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -274,6 +300,8 @@ impl PipelineBuilder {
             None,
             sparse,
             csv_has_header,
+            self.filter_sql.clone(),
+            self.filter_runs_after_select,
             UnifiedSink::Count,
         ))
     }
@@ -307,6 +335,7 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
+        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -315,6 +344,8 @@ impl PipelineBuilder {
             Some(slice),
             sparse,
             csv_has_header,
+            self.filter_sql.clone(),
+            self.filter_runs_after_select,
             UnifiedSink::Display {
                 output_format,
                 csv_stdout_headers,
@@ -341,6 +372,7 @@ impl PipelineBuilder {
                 PipelinePlanningError::AggregatesNotSupportedForOrc,
             ));
         }
+        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
         let output_format = self
             .display_output_format
             .unwrap_or(DisplayOutputFormat::Csv);
@@ -352,6 +384,8 @@ impl PipelineBuilder {
             input_path,
             input_file_type,
             select,
+            filter_sql: self.filter_sql.clone(),
+            filter_runs_after_select: self.filter_runs_after_select,
             slice: None,
             csv_has_header,
             sparse,
@@ -434,6 +468,7 @@ enum UnifiedSink {
     Count,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_pipeline(
     input_path: String,
     input_file_type: FileType,
@@ -441,6 +476,8 @@ fn dispatch_pipeline(
     slice: Option<DisplaySlice>,
     sparse: bool,
     csv_has_header: Option<bool>,
+    filter_sql: Option<String>,
+    filter_runs_after_select: bool,
     sink: UnifiedSink,
 ) -> Pipeline {
     if input_file_type == FileType::Orc {
@@ -457,6 +494,8 @@ fn dispatch_pipeline(
             input_path,
             input_file_type,
             select,
+            filter_sql,
+            filter_runs_after_select,
             slice,
             csv_has_header,
             sparse,
@@ -534,6 +573,15 @@ fn reject_orc_with_aggregates(
     if input_file_type == FileType::Orc && select.as_ref().is_some_and(SelectSpec::has_aggregates) {
         return Err(Error::PipelinePlanningError(
             PipelinePlanningError::AggregatesNotSupportedForOrc,
+        ));
+    }
+    Ok(())
+}
+
+fn reject_orc_with_filter(input_file_type: FileType, filter_sql: &Option<String>) -> Result<()> {
+    if input_file_type == FileType::Orc && filter_sql.is_some() {
+        return Err(Error::PipelinePlanningError(
+            PipelinePlanningError::FilterNotSupportedForOrc,
         ));
     }
     Ok(())

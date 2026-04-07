@@ -50,6 +50,10 @@ pub struct DataFramePipeline {
     pub(crate) input_path: String,
     pub(crate) input_file_type: FileType,
     pub(crate) select: Option<SelectSpec>,
+    /// SQL predicate: `parse_sql_expr` + `filter` (placement vs `select` via [`filter_runs_after_select`](DataFramePipeline::filter_runs_after_select)).
+    pub(crate) filter_sql: Option<String>,
+    /// When true, run filter after `select`; when false, before `select` (REPL order).
+    pub(crate) filter_runs_after_select: bool,
     pub(crate) slice: Option<DisplaySlice>,
     pub(crate) csv_has_header: Option<bool>,
     pub(crate) sparse: bool,
@@ -57,11 +61,13 @@ pub struct DataFramePipeline {
 }
 
 impl DataFramePipeline {
-    /// Read, optional column select, optional head/tail/sample, then [`DataFrameSink`].
+    /// Read, optional column select, optional SQL filter, optional head/tail/sample, then [`DataFrameSink`].
     pub fn execute(&mut self) -> crate::Result<()> {
         let input_path = self.input_path.clone();
         let input_file_type = self.input_file_type;
         let select = self.select.clone();
+        let filter_sql = self.filter_sql.clone();
+        let filter_runs_after_select = self.filter_runs_after_select;
         let slice = self.slice;
         let csv_has_header = self.csv_has_header;
         let sparse = self.sparse;
@@ -101,6 +107,7 @@ impl DataFramePipeline {
                     sparse: schema_sparse,
                 } => {
                     let use_file_metadata_schema = select.is_none()
+                        && filter_sql.is_none()
                         && matches!(
                             input_file_type,
                             FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc
@@ -116,6 +123,8 @@ impl DataFramePipeline {
                             input_path.clone(),
                             input_file_type,
                             select,
+                            filter_sql.clone(),
+                            filter_runs_after_select,
                             None,
                             csv_has_header,
                         )
@@ -130,13 +139,15 @@ impl DataFramePipeline {
                     Ok::<(), Error>(())
                 }
                 DataFrameSink::Count => {
-                    let total = if select.is_none() {
+                    let total = if select.is_none() && filter_sql.is_none() {
                         count_rows(&input_path, input_file_type, csv_has_header).await?
                     } else {
                         let mut source = dataframe_pipeline_prepare_source(
                             input_path.clone(),
                             input_file_type,
                             select,
+                            filter_sql.clone(),
+                            filter_runs_after_select,
                             None,
                             csv_has_header,
                         )
@@ -159,6 +170,8 @@ impl DataFramePipeline {
                         input_path,
                         input_file_type,
                         select,
+                        filter_sql.clone(),
+                        filter_runs_after_select,
                         slice,
                         csv_has_header,
                     )
@@ -206,6 +219,8 @@ impl DataFramePipeline {
                         input_path,
                         input_file_type,
                         select,
+                        filter_sql.clone(),
+                        filter_runs_after_select,
                         slice,
                         csv_has_header,
                     )
@@ -230,11 +245,13 @@ impl DataFramePipeline {
     }
 }
 
-/// Read into a [`DataFrameSource`], apply optional column select, then optional head/tail/sample.
+/// Read into a [`DataFrameSource`], apply optional SQL filter and column select per `filter_runs_after_select`, then optional head/tail/sample.
 pub(crate) async fn dataframe_pipeline_prepare_source(
     input_path: String,
     input_file_type: FileType,
     select: Option<SelectSpec>,
+    filter_sql: Option<String>,
+    filter_runs_after_select: bool,
     slice: Option<DisplaySlice>,
     csv_has_header: Option<bool>,
 ) -> crate::Result<DataFrameSource> {
@@ -252,6 +269,8 @@ pub(crate) async fn dataframe_pipeline_prepare_source(
         df,
         &input_path,
         input_file_type,
+        filter_sql.as_deref(),
+        filter_runs_after_select,
         select.as_ref(),
         None,
         slice,

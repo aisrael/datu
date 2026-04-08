@@ -23,6 +23,7 @@ use super::stage::ReplPipelineStage;
 use crate::Error;
 use crate::pipeline::DataFramePipeline;
 use crate::pipeline::DisplaySlice;
+use crate::pipeline::FilterSpec;
 use crate::pipeline::Pipeline;
 use crate::pipeline::SelectSpec;
 
@@ -540,11 +541,12 @@ fn test_extract_path_from_args_write_bad_args() {
 // ── validate_repl_pipeline_stages / plan not implemented ──────
 
 #[test]
-fn test_validate_rejects_duplicate_filter() {
+fn test_validate_rejects_three_filters() {
     let stages = vec![
         ReplPipelineStage::Read {
             path: "a.parquet".into(),
         },
+        ReplPipelineStage::Filter { sql: "true".into() },
         ReplPipelineStage::Select {
             columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
         },
@@ -557,7 +559,50 @@ fn test_validate_rejects_duplicate_filter() {
         ReplPipelineStage::Head { n: 1 },
     ];
     let err = validate_repl_pipeline_stages(&stages).unwrap_err();
-    assert!(matches!(err, Error::InvalidReplPipeline(msg) if msg.contains("only one filter")));
+    assert!(matches!(err, Error::InvalidReplPipeline(msg) if msg.contains("at most two filter")));
+}
+
+#[test]
+fn test_validate_rejects_two_filters_both_after_select() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
+        },
+        ReplPipelineStage::Filter {
+            sql: "x > 0".into(),
+        },
+        ReplPipelineStage::Filter {
+            sql: "x < 10".into(),
+        },
+        ReplPipelineStage::Head { n: 1 },
+    ];
+    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
+    assert!(matches!(err, Error::InvalidReplPipeline(msg) if msg.contains("strictly between")));
+}
+
+#[test]
+fn test_validate_accepts_two_filters_straddling_select() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::Filter {
+            sql: "one > 0".into(),
+        },
+        ReplPipelineStage::Select {
+            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
+                "one".into(),
+            ))],
+        },
+        ReplPipelineStage::Filter {
+            sql: "one < 1000".into(),
+        },
+        ReplPipelineStage::Head { n: 5 },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
 }
 
 #[test]
@@ -592,7 +637,7 @@ fn test_validate_accepts_select_filter_head() {
 }
 
 #[test]
-fn test_validate_rejects_filter_after_group_by() {
+fn test_validate_accepts_filter_after_group_by_select() {
     let stages = vec![
         ReplPipelineStage::Read {
             path: "fixtures/table.parquet".into(),
@@ -609,10 +654,7 @@ fn test_validate_rejects_filter_after_group_by() {
         ReplPipelineStage::Filter { sql: "true".into() },
         ReplPipelineStage::Head { n: 3 },
     ];
-    let err = validate_repl_pipeline_stages(&stages).unwrap_err();
-    assert!(
-        matches!(err, Error::InvalidReplPipeline(msg) if msg.contains("filter(...) must appear before group_by"))
-    );
+    validate_repl_pipeline_stages(&stages).unwrap();
 }
 
 #[test]
@@ -637,6 +679,69 @@ fn test_validate_accepts_filter_group_by_select() {
 }
 
 #[test]
+fn test_builder_bridge_post_aggregate_filter_runs_after_select() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+            ],
+        },
+        ReplPipelineStage::Filter {
+            sql: "sum(three) > 0".into(),
+        },
+        ReplPipelineStage::Head { n: 3 },
+    ];
+    let mut builder = repl_stages_to_pipeline_builder(&stages).unwrap();
+    let Pipeline::DataFrame(p) = builder.build().unwrap() else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, None);
+    assert_eq!(
+        p.filter_after_select,
+        Some(FilterSpec::new("sum(three) > 0"))
+    );
+}
+
+#[test]
+fn test_builder_bridge_where_and_having_filters() {
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "fixtures/table.parquet".into(),
+        },
+        ReplPipelineStage::Filter { sql: "true".into() },
+        ReplPipelineStage::GroupBy {
+            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+            ],
+        },
+        ReplPipelineStage::Filter {
+            sql: "sum(three) > 0".into(),
+        },
+        ReplPipelineStage::Head { n: 3 },
+    ];
+    let mut builder = repl_stages_to_pipeline_builder(&stages).unwrap();
+    let Pipeline::DataFrame(p) = builder.build().unwrap() else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, Some(FilterSpec::new("true")));
+    assert_eq!(
+        p.filter_after_select,
+        Some(FilterSpec::new("sum(three) > 0"))
+    );
+}
+
+#[test]
 fn test_builder_bridge_sets_filter_sql() {
     let stages = vec![
         ReplPipelineStage::Read {
@@ -654,8 +759,8 @@ fn test_builder_bridge_sets_filter_sql() {
     let Pipeline::DataFrame(p) = builder.build().unwrap() else {
         panic!("expected DataFrame pipeline");
     };
-    assert_eq!(p.filter_sql.as_deref(), Some("true"));
-    assert!(p.filter_runs_after_select);
+    assert_eq!(p.filter_before_select, None);
+    assert_eq!(p.filter_after_select, Some(FilterSpec::new("true")));
     assert_eq!(p.slice, Some(DisplaySlice::Head(2)));
 }
 

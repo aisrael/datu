@@ -12,7 +12,7 @@ pub enum ReplPipelineStage {
     Read {
         path: String,
     },
-    /// SQL predicate (`parse_sql_expr` + `filter`); runs before or after `select` per pipeline order.
+    /// SQL predicate (`parse_sql_expr` + `filter`); before or after the `select` stage per pipeline order (after includes post-aggregate when `group_by` is used).
     Filter {
         sql: String,
     },

@@ -306,8 +306,8 @@ fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::
     Ok(())
 }
 
-/// Validates that stages match `read` → optional permuted `filter` / `group_by` / `select` (at most one each) → optional slice or `schema`/`count` → optional `write`,
-/// with optional trailing `print` only after head/tail/sample. When both `filter` and `group_by` are present, `filter` must come first in the pipeline.
+/// Validates that stages match `read` → optional permuted `filter` (at most two, straddling `select` if two) / `group_by` / `select` (at most one each) → optional slice or `schema`/`count` → optional `write`,
+/// with optional trailing `print` only after head/tail/sample. A single `filter` maps to before or after `select` by stage order; two `filter` stages require `select(...)` strictly between them (WHERE-like then HAVING-like when aggregating).
 pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> crate::Result<()> {
     if stages.is_empty() {
         return Err(Error::InvalidReplPipeline("empty pipeline".to_string()));
@@ -325,20 +325,20 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
     }
 
     let mut i = 1usize;
-    let mut filter_idx: Option<usize> = None;
-    let mut group_idx: Option<usize> = None;
+    let mut filter_indices: Vec<usize> = Vec::new();
+    let mut select_idx: Option<usize> = None;
     let mut group_by_cols: Option<&Vec<ColumnSpec>> = None;
     let mut select_items: Option<&Vec<SelectItem>> = None;
 
     while i < body.len() {
         match body.get(i) {
             Some(ReplPipelineStage::Filter { .. }) => {
-                if filter_idx.is_some() {
+                if filter_indices.len() >= 2 {
                     return Err(Error::InvalidReplPipeline(
-                        "only one filter(...) is allowed in a pipeline".to_string(),
+                        "at most two filter(...) stages are allowed in a pipeline".to_string(),
                     ));
                 }
-                filter_idx = Some(i);
+                filter_indices.push(i);
                 i += 1;
             }
             Some(ReplPipelineStage::GroupBy { columns }) => {
@@ -347,7 +347,6 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
                         "only one group_by(...) is allowed in a pipeline".to_string(),
                     ));
                 }
-                group_idx = Some(i);
                 group_by_cols = Some(columns);
                 i += 1;
             }
@@ -356,6 +355,9 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
                     return Err(Error::InvalidReplPipeline(
                         "only one select(...) is allowed in a pipeline".to_string(),
                     ));
+                }
+                if select_idx.is_none() {
+                    select_idx = Some(i);
                 }
                 select_items = Some(columns);
                 i += 1;
@@ -388,12 +390,21 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
         ));
     }
 
-    if let (Some(fi), Some(gi)) = (filter_idx, group_idx)
-        && fi >= gi
-    {
-        return Err(Error::InvalidReplPipeline(
-            "filter(...) must appear before group_by(...)".to_string(),
-        ));
+    if filter_indices.len() == 2 {
+        let Some(si) = select_idx else {
+            return Err(Error::InvalidReplPipeline(
+                "two filter(...) stages require select(...) between them (one before and one after select(...))"
+                    .to_string(),
+            ));
+        };
+        let f0 = filter_indices[0].min(filter_indices[1]);
+        let f1 = filter_indices[0].max(filter_indices[1]);
+        if !(f0 < si && si < f1) {
+            return Err(Error::InvalidReplPipeline(
+                "two filter(...) stages must have select(...) strictly between them (one before select, one after)"
+                    .to_string(),
+            ));
+        }
     }
 
     if let Some(keys) = group_by_cols {
@@ -452,7 +463,7 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
         }
         _ => {
             return Err(Error::InvalidReplPipeline(
-                "invalid pipeline stage order (expected read, optional filter, group_by, and select in any order with filter before group_by when both are used, then head|tail|sample|schema|count, or write)".to_string(),
+                "invalid pipeline stage order (expected read, optional filter/group_by/select in any order, then head|tail|sample|schema|count, or write)".to_string(),
             ));
         }
     }

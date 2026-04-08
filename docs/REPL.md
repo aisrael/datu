@@ -111,7 +111,7 @@ For the following functions, note that the function signatures and types provide
 
 ### Pipeline shape
 
-A REPL pipeline must start with `read(...)`. You may use at most one `filter("...")`, one `group_by(...)`, and one `select(...)` per pipeline, in **any order**, except that when both `filter` and `group_by` are used, **`filter` must come before `group_by`** (for example `read(...) |> filter("...") |> group_by(...) |> select(...)`). Further stages—`head`, `tail`, `sample`, `schema`, `count`, or `write`—are added when needed (for example, `read("x.parquet") |> head(5)` skips `select` entirely). You cannot repeat `select`, `group_by`, or `filter` in the same pipeline. If `group_by(...)` appears, a matching `select(...)` is required.
+A REPL pipeline must start with `read(...)`. You may use at most **two** `filter("...")` stages (only when one appears **before** `select(...)` and one **after**, so you can combine WHERE-like and HAVING-like predicates), at most one `group_by(...)`, and one `select(...)`, in **any order** among those stages (subject to `group_by(...)` requiring a matching `select(...)`). Further stages—`head`, `tail`, `sample`, `schema`, `count`, or `write`—are added when needed (for example, `read("x.parquet") |> head(5)` skips `select` entirely). You cannot repeat `select` or `group_by`.
 
 ### `read`
 
@@ -137,12 +137,19 @@ Reads a Parquet, Avro, ORC, CSV, or JSON file at the given `path`. If `file_type
 filter(data: Data, sql: String) -> Data
 ```
 
-`filter` takes a single string that is a SQL predicate fragment (as in a `WHERE` clause). It is parsed with Apache DataFusion. Whether the predicate applies to **source** columns or **post-`select`** columns depends on where `filter` appears relative to `select` in the pipeline: `filter` **before** `select` filters raw rows; `filter` **after** `select` filters the projected or aggregated result (column names must match that step’s schema).
+`filter` takes a single string that is a SQL predicate fragment. It is parsed with Apache DataFusion. **Placement relative to `select` in the pipeline** fixes whether you filter input rows or the result of the `select` step (which, when `group_by` is used, includes aggregation in one logical step—similar to SQL **WHERE** vs **HAVING**):
+
+- **`filter` before `select`** (when `select` is present): predicate on **source** columns, evaluated on each input row **before** projection or aggregation (WHERE-like when `group_by` is used).
+- **`filter` after `select` without `group_by`**: predicate on **projected** columns only.
+- **`filter` after `select` with `group_by`**: predicate on the **grouped/aggregated** result; use the output column names DataFusion produces for aggregates (commonly `sum(column_name)`, `avg(column_name)`, etc., matching the source column name).
+- **Two `filter` stages**: the first (by pipeline order before `select`) runs on **input rows**; the second (after `select`) runs on the **result**—together, analogous to **WHERE** then **HAVING** when `group_by` and aggregates are used.
 
 ```flt
 read("input.parquet") |> filter("amount > 0") |> select(:amount, :status) |> head(10)
 read("input.parquet") |> select(:amount, :status) |> filter("amount > 0 AND status = 'active'") |> head(10)
 read("input.parquet") |> filter("amount > 0") |> group_by(:country) |> select(:country, sum(:amount)) |> head(10)
+read("input.parquet") |> group_by(:country) |> select(:country, sum(:amount)) |> filter("sum(amount) > 100") |> head(10)
+read("input.parquet") |> filter("status = 'active'") |> group_by(:country) |> select(:country, sum(:amount)) |> filter("sum(amount) > 100") |> head(10)
 ```
 
 `filter` is only supported for inputs read through DataFusion (Parquet, Avro, CSV, JSON). It is **not** supported for ORC files in the REPL; convert or use another format first.

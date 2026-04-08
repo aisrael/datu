@@ -16,6 +16,7 @@ use crate::pipeline::record_batch::RecordBatchPipeline;
 use crate::pipeline::record_batch::RecordBatchSink;
 use crate::pipeline::spec::ColumnSpec;
 use crate::pipeline::spec::DisplaySlice;
+use crate::pipeline::spec::FilterSpec;
 use crate::pipeline::spec::SelectItem;
 use crate::pipeline::spec::SelectSpec;
 use crate::resolve_file_type;
@@ -23,10 +24,10 @@ use crate::resolve_file_type;
 /// Fluent builder for a [`Pipeline`] (file conversion or stdout display: head/tail/sample, schema, or row count).
 pub struct PipelineBuilder {
     read: Option<String>,
-    /// REPL: SQL predicate for DataFusion `parse_sql_expr` + `filter`.
-    filter_sql: Option<String>,
-    /// When true, apply `filter_sql` after `select`; when false, before (or on raw data if no select).
-    filter_runs_after_select: bool,
+    /// REPL: SQL predicate applied before `select` (WHERE-like on input rows when aggregating).
+    filter_before_select: Option<FilterSpec>,
+    /// REPL: SQL predicate applied after `select` (post-projection or HAVING-like after `group_by` aggregates).
+    filter_after_select: Option<FilterSpec>,
     select: Option<SelectSpec>,
     head: Option<usize>,
     tail: Option<usize>,
@@ -48,8 +49,8 @@ impl Default for PipelineBuilder {
     fn default() -> Self {
         Self {
             read: None,
-            filter_sql: None,
-            filter_runs_after_select: false,
+            filter_before_select: None,
+            filter_after_select: None,
             select: None,
             head: None,
             tail: None,
@@ -83,15 +84,15 @@ impl PipelineBuilder {
         self
     }
 
-    /// SQL `WHERE`-style predicate for DataFusion (REPL `filter("...")`).
-    pub fn filter_sql(&mut self, sql: &str) -> &mut Self {
-        self.filter_sql = Some(sql.to_string());
+    /// SQL predicate for DataFusion `parse_sql_expr` + `filter`, applied **before** the pipeline `select` step (input rows / WHERE-like).
+    pub fn filter_before_select(&mut self, sql: &str) -> &mut Self {
+        self.filter_before_select = Some(FilterSpec::new(sql));
         self
     }
 
-    /// When set with [`filter_sql`](Self::filter_sql), apply the filter after `select` if true, before if false.
-    pub fn filter_runs_after_select(&mut self, v: bool) -> &mut Self {
-        self.filter_runs_after_select = v;
+    /// SQL predicate applied **after** the pipeline `select` step (post-projection or HAVING-like when `group_by` + aggregates are present).
+    pub fn filter_after_select(&mut self, sql: &str) -> &mut Self {
+        self.filter_after_select = Some(FilterSpec::new(sql));
         self
     }
 
@@ -215,7 +216,11 @@ impl PipelineBuilder {
         }
 
         reject_orc_with_aggregates(input_file_type, &select)?;
-        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
+        reject_orc_with_filters(
+            input_file_type,
+            &self.filter_before_select,
+            &self.filter_after_select,
+        )?;
 
         let slice = slice_from_head_tail_sample(self.head, self.tail, self.sample);
         Ok(dispatch_pipeline(
@@ -225,8 +230,8 @@ impl PipelineBuilder {
             slice,
             self.sparse,
             self.csv_has_header,
-            self.filter_sql.clone(),
-            self.filter_runs_after_select,
+            self.filter_before_select.clone(),
+            self.filter_after_select.clone(),
             UnifiedSink::Write {
                 output_path: output_path.to_string(),
                 output_file_type,
@@ -256,7 +261,11 @@ impl PipelineBuilder {
         let csv_has_header = self.csv_has_header;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
-        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
+        reject_orc_with_filters(
+            input_file_type,
+            &self.filter_before_select,
+            &self.filter_after_select,
+        )?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -265,8 +274,8 @@ impl PipelineBuilder {
             None,
             sparse,
             csv_has_header,
-            self.filter_sql.clone(),
-            self.filter_runs_after_select,
+            self.filter_before_select.clone(),
+            self.filter_after_select.clone(),
             UnifiedSink::Schema {
                 output_format,
                 sparse,
@@ -291,7 +300,11 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
-        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
+        reject_orc_with_filters(
+            input_file_type,
+            &self.filter_before_select,
+            &self.filter_after_select,
+        )?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -300,8 +313,8 @@ impl PipelineBuilder {
             None,
             sparse,
             csv_has_header,
-            self.filter_sql.clone(),
-            self.filter_runs_after_select,
+            self.filter_before_select.clone(),
+            self.filter_after_select.clone(),
             UnifiedSink::Count,
         ))
     }
@@ -335,7 +348,11 @@ impl PipelineBuilder {
         let sparse = self.sparse;
 
         reject_orc_with_aggregates(input_file_type, &select)?;
-        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
+        reject_orc_with_filters(
+            input_file_type,
+            &self.filter_before_select,
+            &self.filter_after_select,
+        )?;
 
         Ok(dispatch_pipeline(
             input_path,
@@ -344,8 +361,8 @@ impl PipelineBuilder {
             Some(slice),
             sparse,
             csv_has_header,
-            self.filter_sql.clone(),
-            self.filter_runs_after_select,
+            self.filter_before_select.clone(),
+            self.filter_after_select.clone(),
             UnifiedSink::Display {
                 output_format,
                 csv_stdout_headers,
@@ -372,7 +389,11 @@ impl PipelineBuilder {
                 PipelinePlanningError::AggregatesNotSupportedForOrc,
             ));
         }
-        reject_orc_with_filter(input_file_type, &self.filter_sql)?;
+        reject_orc_with_filters(
+            input_file_type,
+            &self.filter_before_select,
+            &self.filter_after_select,
+        )?;
         let output_format = self
             .display_output_format
             .unwrap_or(DisplayOutputFormat::Csv);
@@ -384,8 +405,8 @@ impl PipelineBuilder {
             input_path,
             input_file_type,
             select,
-            filter_sql: self.filter_sql.clone(),
-            filter_runs_after_select: self.filter_runs_after_select,
+            filter_before_select: self.filter_before_select.clone(),
+            filter_after_select: self.filter_after_select.clone(),
             slice: None,
             csv_has_header,
             sparse,
@@ -476,8 +497,8 @@ fn dispatch_pipeline(
     slice: Option<DisplaySlice>,
     sparse: bool,
     csv_has_header: Option<bool>,
-    filter_sql: Option<String>,
-    filter_runs_after_select: bool,
+    filter_before_select: Option<FilterSpec>,
+    filter_after_select: Option<FilterSpec>,
     sink: UnifiedSink,
 ) -> Pipeline {
     if input_file_type == FileType::Orc {
@@ -494,8 +515,8 @@ fn dispatch_pipeline(
             input_path,
             input_file_type,
             select,
-            filter_sql,
-            filter_runs_after_select,
+            filter_before_select,
+            filter_after_select,
             slice,
             csv_has_header,
             sparse,
@@ -578,8 +599,14 @@ fn reject_orc_with_aggregates(
     Ok(())
 }
 
-fn reject_orc_with_filter(input_file_type: FileType, filter_sql: &Option<String>) -> Result<()> {
-    if input_file_type == FileType::Orc && filter_sql.is_some() {
+fn reject_orc_with_filters(
+    input_file_type: FileType,
+    filter_before_select: &Option<FilterSpec>,
+    filter_after_select: &Option<FilterSpec>,
+) -> Result<()> {
+    if input_file_type == FileType::Orc
+        && (filter_before_select.is_some() || filter_after_select.is_some())
+    {
         return Err(Error::PipelinePlanningError(
             PipelinePlanningError::FilterNotSupportedForOrc,
         ));

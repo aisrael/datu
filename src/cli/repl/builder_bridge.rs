@@ -28,17 +28,15 @@ pub(crate) fn repl_stages_to_pipeline_builder(
     builder.read(path);
 
     let mut i = 1usize;
-    let mut filter_idx: Option<usize> = None;
     let mut select_idx: Option<usize> = None;
     let mut group_keys: Option<Vec<ColumnSpec>> = None;
     let mut select_columns: Option<Vec<SelectItem>> = None;
-    let mut filter_sql: Option<String> = None;
+    let mut filters: Vec<(usize, String)> = Vec::new();
 
     while i < body.len() {
         match body.get(i) {
             Some(ReplPipelineStage::Filter { sql }) => {
-                filter_idx = Some(i);
-                filter_sql = Some(sql.clone());
+                filters.push((i, sql.clone()));
                 i += 1;
             }
             Some(ReplPipelineStage::GroupBy { columns }) => {
@@ -46,7 +44,9 @@ pub(crate) fn repl_stages_to_pipeline_builder(
                 i += 1;
             }
             Some(ReplPipelineStage::Select { columns }) => {
-                select_idx = Some(i);
+                if select_idx.is_none() {
+                    select_idx = Some(i);
+                }
                 select_columns = Some(columns.clone());
                 i += 1;
             }
@@ -80,13 +80,26 @@ pub(crate) fn repl_stages_to_pipeline_builder(
         builder.select_spec(spec);
     }
 
-    if let Some(sql) = filter_sql {
-        let runs_after = match (filter_idx, select_idx) {
-            (Some(f), Some(s)) => f > s,
-            _ => false,
-        };
-        builder.filter_sql(&sql);
-        builder.filter_runs_after_select(runs_after);
+    match filters.len() {
+        0 => {}
+        1 => {
+            let (f, sql) = &filters[0];
+            if select_idx.is_some_and(|s| *f > s) {
+                builder.filter_after_select(sql);
+            } else {
+                builder.filter_before_select(sql);
+            }
+        }
+        2 => {
+            filters.sort_by_key(|(idx, _)| *idx);
+            builder.filter_before_select(&filters[0].1);
+            builder.filter_after_select(&filters[1].1);
+        }
+        _ => {
+            return Err(crate::Error::InvalidReplPipeline(
+                "at most two filter(...) stages are allowed in a pipeline".to_string(),
+            ));
+        }
     }
 
     match body.get(i) {

@@ -278,23 +278,21 @@ pub(super) fn apply_select_spec_to_dataframe(
     Ok(df)
 }
 
-/// Applies optional SQL filter and column selection (order controlled by `filter_runs_after_select`), then SQL-style row limit and display slice.
+/// Applies optional SQL filters before and after column selection, then SQL-style row limit and display slice.
 ///
-/// When `filter_runs_after_select` is false, `filter_sql` runs on the raw frame before `select`; when true, after `select` (post-projection / post-aggregate).
+/// `filter_before_select` runs on the raw frame; `filter_after_select` runs after `select` (post-projection or post-`group_by` aggregate when the spec includes grouping).
 #[allow(clippy::too_many_arguments)] // Pipeline finalize bundles several optional stages; splitting would not simplify call sites.
 pub(super) async fn finalize_dataframe_source(
     mut df: DataFrame,
     input_path: &str,
     input_file_type: FileType,
-    filter_sql: Option<&str>,
-    filter_runs_after_select: bool,
+    filter_before_select: Option<&str>,
+    filter_after_select: Option<&str>,
     select: Option<&SelectSpec>,
     limit: Option<usize>,
     slice: Option<DisplaySlice>,
 ) -> crate::Result<DataFrameSource> {
-    if let Some(sql) = filter_sql
-        && !filter_runs_after_select
-    {
+    if let Some(sql) = filter_before_select {
         let expr = df.parse_sql_expr(sql)?;
         df = df.filter(expr)?;
     }
@@ -303,9 +301,7 @@ pub(super) async fn finalize_dataframe_source(
     {
         df = apply_select_spec_to_dataframe(df, spec)?;
     }
-    if let Some(sql) = filter_sql
-        && filter_runs_after_select
-    {
+    if let Some(sql) = filter_after_select {
         let expr = df.parse_sql_expr(sql)?;
         df = df.filter(expr)?;
     }

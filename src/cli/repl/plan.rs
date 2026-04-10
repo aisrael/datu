@@ -85,6 +85,14 @@ pub(super) fn extract_path_from_args(func_name: &str, args: &[Expr]) -> crate::R
     }
 }
 
+/// Extracts a single SQL predicate string (same shape as [`extract_path_from_args`]).
+pub(super) fn extract_sql_predicate_from_args(
+    func_name: &str,
+    args: &[Expr],
+) -> crate::Result<String> {
+    extract_path_from_args(func_name, args)
+}
+
 fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
     match expr {
         Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
@@ -167,6 +175,10 @@ pub(super) fn plan_stage(expr: Expr) -> crate::Result<ReplPipelineStage> {
                 "read" => {
                     let path = extract_path_from_args("read", &args)?;
                     Ok(ReplPipelineStage::Read { path })
+                }
+                "filter" => {
+                    let sql = extract_sql_predicate_from_args("filter", &args)?;
+                    Ok(ReplPipelineStage::Filter { sql })
                 }
                 "group_by" => {
                     if args.is_empty() {
@@ -294,8 +306,8 @@ fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::
     Ok(())
 }
 
-/// Validates that stages match `read` → optional `group_by` / `select` (either order) → optional slice or `schema`/`count` → optional `write`,
-/// with optional trailing `print` only after head/tail/sample.
+/// Validates that stages match `read` → optional permuted `filter` (at most two, straddling `select` if two) / `group_by` / `select` (at most one each) → optional slice or `schema`/`count` → optional `write`,
+/// with optional trailing `print` only after head/tail/sample. A single `filter` maps to before or after `select` by stage order; two `filter` stages require `select(...)` strictly between them (WHERE-like then HAVING-like when aggregating).
 pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> crate::Result<()> {
     if stages.is_empty() {
         return Err(Error::InvalidReplPipeline("empty pipeline".to_string()));
@@ -313,11 +325,22 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
     }
 
     let mut i = 1usize;
+    let mut filter_indices: Vec<usize> = Vec::new();
+    let mut select_idx: Option<usize> = None;
     let mut group_by_cols: Option<&Vec<ColumnSpec>> = None;
     let mut select_items: Option<&Vec<SelectItem>> = None;
 
-    for _ in 0..2 {
+    while i < body.len() {
         match body.get(i) {
+            Some(ReplPipelineStage::Filter { .. }) => {
+                if filter_indices.len() >= 2 {
+                    return Err(Error::InvalidReplPipeline(
+                        "at most two filter(...) stages are allowed in a pipeline".to_string(),
+                    ));
+                }
+                filter_indices.push(i);
+                i += 1;
+            }
             Some(ReplPipelineStage::GroupBy { columns }) => {
                 if group_by_cols.is_some() {
                     return Err(Error::InvalidReplPipeline(
@@ -333,10 +356,31 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
                         "only one select(...) is allowed in a pipeline".to_string(),
                     ));
                 }
+                if select_idx.is_none() {
+                    select_idx = Some(i);
+                }
                 select_items = Some(columns);
                 i += 1;
             }
-            _ => break,
+            Some(
+                ReplPipelineStage::Head { .. }
+                | ReplPipelineStage::Tail { .. }
+                | ReplPipelineStage::Sample { .. }
+                | ReplPipelineStage::Schema
+                | ReplPipelineStage::Count
+                | ReplPipelineStage::Write { .. },
+            ) => break,
+            Some(ReplPipelineStage::Read { .. }) => {
+                return Err(Error::InvalidReplPipeline(
+                    "unexpected read(path) after start of pipeline".to_string(),
+                ));
+            }
+            Some(ReplPipelineStage::Print) => {
+                return Err(Error::InvalidReplPipeline(
+                    "unexpected print() in pipeline body".to_string(),
+                ));
+            }
+            None => break,
         }
     }
 
@@ -344,6 +388,23 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
         return Err(Error::InvalidReplPipeline(
             "group_by(...) requires select(...)".to_string(),
         ));
+    }
+
+    if filter_indices.len() == 2 {
+        let Some(si) = select_idx else {
+            return Err(Error::InvalidReplPipeline(
+                "two filter(...) stages require select(...) between them (one before and one after select(...))"
+                    .to_string(),
+            ));
+        };
+        let f0 = filter_indices[0].min(filter_indices[1]);
+        let f1 = filter_indices[0].max(filter_indices[1]);
+        if !(f0 < si && si < f1) {
+            return Err(Error::InvalidReplPipeline(
+                "two filter(...) stages must have select(...) strictly between them (one before select, one after)"
+                    .to_string(),
+            ));
+        }
     }
 
     if let Some(keys) = group_by_cols {
@@ -402,14 +463,14 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
         }
         _ => {
             return Err(Error::InvalidReplPipeline(
-                "invalid pipeline stage order (expected read, optional group_by and select, then head|tail|sample|schema|count, or write)".to_string(),
+                "invalid pipeline stage order (expected read, optional filter/group_by/select in any order, then head|tail|sample|schema|count, or write)".to_string(),
             ));
         }
     }
 
     if i != body.len() {
         return Err(Error::InvalidReplPipeline(
-            "invalid pipeline stage order (expected read, optional group_by/select, optional head|tail|sample|schema|count, optional write)".to_string(),
+            "invalid pipeline stage order (expected read, optional filter/group_by/select, optional head|tail|sample|schema|count, optional write)".to_string(),
         ));
     }
 

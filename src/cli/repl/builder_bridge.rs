@@ -28,20 +28,47 @@ pub(crate) fn repl_stages_to_pipeline_builder(
     builder.read(path);
 
     let mut i = 1usize;
+    let mut select_idx: Option<usize> = None;
     let mut group_keys: Option<Vec<ColumnSpec>> = None;
     let mut select_columns: Option<Vec<SelectItem>> = None;
+    let mut filters: Vec<(usize, String)> = Vec::new();
 
-    for _ in 0..2 {
+    while i < body.len() {
         match body.get(i) {
+            Some(ReplPipelineStage::Filter { sql }) => {
+                filters.push((i, sql.clone()));
+                i += 1;
+            }
             Some(ReplPipelineStage::GroupBy { columns }) => {
                 group_keys = Some(columns.clone());
                 i += 1;
             }
             Some(ReplPipelineStage::Select { columns }) => {
+                if select_idx.is_none() {
+                    select_idx = Some(i);
+                }
                 select_columns = Some(columns.clone());
                 i += 1;
             }
-            _ => break,
+            Some(
+                ReplPipelineStage::Head { .. }
+                | ReplPipelineStage::Tail { .. }
+                | ReplPipelineStage::Sample { .. }
+                | ReplPipelineStage::Schema
+                | ReplPipelineStage::Count
+                | ReplPipelineStage::Write { .. },
+            ) => break,
+            Some(ReplPipelineStage::Read { .. }) => {
+                return Err(crate::Error::InvalidReplPipeline(
+                    "unexpected read(path) after start of pipeline".to_string(),
+                ));
+            }
+            Some(ReplPipelineStage::Print) => {
+                return Err(crate::Error::InvalidReplPipeline(
+                    "unexpected print() in pipeline body".to_string(),
+                ));
+            }
+            None => break,
         }
     }
 
@@ -51,6 +78,28 @@ pub(crate) fn repl_stages_to_pipeline_builder(
             group_by: group_keys,
         };
         builder.select_spec(spec);
+    }
+
+    match filters.len() {
+        0 => {}
+        1 => {
+            let (f, sql) = &filters[0];
+            if select_idx.is_some_and(|s| *f > s) {
+                builder.filter_after_select(sql);
+            } else {
+                builder.filter_before_select(sql);
+            }
+        }
+        2 => {
+            filters.sort_by_key(|(idx, _)| *idx);
+            builder.filter_before_select(&filters[0].1);
+            builder.filter_after_select(&filters[1].1);
+        }
+        _ => {
+            return Err(crate::Error::InvalidReplPipeline(
+                "at most two filter(...) stages are allowed in a pipeline".to_string(),
+            ));
+        }
     }
 
     match body.get(i) {

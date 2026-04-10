@@ -278,22 +278,32 @@ pub(super) fn apply_select_spec_to_dataframe(
     Ok(df)
 }
 
-/// Applies optional column selection, SQL-style row limit, and display slice to a loaded [`DataFrame`].
+/// Applies optional SQL filters before and after column selection, then SQL-style row limit and display slice.
 ///
-/// Used by `LegacyDataFrameReader` and `dataframe_pipeline_prepare_source` so read → project →
-/// cap/slice stays in one place.
+/// `filter_before_select` runs on the raw frame; `filter_after_select` runs after `select` (post-projection or post-`group_by` aggregate when the spec includes grouping).
+#[allow(clippy::too_many_arguments)] // Pipeline finalize bundles several optional stages; splitting would not simplify call sites.
 pub(super) async fn finalize_dataframe_source(
     mut df: DataFrame,
     input_path: &str,
     input_file_type: FileType,
+    filter_before_select: Option<&str>,
+    filter_after_select: Option<&str>,
     select: Option<&SelectSpec>,
     limit: Option<usize>,
     slice: Option<DisplaySlice>,
 ) -> crate::Result<DataFrameSource> {
+    if let Some(sql) = filter_before_select {
+        let expr = df.parse_sql_expr(sql)?;
+        df = df.filter(expr)?;
+    }
     if let Some(spec) = select
         && !spec.is_empty()
     {
         df = apply_select_spec_to_dataframe(df, spec)?;
+    }
+    if let Some(sql) = filter_after_select {
+        let expr = df.parse_sql_expr(sql)?;
+        df = df.filter(expr)?;
     }
     if let Some(n) = limit {
         df = dataframe_apply_head(df, n)?;

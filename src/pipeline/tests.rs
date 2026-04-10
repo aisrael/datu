@@ -8,6 +8,7 @@ use crate::Error;
 use crate::FileType;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DataframeParquetReader;
+use crate::pipeline::FilterSpec;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::avro::DataframeAvroWriter;
@@ -163,6 +164,110 @@ fn test_pipeline_builder_read_head_display_orc_uses_record_batch_pipeline() {
     assert_eq!(FileType::Orc, p.input_file_type);
     assert_eq!(p.slice, Some(DisplaySlice::Head(3)));
     assert!(matches!(p.sink, RecordBatchSink::Display { .. }));
+}
+
+#[test]
+fn test_pipeline_builder_filter_sql_rejected_for_orc() {
+    use crate::errors::PipelinePlanningError;
+
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/userdata.orc")
+        .select(&["col"])
+        .filter_after_select("col IS NOT NULL")
+        .head(3);
+    let err = match builder.build() {
+        Err(e) => e,
+        Ok(_) => panic!("ORC + filter should fail at plan time"),
+    };
+    assert!(matches!(
+        err,
+        Error::PipelinePlanningError(PipelinePlanningError::FilterNotSupportedForOrc)
+    ));
+}
+
+#[test]
+fn test_pipeline_builder_read_filter_head_sets_filter_sql() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .select(&["one"])
+        .filter_after_select("true")
+        .head(3);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, None);
+    assert_eq!(p.filter_after_select, Some(FilterSpec::new("true")));
+    assert_eq!(p.slice, Some(DisplaySlice::Head(3)));
+}
+
+#[test]
+fn test_pipeline_builder_filter_before_select_sets_placement() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .filter_before_select("true")
+        .select(&["one"])
+        .head(2);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, Some(FilterSpec::new("true")));
+    assert_eq!(p.filter_after_select, None);
+}
+
+#[test]
+fn test_pipeline_builder_grouped_select_post_aggregate_filter_sets_flag() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .select_spec(SelectSpec {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+            ],
+            group_by: Some(vec![ColumnSpec::CaseInsensitive("two".into())]),
+        })
+        .filter_after_select("sum(three) > 0")
+        .head(5);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, None);
+    assert_eq!(
+        p.filter_after_select,
+        Some(FilterSpec::new("sum(three) > 0"))
+    );
+}
+
+#[test]
+fn test_pipeline_builder_both_filters_before_and_after_select() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .read("fixtures/table.parquet")
+        .filter_before_select("one > 0")
+        .select_spec(SelectSpec {
+            columns: vec![
+                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+            ],
+            group_by: Some(vec![ColumnSpec::CaseInsensitive("two".into())]),
+        })
+        .filter_after_select("sum(three) > 0")
+        .head(5);
+    let built = builder.build().expect("build display pipeline");
+    let Pipeline::DataFrame(p) = built else {
+        panic!("expected DataFrame pipeline");
+    };
+    assert_eq!(p.filter_before_select, Some(FilterSpec::new("one > 0")));
+    assert_eq!(
+        p.filter_after_select,
+        Some(FilterSpec::new("sum(three) > 0"))
+    );
 }
 
 #[test]

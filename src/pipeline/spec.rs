@@ -16,6 +16,34 @@ pub(crate) enum DisplaySlice {
     Sample(usize),
 }
 
+/// SQL predicate string for DataFusion `parse_sql_expr` + `filter` (newtype over `String`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilterSpec(String);
+
+impl FilterSpec {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::ops::Deref for FilterSpec {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for FilterSpec {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// How to match a column name: exact (case-sensitive) or case-insensitive.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ColumnSpec {

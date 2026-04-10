@@ -64,6 +64,8 @@ pub enum PipelinePlanningError {
         "Aggregates in select are not supported for ORC input; use Parquet, CSV, JSON, or Avro"
     )]
     AggregatesNotSupportedForOrc,
+    #[error("filter() is not supported for ORC input; use Parquet, CSV, JSON, or Avro")]
+    FilterNotSupportedForOrc,
 }
 
 /// Errors produced while running a pipeline (wrong format, consumed state, etc.).

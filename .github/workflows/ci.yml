@@ -11,6 +11,9 @@ on:
       - "README.md"
       - ".github/workflows/ci.yml"
 
+permissions:
+  contents: read
+
 env:
   # We use environment variables to specify the Rust version and other settings once
   RUST_TOOLCHAIN: 1.94.0

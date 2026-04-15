@@ -71,7 +71,7 @@ pub fn sample_from_reader(
     n: usize,
 ) -> Vec<RecordBatch> {
     let effective_n = n.min(total_rows);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut indices: Vec<usize> =
         rand::seq::index::sample(&mut rng, total_rows, effective_n).into_vec();
     indices.sort_unstable();

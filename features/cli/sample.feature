@@ -38,7 +38,8 @@ Feature: Sample
 
   Scenario: Sample with -O overrides output type
     Given a file "fixtures/table.parquet"
-    When I run `datu sample fixtures/table.parquet $TEMPDIR/sample_out -n 2 -O csv`
+    When I run `datu sample fixtures/table.parquet $TEMPDIR/sample.out -n 2 -O json`
     Then the command should succeed
-    And the file "$TEMPDIR/sample_out" should exist
-    And that file should have 3 lines
+    And the output should contain "Sampled fixtures/table.parquet to $TEMPDIR/sample.out"
+    And the file "$TEMPDIR/sample.out" should exist
+    And the file "$TEMPDIR/sample.out" should be valid JSON

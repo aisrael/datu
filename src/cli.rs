@@ -116,6 +116,8 @@ pub struct CountArgs {
 pub struct HeadsOrTails {
     /// Path to the Parquet, Avro, ORC, or CSV file
     pub input_path: String,
+    /// Optional path to an output file. When omitted, rows are printed to stdout.
+    pub output_path: Option<String>,
     #[arg(
         long,
         short = 'I',
@@ -135,9 +137,21 @@ pub struct HeadsOrTails {
         short,
         default_value_t = DisplayOutputFormat::Csv,
         value_parser = clap::value_parser!(DisplayOutputFormat),
-        help = "Output format: csv, json, json-pretty, or yaml"
+        help = "Output format when printing to stdout: csv, json, json-pretty, or yaml"
     )]
     pub output: DisplayOutputFormat,
+    #[arg(
+        long = "output-type",
+        short = 'O',
+        value_parser = clap::value_parser!(FileType),
+        help = "Output file type when writing to a file (avro, csv, json, orc, parquet, xlsx, yaml). Overrides extension-based detection."
+    )]
+    pub output_type: Option<FileType>,
+    #[arg(
+        long,
+        help = "When writing JSON to a file, format output with indentation and newlines. Ignored for other output formats."
+    )]
+    pub json_pretty: bool,
     #[arg(
         long,
         default_value_t = true,

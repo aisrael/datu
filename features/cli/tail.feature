@@ -147,3 +147,21 @@ Feature: Tail
     And the output should be valid YAML
     And the output should contain "id"
     And the output should contain "email"
+
+  Scenario: Tail Parquet to CSV file
+    Given a file "fixtures/table.parquet"
+    When I run `datu tail fixtures/table.parquet $TEMPDIR/tail.csv -n 2`
+    Then the command should succeed
+    And the output should contain "Wrote tail of fixtures/table.parquet to $TEMPDIR/tail.csv"
+    And the file "$TEMPDIR/tail.csv" should exist
+    And the first line of that file should contain "one,two"
+    And that file should have 3 lines
+
+  Scenario: Tail Avro to Parquet file
+    Given a file "fixtures/userdata5.avro"
+    When I run `datu tail fixtures/userdata5.avro $TEMPDIR/tail.parquet -n 5`
+    Then the command should succeed
+    And the output should contain "Wrote tail of fixtures/userdata5.avro to $TEMPDIR/tail.parquet"
+    And the file "$TEMPDIR/tail.parquet" should exist
+    And that file should be a valid Parquet file
+    And that file should have 5 records

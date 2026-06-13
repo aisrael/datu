@@ -156,3 +156,20 @@ Feature: Head
     And the output should be valid YAML
     And the output should contain "first_name"
     And the output should contain "email"
+
+  Scenario: Head Parquet to CSV file
+    Given a file "fixtures/table.parquet"
+    When I run `datu head fixtures/table.parquet $TEMPDIR/head.csv -n 2`
+    Then the command should succeed
+    And the output should contain "Wrote head of fixtures/table.parquet to $TEMPDIR/head.csv"
+    And the file "$TEMPDIR/head.csv" should exist
+    And the first line of that file should contain "one,two"
+    And that file should have 3 lines
+
+  Scenario: Head Parquet to Avro file
+    Given a file "fixtures/table.parquet"
+    When I run `datu head fixtures/table.parquet $TEMPDIR/head.avro -n 2`
+    Then the command should succeed
+    And the output should contain "Wrote head of fixtures/table.parquet to $TEMPDIR/head.avro"
+    And the file "$TEMPDIR/head.avro" should exist
+    And that file should have 2 records

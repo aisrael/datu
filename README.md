@@ -231,15 +231,19 @@ datu count data.csv --input-headers=false
 
 ### `sample`
 
-Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats). For Parquet and ORC, sampling uses file metadata to determine total row count and selects random indices; for Avro and CSV, reservoir sampling is used.
+Print N randomly sampled rows from a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats), or write them to a file by supplying an optional `OUTPUT` path. For Parquet and ORC, sampling uses file metadata to determine total row count and selects random indices; for Avro and CSV, reservoir sampling is used.
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Supported output formats (when writing to a file):** CSV (`.csv`), JSON (`.json`), YAML (`.yaml`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
 **Usage (CLI):**
 
 ```sh
-datu sample <INPUT> [OPTIONS]
+datu sample <INPUT> [OUTPUT] [OPTIONS]
 ```
+
+When `OUTPUT` is omitted, rows are printed to stdout and `--output` selects the display format. When `OUTPUT` is provided, rows are written to that file and the format is inferred from its extension (or `-O`/`--output-type`).
 
 **Usage (REPL):**
 
@@ -255,7 +259,9 @@ Prints _n_ random rows to stdout. Chain `|> write("out.csv")` to write to a file
 |--------|-------------|
 | `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-n`, `--number <N>` | Number of rows to sample. Default: 10. |
-| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--output <FORMAT>` | Display format when printing to stdout: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. Cannot be combined with an `OUTPUT` file. |
+| `-O`, `--output-type <TYPE>` | Output file type when writing to a file (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--json-pretty` | When writing JSON to a file, format output with indentation and newlines. Ignored for other output formats. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
@@ -274,21 +280,29 @@ datu sample data.orc --number 5
 
 # 20 random rows, specific columns
 datu sample data.parquet -n 20 --select id,name,email
+
+# Write a random sample to a file (format from extension)
+datu sample input.parquet output.avro -n 5
+datu sample data.parquet sample.csv -n 100
 ```
 
 ---
 
 ### `head`
 
-Print the first N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats).
+Print the first N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats), or write them to a file by supplying an optional `OUTPUT` path.
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Supported output formats (when writing to a file):** CSV (`.csv`), JSON (`.json`), YAML (`.yaml`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
 **Usage (CLI):**
 
 ```sh
-datu head <INPUT> [OPTIONS]
+datu head <INPUT> [OUTPUT] [OPTIONS]
 ```
+
+When `OUTPUT` is omitted, rows are printed to stdout and `--output` selects the display format. When `OUTPUT` is provided, rows are written to that file and the format is inferred from its extension (or `-O`/`--output-type`).
 
 **Usage (REPL):**
 
@@ -304,7 +318,9 @@ Prints the first _n_ rows to stdout. Chain `|> write("out.csv")` to write to a f
 |--------|-------------|
 | `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
-| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--output <FORMAT>` | Display format when printing to stdout: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. Cannot be combined with an `OUTPUT` file. |
+| `-O`, `--output-type <TYPE>` | Output file type when writing to a file (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--json-pretty` | When writing JSON to a file, format output with indentation and newlines. Ignored for other output formats. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
@@ -326,23 +342,31 @@ datu head data.parquet -n 20 --select id,name,email
 
 # Head from a headerless CSV file
 datu head data.csv --input-headers=false
+
+# Write the first N rows to a file (format from extension)
+datu head data.parquet first100.csv -n 100
+datu head data.parquet first10.avro -n 10
 ```
 
 ---
 
 ### `tail`
 
-Print the last N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats).
+Print the last N rows of a Parquet, Avro, CSV, or ORC file to stdout (default CSV; use `--output` for other formats), or write them to a file by supplying an optional `OUTPUT` path.
 
 **Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), ORC (`.orc`).
+
+**Supported output formats (when writing to a file):** CSV (`.csv`), JSON (`.json`), YAML (`.yaml`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
 
 > **Note:** For Avro and CSV files, `tail` requires a full file scan since these formats do not support random access to the end of the file.
 
 **Usage (CLI):**
 
 ```sh
-datu tail <INPUT> [OPTIONS]
+datu tail <INPUT> [OUTPUT] [OPTIONS]
 ```
+
+When `OUTPUT` is omitted, rows are printed to stdout and `--output` selects the display format. When `OUTPUT` is provided, rows are written to that file and the format is inferred from its extension (or `-O`/`--output-type`).
 
 **Usage (REPL):**
 
@@ -356,7 +380,9 @@ datu tail <INPUT> [OPTIONS]
 |--------|-------------|
 | `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-n`, `--number <N>` | Number of rows to print. Default: 10. |
-| `--output <FORMAT>` | Output format: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. |
+| `--output <FORMAT>` | Display format when printing to stdout: `csv`, `json`, `json-pretty`, or `yaml`. Case insensitive. Default: `csv`. Cannot be combined with an `OUTPUT` file. |
+| `-O`, `--output-type <TYPE>` | Output file type when writing to a file (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--json-pretty` | When writing JSON to a file, format output with indentation and newlines. Ignored for other output formats. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values. |
 | `--select <COLUMNS>...` | Columns to include. If not specified, all columns are printed. Same format as `convert --select`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
@@ -376,8 +402,9 @@ datu tail data.orc --number 50
 # Last 20 rows, specific columns
 datu tail data.parquet -n 20 --select id,name,email
 
-# Redirect tail output to a file
-datu tail data.parquet -n 1000 > last1000.csv
+# Write the last N rows to a file (format from extension)
+datu tail data.parquet last1000.csv -n 1000
+datu tail data.parquet last10.parquet -n 10
 ```
 
 ---

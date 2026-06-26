@@ -8,11 +8,13 @@ mod commands;
 use commands::HeadsOrTailsCmd;
 use commands::convert;
 use commands::count;
+use commands::diff;
 use commands::heads_or_tails;
 use commands::schema;
 use datu::cli::repl::Repl;
 
 use crate::commands::convert::ConvertArgs;
+use crate::commands::diff::DiffArgs;
 
 /// Top-level CLI structure that parses command-line arguments.
 #[derive(Parser)]
@@ -30,6 +32,8 @@ pub enum Command {
     Convert(ConvertArgs),
     /// return the number of rows in a file
     Count(datu::cli::CountArgs),
+    /// compare two data files row-by-row
+    Diff(DiffArgs),
     /// print the first n lines of a file
     Head(datu::cli::HeadsOrTails),
     /// sample n random rows from a file
@@ -50,6 +54,7 @@ async fn main() -> eyre::Result<()> {
         None => run_repl().await,
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
+        Some(Command::Diff(args)) => diff(args).await,
         Some(Command::Head(args)) => heads_or_tails(args, HeadsOrTailsCmd::Head).await,
         Some(Command::Sample(args)) => heads_or_tails(args, HeadsOrTailsCmd::Sample).await,
         Some(Command::Schema(args)) => schema(args).await,

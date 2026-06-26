@@ -1,5 +1,35 @@
 # datu Version Notes
 
+## v0.3.5
+
+### Highlights
+
+- **Diff command**: New `datu diff` compares two files with `--max-diffs` early exit.
+- **Head/tail/sample output**: `head`, `tail`, and `sample` can write results to an output file.
+- **REPL aggregates**: Added `count` and `count_distinct`; SQL `filter()` with `WHERE`/`HAVING`, `FilterSpec`, and dual straddling filters.
+- **Docs**: README and REPL documentation expanded for new commands and filtering.
+
+### Improvements
+
+- **CLI**
+  - Diff command with Cucumber coverage and Avro fixtures.
+  - Head, tail, and sample commands accept an output path.
+
+- **REPL**
+  - Filter planning and stage execution for SQL-style predicates.
+  - Aggregate test coverage extended.
+
+- **Tooling**
+  - CI workflow permissions tightened.
+  - Dependency updates (`rand` 0.9).
+
+### Changelog Stats
+
+- 7 commits
+- 31 files changed
+- 1555 insertions
+- 98 deletions
+
 ## v0.3.4
 
 ### Highlights

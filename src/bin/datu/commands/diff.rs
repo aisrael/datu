@@ -2,12 +2,14 @@
 
 use std::collections::HashMap;
 
+use arrow::array::RecordBatchReader;
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::ArrayFormatter;
 use arrow::util::display::FormatOptions;
 use clap::Args;
 use datu::FileType;
 use datu::pipeline::Producer;
+use datu::pipeline::VecRecordBatchReader;
 use datu::pipeline::build_reader;
 use datu::pipeline::read::ReadArgs;
 use datu::pipeline::read::ReadResult;
@@ -29,11 +31,22 @@ pub struct DiffArgs {
         help = "Input file type override applied to both files."
     )]
     pub input: Option<FileType>,
+    #[arg(
+        long,
+        default_value_t = 100,
+        help = "Maximum total differing rows to display (file1 + file2 combined). Use 0 for unlimited."
+    )]
+    pub max_diffs: usize,
 }
 
-/// Reads a file into a `Vec<RecordBatch>`, dispatching between the record-batch
-/// path (Parquet, Avro, CSV, ORC) and the DataFusion path (JSON).
-async fn read_batches(path: &str, file_type: FileType) -> eyre::Result<Vec<RecordBatch>> {
+/// Opens a lazy `RecordBatchReader` without loading all rows into memory.
+///
+/// JSON is the exception: DataFusion collects all batches internally, so we wrap
+/// the resulting `Vec` in a `VecRecordBatchReader` to give a uniform iterator interface.
+async fn open_reader(
+    path: &str,
+    file_type: FileType,
+) -> eyre::Result<Box<dyn RecordBatchReader + 'static>> {
     match file_type {
         FileType::Json => {
             let result = read_to_dataframe(path, FileType::Json, None).await?;
@@ -41,23 +54,19 @@ async fn read_batches(path: &str, file_type: FileType) -> eyre::Result<Vec<Recor
                 bail!("expected DataFrame for JSON file {path}");
             };
             let df = source.get().await?;
-            Ok(df.collect().await?)
+            let batches = df.collect().await?;
+            Ok(Box::new(VecRecordBatchReader::new(batches)))
         }
         FileType::Parquet | FileType::Avro | FileType::Csv | FileType::Orc => {
             let read_args = ReadArgs::new(path, file_type);
-            let mut reader = build_reader(&read_args)?;
-            let batch_reader = reader.get().await?;
-            let mut batches = Vec::new();
-            for batch in batch_reader {
-                batches.push(batch?);
-            }
-            Ok(batches)
+            let mut reader_source = build_reader(&read_args)?;
+            Ok(reader_source.get().await?)
         }
         _ => bail!("unsupported file type for diff: {file_type}"),
     }
 }
 
-/// Formats a single row from a `RecordBatch` as a tab-separated string.
+/// Formats a single row as a tab-separated string for use as a map key.
 fn row_to_string(batch: &RecordBatch, row: usize) -> String {
     let format_options = FormatOptions::default();
     (0..batch.num_columns())
@@ -69,6 +78,21 @@ fn row_to_string(batch: &RecordBatch, row: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\t")
+}
+
+/// Returns the column positions in `schema` for each name in `common_names`.
+fn projection_indices(
+    schema: &arrow::datatypes::Schema,
+    common_names: &[&str],
+) -> eyre::Result<Vec<usize>> {
+    common_names
+        .iter()
+        .map(|name| {
+            schema
+                .index_of(name)
+                .map_err(|e| eyre::eyre!("column {name} not found: {e}"))
+        })
+        .collect()
 }
 
 /// The `datu diff` command: compares two data files and reports row-level differences.
@@ -89,19 +113,13 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
         );
     }
 
-    // Step 2: read both files
-    let batches1 = read_batches(&args.file1, ft1).await?;
-    let batches2 = read_batches(&args.file2, ft2).await?;
+    // Step 2: open readers — lazy streaming for all formats (JSON buffers unavoidably)
+    let mut reader1 = open_reader(&args.file1, ft1).await?;
+    let mut reader2 = open_reader(&args.file2, ft2).await?;
 
-    // Step 3: compare schemas
-    let schema1 = batches1
-        .first()
-        .map(|b| b.schema())
-        .unwrap_or_else(|| arrow::datatypes::Schema::empty().into());
-    let schema2 = batches2
-        .first()
-        .map(|b| b.schema())
-        .unwrap_or_else(|| arrow::datatypes::Schema::empty().into());
+    // Step 3: compare schemas before consuming any rows
+    let schema1 = reader1.schema();
+    let schema2 = reader2.schema();
 
     let cols1: Vec<(String, arrow::datatypes::DataType)> = schema1
         .fields()
@@ -149,44 +167,93 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
         );
     }
 
-    // Step 4: project to common columns if schemas differ
+    // Step 4: precompute projection indices — only needed when schemas differ
+    let needs_projection = !only_in_1.is_empty() || !only_in_2.is_empty();
     let common_names: Vec<&str> = common.iter().map(|(name, _)| name.as_str()).collect();
+    let indices1 = needs_projection
+        .then(|| projection_indices(&schema1, &common_names))
+        .transpose()?;
+    let indices2 = needs_projection
+        .then(|| projection_indices(&schema2, &common_names))
+        .transpose()?;
 
-    let batches1 = if !only_in_1.is_empty() || !only_in_2.is_empty() {
-        project_batches(&batches1, &schema1, &common_names)?
-    } else {
-        batches1
-    };
-    let batches2 = if !only_in_1.is_empty() || !only_in_2.is_empty() {
-        project_batches(&batches2, &schema2, &common_names)?
-    } else {
-        batches2
-    };
-
-    // Step 5: compare rows
+    // Step 5: interleaved scan with early exit.
+    //
+    // `running_diffs` is the incremental sum of |c1 - c2| across all keys seen so far.
+    // Adding a row from file1 increases it when c1 >= c2 (the row is becoming more
+    // "only-in-file1"), and decreases it when c1 < c2 (the row cancels an existing
+    // file2-only excess). Symmetric logic applies for file2 rows. This lets us check
+    // the total diff count in O(1) per row without scanning the whole map.
+    //
+    // When we stop early the map is partial, so some diffs may be false positives
+    // (rows that would cancel if more of the other file were read). This is acceptable:
+    // the caller controls tolerance via --max-diffs.
+    let unlimited = args.max_diffs == 0;
     let mut counts: HashMap<String, (i64, i64)> = HashMap::new();
-    let mut total1: usize = 0;
+    let mut running_diffs: i64 = 0;
+    let mut truncated = false;
 
-    for batch in &batches1 {
-        for row in 0..batch.num_rows() {
-            let key = row_to_string(batch, row);
-            counts.entry(key).or_insert((0, 0)).0 += 1;
-            total1 += 1;
+    'scan: loop {
+        let mut advanced = false;
+
+        if let Some(batch_result) = reader1.next() {
+            advanced = true;
+            let batch = batch_result?;
+            let batch = match &indices1 {
+                Some(idx) => batch.project(idx)?,
+                None => batch,
+            };
+            for row in 0..batch.num_rows() {
+                let key = row_to_string(&batch, row);
+                let entry = counts.entry(key).or_insert((0, 0));
+                if entry.0 >= entry.1 {
+                    running_diffs += 1;
+                } else {
+                    running_diffs -= 1;
+                }
+                entry.0 += 1;
+                if !unlimited && running_diffs >= args.max_diffs as i64 {
+                    truncated = true;
+                    break 'scan;
+                }
+            }
+        }
+
+        if let Some(batch_result) = reader2.next() {
+            advanced = true;
+            let batch = batch_result?;
+            let batch = match &indices2 {
+                Some(idx) => batch.project(idx)?,
+                None => batch,
+            };
+            for row in 0..batch.num_rows() {
+                let key = row_to_string(&batch, row);
+                let entry = counts.entry(key).or_insert((0, 0));
+                if entry.1 >= entry.0 {
+                    running_diffs += 1;
+                } else {
+                    running_diffs -= 1;
+                }
+                entry.1 += 1;
+                if !unlimited && running_diffs >= args.max_diffs as i64 {
+                    truncated = true;
+                    break 'scan;
+                }
+            }
+        }
+
+        if !advanced {
+            break;
         }
     }
 
-    for batch in &batches2 {
-        for row in 0..batch.num_rows() {
-            let key = row_to_string(batch, row);
-            counts.entry(key).or_insert((0, 0)).1 += 1;
-        }
-    }
-
-    let all_equal = counts.values().all(|(c1, c2)| c1 == c2);
+    // Step 6: report results
+    let all_equal = !truncated && counts.values().all(|(c1, c2)| c1 == c2);
 
     if all_equal {
-        let row_label = if total1 == 1 { "row" } else { "rows" };
-        println!("Files are identical ({total1} {row_label})");
+        let total = counts.values().map(|(c1, _)| *c1).sum::<i64>() as usize;
+        let row_label = if total == 1 { "row" } else { "rows" };
+        println!("Files are identical ({total} {row_label})");
     } else {
         let header = common_names.join("\t");
 
@@ -231,71 +298,77 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
                 println!("  {row_str}");
             }
         }
+
+        if truncated {
+            println!();
+            println!(
+                "(output truncated at {} diffs; use --max-diffs to increase the limit)",
+                args.max_diffs
+            );
+        }
     }
 
     Ok(())
-}
-
-/// Projects each batch down to only the named columns, preserving the given order.
-fn project_batches(
-    batches: &[RecordBatch],
-    schema: &arrow::datatypes::SchemaRef,
-    column_names: &[&str],
-) -> eyre::Result<Vec<RecordBatch>> {
-    let indices: Vec<usize> = column_names
-        .iter()
-        .map(|name| {
-            schema
-                .index_of(name)
-                .map_err(|e| eyre::eyre!("column {name} not found: {e}"))
-        })
-        .collect::<eyre::Result<Vec<_>>>()?;
-
-    batches
-        .iter()
-        .map(|batch| batch.project(&indices).map_err(Into::into))
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_diff_identical_file() {
-        let args = DiffArgs {
-            file1: "fixtures/table.parquet".to_string(),
-            file2: "fixtures/table.parquet".to_string(),
+    fn make_args(file1: &str, file2: &str) -> DiffArgs {
+        DiffArgs {
+            file1: file1.to_string(),
+            file2: file2.to_string(),
             input: None,
-        };
-        let result = diff(args).await;
+            max_diffs: 100,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_diff_identical_parquet() {
+        let result = diff(make_args(
+            "fixtures/table.parquet",
+            "fixtures/table.parquet",
+        ))
+        .await;
         assert!(result.is_ok(), "diff failed: {:?}", result.err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_diff_identical_csv() {
-        let args = DiffArgs {
-            file1: "fixtures/table.csv".to_string(),
-            file2: "fixtures/table.csv".to_string(),
-            input: None,
-        };
-        let result = diff(args).await;
+        let result = diff(make_args("fixtures/table.csv", "fixtures/table.csv")).await;
         assert!(result.is_ok(), "diff failed: {:?}", result.err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_diff_format_mismatch() {
-        let args = DiffArgs {
-            file1: "fixtures/table.csv".to_string(),
-            file2: "fixtures/table.parquet".to_string(),
-            input: None,
-        };
-        let result = diff(args).await;
+        let result = diff(make_args("fixtures/table.csv", "fixtures/table.parquet")).await;
         assert!(result.is_err(), "diff should fail for different formats");
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("different formats"),
             "error should mention different formats, got: {err_msg}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_diff_max_diffs_truncates() {
+        // file1 and file2 have 2 total differing rows; max_diffs=1 forces early exit
+        let args = DiffArgs {
+            max_diffs: 1,
+            ..make_args("fixtures/file1.avro", "fixtures/file2.avro")
+        };
+        let result = diff(args).await;
+        assert!(result.is_ok(), "diff failed: {:?}", result.err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_diff_max_diffs_zero_is_unlimited() {
+        let args = DiffArgs {
+            max_diffs: 0,
+            ..make_args("fixtures/file1.avro", "fixtures/file2.avro")
+        };
+        let result = diff(args).await;
+        assert!(result.is_ok(), "diff failed: {:?}", result.err());
     }
 }

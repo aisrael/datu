@@ -25,6 +25,22 @@ Feature: Diff
     Then the command should fail
     And the output should contain "different formats"
 
+  Scenario: --max-diffs truncates output when limit is exceeded
+    Given a file "fixtures/file1.avro"
+    And a file "fixtures/file2.avro"
+    When I run `datu diff fixtures/file1.avro fixtures/file2.avro --max-diffs 1`
+    Then the command should succeed
+    And the output should contain "output truncated at 1 diffs"
+    And the output should contain "--max-diffs"
+
+  Scenario: --max-diffs 0 disables the limit
+    Given a file "fixtures/file1.avro"
+    And a file "fixtures/file2.avro"
+    When I run `datu diff fixtures/file1.avro fixtures/file2.avro --max-diffs 0`
+    Then the command should succeed
+    And the output should contain "foo"
+    And the output should contain "fizz"
+
   Scenario: Identical files with explicit --input override
     Given a file "fixtures/file1.avro"
     When I run `datu diff fixtures/file1.avro fixtures/file1.avro --input avro`

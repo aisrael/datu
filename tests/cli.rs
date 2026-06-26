@@ -98,6 +98,17 @@ fn run_datu_with_args(world: &mut CliWorld, args: String) {
     world.output = Some(output);
 }
 
+#[then(regex = r#"^the command should fail$"#)]
+fn command_should_fail(world: &mut CliWorld) {
+    let output = world.output.as_ref().expect("No output captured");
+    assert!(
+        !output.status.success(),
+        "Expected command to fail, but it succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[then(regex = r#"^the command should succeed$"#)]
 fn command_should_succeed(world: &mut CliWorld) {
     let output = world.output.as_ref().expect("No output captured");

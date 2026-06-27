@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "datu"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow",
  "arrow-avro",

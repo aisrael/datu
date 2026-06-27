@@ -1,5 +1,17 @@
 # datu Version Notes
 
+## v0.3.6
+
+### Highlights
+
+- **Diff command**: Renamed `--max-diffs` to `--limit` for consistency with other commands. `--max-diffs` remains supported but is deprecated.
+
+### Improvements
+
+- **CLI**
+  - `datu diff` uses `--limit` instead of `--max-diffs`; the old flag prints a deprecation warning.
+  - README and Cucumber coverage updated for the new flag.
+
 ## v0.3.5
 
 ### Highlights

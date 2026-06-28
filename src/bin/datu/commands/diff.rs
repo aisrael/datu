@@ -36,7 +36,22 @@ pub struct DiffArgs {
         default_value_t = 100,
         help = "Maximum total differing rows to display (file1 + file2 combined). Use 0 for unlimited."
     )]
-    pub max_diffs: usize,
+    pub limit: usize,
+    #[arg(long = "max-diffs", alias = "max-diff", hide = true)]
+    pub max_diffs: Option<usize>,
+}
+
+impl DiffArgs {
+    fn effective_limit(&self) -> usize {
+        if let Some(max_diffs) = self.max_diffs {
+            eprintln!(
+                "Warning: `--max-diffs` is deprecated; use `--limit` instead. `--max-diffs` may be removed in a future version."
+            );
+            max_diffs
+        } else {
+            self.limit
+        }
+    }
 }
 
 /// Opens a lazy `RecordBatchReader` without loading all rows into memory.
@@ -187,8 +202,9 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
     //
     // When we stop early the map is partial, so some diffs may be false positives
     // (rows that would cancel if more of the other file were read). This is acceptable:
-    // the caller controls tolerance via --max-diffs.
-    let unlimited = args.max_diffs == 0;
+    // the caller controls tolerance via --limit.
+    let limit = args.effective_limit();
+    let unlimited = limit == 0;
     let mut counts: HashMap<String, (i64, i64)> = HashMap::new();
     let mut running_diffs: i64 = 0;
     let mut truncated = false;
@@ -212,7 +228,7 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
                     running_diffs -= 1;
                 }
                 entry.0 += 1;
-                if !unlimited && running_diffs >= args.max_diffs as i64 {
+                if !unlimited && running_diffs >= limit as i64 {
                     truncated = true;
                     break 'scan;
                 }
@@ -235,7 +251,7 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
                     running_diffs -= 1;
                 }
                 entry.1 += 1;
-                if !unlimited && running_diffs >= args.max_diffs as i64 {
+                if !unlimited && running_diffs >= limit as i64 {
                     truncated = true;
                     break 'scan;
                 }
@@ -301,10 +317,7 @@ pub async fn diff(args: DiffArgs) -> eyre::Result<()> {
 
         if truncated {
             println!();
-            println!(
-                "(output truncated at {} diffs; use --max-diffs to increase the limit)",
-                args.max_diffs
-            );
+            println!("(output truncated at {limit} diffs; use --limit to increase the limit)");
         }
     }
 
@@ -320,7 +333,8 @@ mod tests {
             file1: file1.to_string(),
             file2: file2.to_string(),
             input: None,
-            max_diffs: 100,
+            limit: 100,
+            max_diffs: None,
         }
     }
 
@@ -352,10 +366,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_diff_max_diffs_truncates() {
-        // file1 and file2 have 2 total differing rows; max_diffs=1 forces early exit
+    async fn test_diff_limit_truncates() {
+        // file1 and file2 have 2 total differing rows; limit=1 forces early exit
         let args = DiffArgs {
-            max_diffs: 1,
+            limit: 1,
             ..make_args("fixtures/file1.avro", "fixtures/file2.avro")
         };
         let result = diff(args).await;
@@ -363,12 +377,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_diff_max_diffs_zero_is_unlimited() {
+    async fn test_diff_limit_zero_is_unlimited() {
         let args = DiffArgs {
-            max_diffs: 0,
+            limit: 0,
             ..make_args("fixtures/file1.avro", "fixtures/file2.avro")
         };
         let result = diff(args).await;
         assert!(result.is_ok(), "diff failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_effective_limit_uses_limit_by_default() {
+        let args = make_args("a", "b");
+        assert_eq!(args.effective_limit(), 100);
+    }
+
+    #[test]
+    fn test_effective_limit_prefers_deprecated_max_diffs() {
+        let args = DiffArgs {
+            limit: 100,
+            max_diffs: Some(5),
+            ..make_args("a", "b")
+        };
+        assert_eq!(args.effective_limit(), 5);
     }
 }

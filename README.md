@@ -248,7 +248,7 @@ datu diff <FILE1> <FILE2> [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`). Applied to both files; overrides extension-based detection. |
-| `--max-diffs <N>` | Maximum total differing rows to display (file1 + file2 combined). Default: `100`. Use `0` for unlimited. |
+| `--limit <N>` | Maximum total differing rows to display (file1 + file2 combined). Default: `100`. Use `0` for unlimited. |
 
 **Output:**
 
@@ -256,9 +256,9 @@ datu diff <FILE1> <FILE2> [OPTIONS]
 - Otherwise, rows present only in `FILE1` and rows present only in `FILE2` are each printed in tab-separated format with a header line of column names.
 - Schema-only differences (columns not shared between both files) are reported on stderr before the row comparison output.
 
-> **Note on `--max-diffs`:** The two files are streamed and compared row-by-row, and the scan stops early as soon as the running diff count reaches the limit — without reading either file to the end (except JSON, which is buffered fully before comparison). Because the comparison is incomplete when it stops early, some reported rows may be **false positives**: a row counted as unique to one file might have been cancelled out by a matching row later in the other file. Use `--max-diffs 0` to disable the limit and get an exact, complete comparison.
+> **Note on `--limit`:** The two files are streamed and compared row-by-row, and the scan stops early as soon as the running diff count reaches the limit — without reading either file to the end (except JSON, which is buffered fully before comparison). Because the comparison is incomplete when it stops early, some reported rows may be **false positives**: a row counted as unique to one file might have been cancelled out by a matching row later in the other file. Use `--limit 0` to disable the limit and get an exact, complete comparison.
 >
-> **Note on `--max-diffs 0`:** Disabling the limit forces both files to be read in full and every distinct row to be held in memory. On extremely large inputs this can take a very long time and/or exhaust available memory. Prefer a bounded `--max-diffs` value when working with large files.
+> **Note on `--limit 0`:** Disabling the limit forces both files to be read in full and every distinct row to be held in memory. On extremely large inputs this can take a very long time and/or exhaust available memory. Prefer a bounded `--limit` value when working with large files.
 
 **Examples:**
 

@@ -55,3 +55,29 @@ Feature: Diff
     When I run `datu diff fixtures/file1.avro fixtures/file1.avro --input avro`
     Then the command should succeed
     And the output should contain "Files are identical (4 rows)"
+
+  Scenario: Identical Avro files with --json
+    Given a file "fixtures/file1.avro"
+    When I run `datu diff fixtures/file1.avro fixtures/file1.avro --json`
+    Then the command should succeed
+    And the output should be valid JSON
+    And the output should contain "identical"
+    And the output should contain "row_count"
+
+  Scenario: Differing Avro files with --output json
+    Given a file "fixtures/file1.avro"
+    And a file "fixtures/file2.avro"
+    When I run `datu diff fixtures/file1.avro fixtures/file2.avro --output json`
+    Then the command should succeed
+    And the output should be valid JSON
+    And the output should contain "only_in_file2"
+    And the output should contain "foo"
+    And the output should contain "fizz"
+
+  Scenario: Differing Avro files with -o json
+    Given a file "fixtures/file1.avro"
+    And a file "fixtures/file2.avro"
+    When I run `datu diff fixtures/file1.avro fixtures/file2.avro -o json`
+    Then the command should succeed
+    And the output should be valid JSON
+    And the output should contain "email"

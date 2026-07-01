@@ -32,13 +32,13 @@ cargo install --git https://github.com/aisrael/datu
 | JSON (pretty)                 |  —   |   —   |    ✓    |
 | YAML                          |  —   |   —   |    ✓    |
 
-- **Read** — Input file formats for `concat`, `convert`, `count`, `schema`, `head`, and `tail`.
-- **Write** — Output file formats for `concat` and `convert`.
+- **Read** — Input file formats for `concat`, `convert`, `count`, `schema`, `head`, `tail`, and `split`.
+- **Write** — Output file formats for `concat`, `convert`, and `split`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
-**File type detection:** By default, file types are inferred from extensions. Use `--input <TYPE>` (`-I`) to override input format detection, and `--output <TYPE>` (`-O`, `concat` and `convert` only) to override output format detection. Valid types: `avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`.
+**File type detection:** By default, file types are inferred from extensions. Use `--input <TYPE>` (`-I`) to override input format detection, and `--output <TYPE>` (`-O`, `concat`, `convert`, and `split` only) to override output format detection. Valid types: `avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`.
 
-**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `concat`, `convert`, `count`, `schema`, `head`, and `tail`.
+**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `concat`, `convert`, `count`, `schema`, `head`, `tail`, and `split`.
 
 Usage
 =====
@@ -100,6 +100,53 @@ datu concat 2024-*.csv late-arrival.csv all-2024.csv
 
 # Concatenate Parquet files into a single CSV
 datu concat batch1.parquet batch2.parquet combined.csv
+```
+
+---
+
+### `split`
+
+Split a single input file into multiple output files of at most `--split` rows each — the inverse of `concat`. Partition files are named by inserting a zero-padded `.partNNNNN` segment (1-based) before the extension of the output path, which defaults to the input path (so partitions land next to the input file). Input and output formats are inferred from file extensions, or can be specified explicitly with `--input` and `--output`.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), JSON (`.json`), ORC (`.orc`).
+
+**Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
+
+**Usage (CLI):**
+
+```sh
+datu split <INPUT> [OUTPUT] [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `-O`, `--output <TYPE>` | Output file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--split <N>` | Maximum number of rows per output partition. Default: `100000`. |
+| `--limit <N>` | Maximum number of total rows to process across all partitions. Default: `0` (unlimited). |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
+| `--json-pretty` | When splitting to JSON, format output with indentation and newlines. Ignored for other output formats. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
+
+**Examples:**
+
+```sh
+# Split into 100000-row partitions next to the input file (large-file.part00001.avro, ...)
+datu split large-file.avro
+
+# Split into 50000-row partitions
+datu split large-file.avro --split 50000
+
+# Split into a specific output directory/base name (out/data.part00001.csv, ...)
+datu split large-file.avro out/data.csv --split 50000
+
+# Split only the first 10000 rows, in partitions of 2000
+datu split large-file.parquet --split 2000 --limit 10000
+
+# Split Avro into Parquet partitions
+datu split large-file.avro out.parquet --split 100000
 ```
 
 ---

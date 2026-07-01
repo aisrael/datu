@@ -21,6 +21,7 @@ Feature: CLI
         sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
+        split    split a large input file into multiple output files of at most N rows each
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)
 
@@ -46,6 +47,7 @@ Feature: CLI
         sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
+        split    split a large input file into multiple output files of at most N rows each
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)
 

@@ -6,6 +6,7 @@ mod count;
 pub mod diff;
 mod heads_or_tails;
 mod schema;
+pub mod split;
 
 pub use concat::concat;
 pub use convert::convert;
@@ -14,3 +15,4 @@ pub use diff::diff;
 pub use heads_or_tails::HeadsOrTailsCmd;
 pub use heads_or_tails::heads_or_tails;
 pub use schema::schema;
+pub use split::split;

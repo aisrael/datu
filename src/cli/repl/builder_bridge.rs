@@ -1,7 +1,7 @@
 //! Maps validated REPL stages to [`crate::pipeline::PipelineBuilder`].
 
 use super::stage::ReplPipelineStage;
-use crate::pipeline::ColumnSpec;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::PipelineBuilder;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
@@ -29,7 +29,7 @@ pub(crate) fn repl_stages_to_pipeline_builder(
 
     let mut i = 1usize;
     let mut select_idx: Option<usize> = None;
-    let mut group_keys: Option<Vec<ColumnSpec>> = None;
+    let mut group_keys: Option<Vec<GroupByKey>> = None;
     let mut select_columns: Option<Vec<SelectItem>> = None;
     let mut filters: Vec<(usize, String)> = Vec::new();
 

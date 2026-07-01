@@ -122,3 +122,87 @@ Feature: Select
       ```
     Then the file "$TEMPDIR/select.parquet" should exist
     And that file should be a valid Parquet file
+
+  Scenario: Select with an aliased plain column
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.parquet") |> select(:two, three_alias: :three) |> write("$TEMPDIR/select_alias.csv")
+      ```
+    Then the file "$TEMPDIR/select_alias.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "two,three_alias"
+    And that file should have 4 lines
+
+  Scenario: Select with an aliased aggregate under group_by
+    Given a Parquet file with the following data:
+      ```
+      item_id,quantity
+      1,10
+      1,20
+      2,5
+      ```
+    When the REPL is ran and the user types:
+      ```
+      read("$TEMPDIR/input.parquet") |> group_by(:item_id) |> select(:item_id, total: sum(:quantity)) |> write("$TEMPDIR/select_alias_agg.csv")
+      ```
+    Then the file "$TEMPDIR/select_alias_agg.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "item_id,total"
+
+  Scenario: Select with a quoted alias key containing a space
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/table.parquet") |> select(:two, "three alias": :three) |> write("$TEMPDIR/select_alias_quoted.csv")
+      ```
+    Then the file "$TEMPDIR/select_alias_quoted.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "two,three alias"
+    And that file should have 4 lines
+
+  Scenario: group_by aliases the group key when select does not override it
+    Given a Parquet file with the following data:
+      ```
+      item_id,quantity
+      1,10
+      1,20
+      2,5
+      ```
+    When the REPL is ran and the user types:
+      ```
+      read("$TEMPDIR/input.parquet") |> group_by(key: :item_id) |> select(:item_id, total: sum(:quantity)) |> write("$TEMPDIR/group_by_alias.csv")
+      ```
+    Then the file "$TEMPDIR/group_by_alias.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "key,total"
+
+  Scenario: select's own alias for a group key overrides group_by's alias
+    Given a Parquet file with the following data:
+      ```
+      item_id,quantity
+      1,10
+      1,20
+      2,5
+      ```
+    When the REPL is ran and the user types:
+      ```
+      read("$TEMPDIR/input.parquet") |> group_by(from_group_by: :item_id) |> select(from_select: :item_id, total: sum(:quantity)) |> write("$TEMPDIR/group_by_alias_override.csv")
+      ```
+    Then the file "$TEMPDIR/group_by_alias_override.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "from_select,total"
+
+  Scenario: select references a group_by key by its alias instead of the underlying column
+    Given a Parquet file with the following data:
+      ```
+      item_id,quantity
+      1,10
+      1,20
+      2,5
+      ```
+    When the REPL is ran and the user types:
+      ```
+      read("$TEMPDIR/input.parquet") |> group_by(key: :item_id) |> select(:key, total: sum(:quantity)) |> write("$TEMPDIR/group_by_alias_reference.csv")
+      ```
+    Then the file "$TEMPDIR/group_by_alias_reference.csv" should exist
+    And that file should be a CSV file
+    And the first line of that file should be: "key,total"

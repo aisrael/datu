@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatchReader;
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::expr_fn::avg;
@@ -14,6 +15,7 @@ use datafusion::functions_aggregate::expr_fn::min;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::DataFrame;
+use datafusion::prelude::Expr;
 use datafusion::prelude::col;
 use futures::StreamExt;
 
@@ -22,6 +24,7 @@ use crate::Error;
 use crate::FileType;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DisplaySlice;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::Producer;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
@@ -130,8 +133,50 @@ pub async fn dataframe_apply_sample(
     }
 }
 
-fn column_spec_in_group_keys(cs: &ColumnSpec, keys: &[ColumnSpec]) -> bool {
-    keys.iter().any(|k| k == cs)
+fn column_spec_in_group_keys(cs: &ColumnSpec, keys: &[GroupByKey]) -> bool {
+    keys.iter().any(|k| k.matches_select_column(cs))
+}
+
+/// Applies an optional alias (REPL `name: value` syntax) to an [`Expr`].
+fn maybe_alias(expr: Expr, alias: Option<&str>) -> Expr {
+    match alias {
+        Some(a) => expr.alias(a),
+        None => expr,
+    }
+}
+
+/// Builds the DataFusion aggregate `Expr` for one aggregate [`SelectItem`], applying its
+/// alias (if any). Returns `None` for `SelectItem::Column` (handled separately as a group key
+/// or plain projection).
+fn build_aggregate_expr(item: &SelectItem, arrow_schema: &Schema) -> Option<crate::Result<Expr>> {
+    let (agg_fn, cs, alias): (fn(Expr) -> Expr, _, _) = match item {
+        SelectItem::Sum(cs, alias) => (sum, cs, alias),
+        SelectItem::Avg(cs, alias) => (avg, cs, alias),
+        SelectItem::Min(cs, alias) => (min, cs, alias),
+        SelectItem::Max(cs, alias) => (max, cs, alias),
+        SelectItem::Count(cs, alias) => (count, cs, alias),
+        SelectItem::CountDistinct(cs, alias) => (count_distinct, cs, alias),
+        SelectItem::Column(..) => return None,
+    };
+    Some(
+        cs.resolve(arrow_schema)
+            .map(|name| maybe_alias(agg_fn(col(name.as_str())), alias.as_deref())),
+    )
+}
+
+/// Finds the alias (if any) attached to the `SelectItem::Column` entry matching `key`
+/// (by underlying column or by `group_by()` alias).
+fn select_alias_for_group_key<'a>(items: &'a [SelectItem], key: &GroupByKey) -> Option<&'a str> {
+    items.iter().find_map(|item| match item {
+        SelectItem::Column(c, alias) if key.matches_select_column(c) => alias.as_deref(),
+        _ => None,
+    })
+}
+
+/// Resolves the output alias for a `group_by()` key: `select()`'s own alias for the matching
+/// plain column takes precedence over the alias attached to the key in `group_by()` itself.
+fn alias_for_group_key<'a>(items: &'a [SelectItem], key: &'a GroupByKey) -> Option<&'a str> {
+    select_alias_for_group_key(items, key).or(key.alias.as_deref())
 }
 
 /// Applies `select()` projection, global aggregates, or grouped aggregates to a [`DataFrame`].
@@ -148,11 +193,9 @@ pub(super) fn apply_select_spec_to_dataframe(
     if spec.has_group_by() {
         let group_by_keys = spec.group_by.as_ref().expect("has_group_by implies Some");
         for key in group_by_keys {
-            if !spec
-                .columns
-                .iter()
-                .any(|item| matches!(item, SelectItem::Column(c) if c == key))
-            {
+            if !spec.columns.iter().any(
+                |item| matches!(item, SelectItem::Column(c, _) if key.matches_select_column(c)),
+            ) {
                 return Err(Error::GenericError(
                     "every group_by column must appear in select() as a plain column".to_string(),
                 ));
@@ -160,7 +203,7 @@ pub(super) fn apply_select_spec_to_dataframe(
         }
         for item in &spec.columns {
             match item {
-                SelectItem::Column(c) => {
+                SelectItem::Column(c, _) => {
                     if !column_spec_in_group_keys(c, group_by_keys) {
                         return Err(Error::GenericError(
                             "select with group_by: non-key columns must use an aggregate (sum, avg, min, max, count, or count_distinct), not plain columns"
@@ -168,49 +211,26 @@ pub(super) fn apply_select_spec_to_dataframe(
                         ));
                     }
                 }
-                SelectItem::Sum(_)
-                | SelectItem::Avg(_)
-                | SelectItem::Min(_)
-                | SelectItem::Max(_)
-                | SelectItem::Count(_)
-                | SelectItem::CountDistinct(_) => {}
+                SelectItem::Sum(..)
+                | SelectItem::Avg(..)
+                | SelectItem::Min(..)
+                | SelectItem::Max(..)
+                | SelectItem::Count(..)
+                | SelectItem::CountDistinct(..) => {}
             }
         }
 
         let mut group_exprs = Vec::new();
         for key in group_by_keys {
-            let name = key.resolve(arrow_schema)?;
-            group_exprs.push(col(name.as_str()));
+            let name = key.spec.resolve(arrow_schema)?;
+            let alias = alias_for_group_key(&spec.columns, key);
+            group_exprs.push(maybe_alias(col(name.as_str()), alias));
         }
 
         let mut aggs = Vec::new();
         for item in &spec.columns {
-            match item {
-                SelectItem::Sum(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(sum(col(name.as_str())));
-                }
-                SelectItem::Avg(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(avg(col(name.as_str())));
-                }
-                SelectItem::Min(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(min(col(name.as_str())));
-                }
-                SelectItem::Max(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(max(col(name.as_str())));
-                }
-                SelectItem::Count(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(count(col(name.as_str())));
-                }
-                SelectItem::CountDistinct(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(count_distinct(col(name.as_str())));
-                }
-                SelectItem::Column(_) => {}
+            if let Some(expr) = build_aggregate_expr(item, arrow_schema) {
+                aggs.push(expr?);
             }
         }
 
@@ -218,12 +238,7 @@ pub(super) fn apply_select_spec_to_dataframe(
             eprintln!(
                 "warning: group_by() with no aggregates in select(); showing distinct group keys only (behavior may change)"
             );
-            let key_names: Vec<String> = group_by_keys
-                .iter()
-                .map(|k| k.resolve(arrow_schema))
-                .collect::<crate::Result<Vec<_>>>()?;
-            let col_refs: Vec<&str> = key_names.iter().map(String::as_str).collect();
-            df = df.select_columns(&col_refs)?;
+            df = df.select(group_exprs)?;
             df = df.distinct()?;
         } else {
             df = df.aggregate(group_exprs, aggs)?;
@@ -241,39 +256,18 @@ pub(super) fn apply_select_spec_to_dataframe(
         }
         let mut aggs = Vec::new();
         for item in &spec.columns {
-            match item {
-                SelectItem::Sum(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(sum(col(name.as_str())));
-                }
-                SelectItem::Avg(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(avg(col(name.as_str())));
-                }
-                SelectItem::Min(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(min(col(name.as_str())));
-                }
-                SelectItem::Max(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(max(col(name.as_str())));
-                }
-                SelectItem::Count(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(count(col(name.as_str())));
-                }
-                SelectItem::CountDistinct(cs) => {
-                    let name = cs.resolve(arrow_schema)?;
-                    aggs.push(count_distinct(col(name.as_str())));
-                }
-                SelectItem::Column(_) => {}
+            if let Some(expr) = build_aggregate_expr(item, arrow_schema) {
+                aggs.push(expr?);
             }
         }
         df = df.aggregate(vec![], aggs)?;
     } else {
-        let resolved = spec.resolve_names(arrow_schema)?;
-        let col_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        df = df.select_columns(&col_refs)?;
+        let mut exprs = Vec::with_capacity(spec.columns.len());
+        for item in &spec.columns {
+            let name = item.column_spec().resolve(arrow_schema)?;
+            exprs.push(maybe_alias(col(name.as_str()), item.alias()));
+        }
+        df = df.select(exprs)?;
     }
     Ok(df)
 }

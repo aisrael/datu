@@ -101,7 +101,7 @@ impl PipelineBuilder {
         self.select = Some(SelectSpec {
             columns: columns
                 .iter()
-                .map(|c| SelectItem::Column(ColumnSpec::Exact(c.to_string())))
+                .map(|c| SelectItem::column(ColumnSpec::Exact(c.to_string())))
                 .collect(),
             group_by: None,
         });

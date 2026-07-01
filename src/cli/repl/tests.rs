@@ -5,6 +5,7 @@ use flt::ast::Literal;
 use flt::parser::parse_expr;
 
 use super::ColumnSpec;
+use super::GroupByKey;
 use super::Repl;
 use super::SelectItem;
 use super::builder_bridge::repl_stages_to_pipeline_builder;
@@ -92,8 +93,8 @@ fn test_plan_stage_select() {
         stage,
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
+                SelectItem::column(ColumnSpec::CaseInsensitive("one".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into()))
             ]
         }
     );
@@ -145,14 +146,14 @@ fn test_is_statement_complete_select_then_group_by() {
 fn test_plan_stage_select_aggregates() {
     let qty = ColumnSpec::CaseInsensitive("quantity".into());
     let cases = [
-        ("select(sum(:quantity))", SelectItem::Sum(qty.clone())),
-        ("select(avg(:quantity))", SelectItem::Avg(qty.clone())),
-        ("select(min(:quantity))", SelectItem::Min(qty.clone())),
-        ("select(max(:quantity))", SelectItem::Max(qty.clone())),
-        ("select(count(:quantity))", SelectItem::Count(qty.clone())),
+        ("select(sum(:quantity))", SelectItem::sum(qty.clone())),
+        ("select(avg(:quantity))", SelectItem::avg(qty.clone())),
+        ("select(min(:quantity))", SelectItem::min(qty.clone())),
+        ("select(max(:quantity))", SelectItem::max(qty.clone())),
+        ("select(count(:quantity))", SelectItem::count(qty.clone())),
         (
             "select(count_distinct(:quantity))",
-            SelectItem::CountDistinct(qty),
+            SelectItem::count_distinct(qty),
         ),
     ];
     for (input, expected_col) in cases {
@@ -166,6 +167,42 @@ fn test_plan_stage_select_aggregates() {
             "case: {input}"
         );
     }
+}
+
+#[test]
+fn test_plan_stage_select_with_alias() {
+    let expr = parse("select(:foo, foo_bar: :bar, total: sum(:qty))");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("foo".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())).with_alias("total"),
+            ]
+        }
+    );
+}
+
+#[test]
+fn test_plan_stage_select_with_quoted_alias_key() {
+    let expr = parse(r#"select("foo bar": :bar)"#);
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
+            ]
+        }
+    );
+}
+
+#[test]
+fn test_is_statement_complete_select_aliased_aggregate_only() {
+    let exprs = pipe_exprs("select(total: sum(:qty))");
+    assert!(is_statement_complete(&exprs));
 }
 
 #[test]
@@ -224,7 +261,7 @@ fn test_plan_pipeline_read_select_write() {
     assert_eq!(
         pipeline[1],
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))]
         }
     );
     assert_eq!(
@@ -348,8 +385,8 @@ fn test_extract_select_items_symbols() {
     assert_eq!(
         result,
         vec![
-            SelectItem::Column(ColumnSpec::CaseInsensitive("one".into())),
-            SelectItem::Column(ColumnSpec::CaseInsensitive("two".into()))
+            SelectItem::column(ColumnSpec::CaseInsensitive("one".into())),
+            SelectItem::column(ColumnSpec::CaseInsensitive("two".into()))
         ]
     );
 }
@@ -364,8 +401,8 @@ fn test_extract_select_items_strings() {
     assert_eq!(
         result,
         vec![
-            SelectItem::Column(ColumnSpec::Exact("col_a".into())),
-            SelectItem::Column(ColumnSpec::Exact("col_b".into()))
+            SelectItem::column(ColumnSpec::Exact("col_a".into())),
+            SelectItem::column(ColumnSpec::Exact("col_b".into()))
         ]
     );
 }
@@ -377,8 +414,8 @@ fn test_extract_select_items_idents() {
     assert_eq!(
         result,
         vec![
-            SelectItem::Column(ColumnSpec::CaseInsensitive("foo".into())),
-            SelectItem::Column(ColumnSpec::CaseInsensitive("bar".into()))
+            SelectItem::column(ColumnSpec::CaseInsensitive("foo".into())),
+            SelectItem::column(ColumnSpec::CaseInsensitive("bar".into()))
         ]
     );
 }
@@ -394,9 +431,9 @@ fn test_extract_select_items_mixed() {
     assert_eq!(
         result,
         vec![
-            SelectItem::Column(ColumnSpec::CaseInsensitive("sym".into())),
-            SelectItem::Column(ColumnSpec::Exact("str".into())),
-            SelectItem::Column(ColumnSpec::CaseInsensitive("ident".into()))
+            SelectItem::column(ColumnSpec::CaseInsensitive("sym".into())),
+            SelectItem::column(ColumnSpec::Exact("str".into())),
+            SelectItem::column(ColumnSpec::CaseInsensitive("ident".into()))
         ]
     );
 }
@@ -405,12 +442,12 @@ fn test_extract_select_items_mixed() {
 fn test_extract_select_items_aggregates() {
     let qty = ColumnSpec::CaseInsensitive("quantity".into());
     let cases = [
-        ("sum", SelectItem::Sum(qty.clone())),
-        ("avg", SelectItem::Avg(qty.clone())),
-        ("min", SelectItem::Min(qty.clone())),
-        ("max", SelectItem::Max(qty.clone())),
-        ("count", SelectItem::Count(qty.clone())),
-        ("count_distinct", SelectItem::CountDistinct(qty)),
+        ("sum", SelectItem::sum(qty.clone())),
+        ("avg", SelectItem::avg(qty.clone())),
+        ("min", SelectItem::min(qty.clone())),
+        ("max", SelectItem::max(qty.clone())),
+        ("count", SelectItem::count(qty.clone())),
+        ("count_distinct", SelectItem::count_distinct(qty)),
     ];
     for (fn_name, expected) in cases {
         let args = vec![Expr::FunctionCall(
@@ -548,7 +585,7 @@ fn test_validate_rejects_three_filters() {
         },
         ReplPipelineStage::Filter { sql: "true".into() },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))],
         },
         ReplPipelineStage::Filter {
             sql: "x > 0".into(),
@@ -569,7 +606,7 @@ fn test_validate_rejects_two_filters_both_after_select() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))],
         },
         ReplPipelineStage::Filter {
             sql: "x > 0".into(),
@@ -593,7 +630,7 @@ fn test_validate_accepts_two_filters_straddling_select() {
             sql: "one > 0".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive(
                 "one".into(),
             ))],
         },
@@ -626,7 +663,7 @@ fn test_validate_accepts_select_filter_head() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive(
                 "one".into(),
             ))],
         },
@@ -643,12 +680,12 @@ fn test_validate_accepts_filter_after_group_by_select() {
             path: "fixtures/table.parquet".into(),
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("two".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
         },
         ReplPipelineStage::Filter { sql: "true".into() },
@@ -665,12 +702,12 @@ fn test_validate_accepts_filter_group_by_select() {
         },
         ReplPipelineStage::Filter { sql: "true".into() },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("two".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
         },
         ReplPipelineStage::Head { n: 3 },
@@ -685,12 +722,12 @@ fn test_builder_bridge_post_aggregate_filter_runs_after_select() {
             path: "fixtures/table.parquet".into(),
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("two".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
         },
         ReplPipelineStage::Filter {
@@ -717,12 +754,12 @@ fn test_builder_bridge_where_and_having_filters() {
         },
         ReplPipelineStage::Filter { sql: "true".into() },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("two".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("two".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
         },
         ReplPipelineStage::Filter {
@@ -748,7 +785,7 @@ fn test_builder_bridge_sets_filter_sql() {
             path: "fixtures/table.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive(
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive(
                 "one".into(),
             ))],
         },
@@ -771,10 +808,10 @@ fn test_validate_rejects_second_select() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))],
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("y".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("y".into()))],
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Print,
@@ -791,7 +828,7 @@ fn test_validate_rejects_head_before_select() {
         },
         ReplPipelineStage::Head { n: 1 },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))],
         },
     ];
     let err = validate_repl_pipeline_stages(&stages).unwrap_err();
@@ -802,12 +839,12 @@ fn test_validate_rejects_head_before_select() {
 fn test_validate_accepts_read_aggregate_select_only() {
     let q = ColumnSpec::CaseInsensitive("q".into());
     let aggregates = [
-        SelectItem::Sum(q.clone()),
-        SelectItem::Avg(q.clone()),
-        SelectItem::Min(q.clone()),
-        SelectItem::Max(q.clone()),
-        SelectItem::Count(q.clone()),
-        SelectItem::CountDistinct(q),
+        SelectItem::sum(q.clone()),
+        SelectItem::avg(q.clone()),
+        SelectItem::min(q.clone()),
+        SelectItem::max(q.clone()),
+        SelectItem::count(q.clone()),
+        SelectItem::count_distinct(q),
     ];
     for item in aggregates {
         let stages = vec![
@@ -830,11 +867,85 @@ fn test_plan_stage_group_by() {
         stage,
         ReplPipelineStage::GroupBy {
             columns: vec![
-                ColumnSpec::CaseInsensitive("id".into()),
-                ColumnSpec::CaseInsensitive("region".into()),
+                GroupByKey::new(ColumnSpec::CaseInsensitive("id".into())),
+                GroupByKey::new(ColumnSpec::CaseInsensitive("region".into())),
             ],
         }
     );
+}
+
+#[test]
+fn test_plan_stage_group_by_with_alias() {
+    let expr = parse("group_by(:foo, foo_bar: :bar)");
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                GroupByKey::new(ColumnSpec::CaseInsensitive("foo".into())),
+                GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_plan_stage_group_by_with_quoted_alias_key() {
+    let expr = parse(r#"group_by("foo bar": :bar)"#);
+    let stage = plan_stage(expr).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_validate_grouped_select_matches_aliased_group_by_key_by_underlying_column() {
+    // select() may still reference the group key by its underlying column instead of its
+    // group_by() alias.
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                GroupByKey::new(ColumnSpec::CaseInsensitive("id".into())).with_alias("key"),
+            ],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
+}
+
+#[test]
+fn test_validate_grouped_select_matches_aliased_group_by_key_by_alias() {
+    // select() may also reference the group key by the alias assigned in group_by().
+    let stages = vec![
+        ReplPipelineStage::Read {
+            path: "a.parquet".into(),
+        },
+        ReplPipelineStage::GroupBy {
+            columns: vec![
+                GroupByKey::new(ColumnSpec::CaseInsensitive("id".into())).with_alias("key"),
+            ],
+        },
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("key".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
+            ],
+        },
+    ];
+    validate_repl_pipeline_stages(&stages).unwrap();
 }
 
 #[test]
@@ -844,12 +955,12 @@ fn test_validate_group_by_select_either_order() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("id".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
             ],
         },
     ];
@@ -861,12 +972,12 @@ fn test_validate_group_by_select_either_order() {
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
             ],
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("id".into()))],
         },
     ];
     validate_repl_pipeline_stages(&sel_then_gb).unwrap();
@@ -880,8 +991,8 @@ fn test_validate_rejects_mixed_select_without_group_by() {
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
             ],
         },
     ];
@@ -896,12 +1007,12 @@ fn test_validate_rejects_extra_plain_column_with_group_by() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("id".into()))],
         },
         ReplPipelineStage::Select {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
-                SelectItem::Column(ColumnSpec::CaseInsensitive("extra".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("extra".into())),
             ],
         },
     ];
@@ -916,10 +1027,10 @@ fn test_validate_accepts_column_only_grouped_select() {
             path: "a.parquet".into(),
         },
         ReplPipelineStage::GroupBy {
-            columns: vec![ColumnSpec::CaseInsensitive("id".into())],
+            columns: vec![GroupByKey::new(ColumnSpec::CaseInsensitive("id".into()))],
         },
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("id".into()))],
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("id".into()))],
         },
     ];
     validate_repl_pipeline_stages(&stages).unwrap();
@@ -927,10 +1038,10 @@ fn test_validate_accepts_column_only_grouped_select() {
 
 #[test]
 fn test_builder_bridge_merges_group_by_order_agnostic() {
-    let keys = vec![ColumnSpec::CaseInsensitive("id".into())];
+    let keys = vec![GroupByKey::new(ColumnSpec::CaseInsensitive("id".into()))];
     let items = vec![
-        SelectItem::Column(ColumnSpec::CaseInsensitive("id".into())),
-        SelectItem::Sum(ColumnSpec::CaseInsensitive("qty".into())),
+        SelectItem::column(ColumnSpec::CaseInsensitive("id".into())),
+        SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())),
     ];
     let stages_a = vec![
         ReplPipelineStage::Read {
@@ -1082,24 +1193,24 @@ fn test_terminal_stage_classification() {
     );
     assert!(
         !ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_terminal()
     );
     assert!(
         ReplPipelineStage::Select {
-            columns: vec![SelectItem::Column(ColumnSpec::CaseInsensitive("x".into()))]
+            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))]
         }
         .is_non_terminal()
     );
     let col_x = ColumnSpec::CaseInsensitive("x".into());
     for item in [
-        SelectItem::Sum(col_x.clone()),
-        SelectItem::Avg(col_x.clone()),
-        SelectItem::Min(col_x.clone()),
-        SelectItem::Max(col_x.clone()),
-        SelectItem::Count(col_x.clone()),
-        SelectItem::CountDistinct(col_x),
+        SelectItem::sum(col_x.clone()),
+        SelectItem::avg(col_x.clone()),
+        SelectItem::min(col_x.clone()),
+        SelectItem::max(col_x.clone()),
+        SelectItem::count(col_x.clone()),
+        SelectItem::count_distinct(col_x),
     ] {
         assert!(
             ReplPipelineStage::Select {
@@ -1137,6 +1248,52 @@ fn test_terminal_stage_implicit_followup() {
 #[test]
 fn test_display_print_stage() {
     assert_eq!(ReplPipelineStage::Print.to_string(), "print()");
+}
+
+#[test]
+fn test_display_select_with_bare_alias() {
+    let stage = ReplPipelineStage::Select {
+        columns: vec![
+            SelectItem::column(ColumnSpec::CaseInsensitive("foo".into())),
+            SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
+            SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())).with_alias("total"),
+        ],
+    };
+    assert_eq!(
+        stage.to_string(),
+        "select(:foo, foo_bar: :bar, total: sum(:qty))"
+    );
+}
+
+#[test]
+fn test_display_select_with_quoted_alias() {
+    let stage = ReplPipelineStage::Select {
+        columns: vec![
+            SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
+        ],
+    };
+    assert_eq!(stage.to_string(), r#"select("foo bar": :bar)"#);
+}
+
+#[test]
+fn test_display_group_by_with_bare_alias() {
+    let stage = ReplPipelineStage::GroupBy {
+        columns: vec![
+            GroupByKey::new(ColumnSpec::CaseInsensitive("foo".into())),
+            GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
+        ],
+    };
+    assert_eq!(stage.to_string(), "group_by(:foo, foo_bar: :bar)");
+}
+
+#[test]
+fn test_display_group_by_with_quoted_alias() {
+    let stage = ReplPipelineStage::GroupBy {
+        columns: vec![
+            GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
+        ],
+    };
+    assert_eq!(stage.to_string(), r#"group_by("foo bar": :bar)"#);
 }
 
 // ── extract_tail_n ──────────────────────────────────────────

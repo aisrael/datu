@@ -105,6 +105,17 @@ let data = read("input.parquet")
 head(data, 10)
 ```
 
+### Variables
+
+Variables in FLT are bindings (labels) attached to underlying values. They differ from variables in conventional languages in that the values they point to are _immutable_ and cannot change. Variables can only be reassigned.
+
+```flt
+u = read("users.avro")
+p = read("project.avro")
+j = u |> join(p, on: p.owner_id = u.id)
+select(j, id: u.id, user_name: u.name, project_name: p.name)
+```
+
 ## datu Functions
 
 For the following functions, note that the function signatures and types provided are for illustration purposes only. All functions in `datu` are internally implemented in Rust, and the actual types aren't very helpful for the purpose of documenting the REPL.
@@ -224,6 +235,44 @@ read("input.parquet") |> group_by(:country_code) |> select(:country_code, count(
 If `group_by()` is present but `select()` lists only key columns (no aggregates), the statement is still valid (distinct group keys); the REPL prints this warning to stderr:
 
 `warning: group_by() with no aggregates in select(); showing distinct group keys only (behavior may change)`
+
+#### Aliasing
+
+Any `select()` argument—plain column or aggregate—can be given an output name using `name: value` keyword-argument syntax. This relabels the corresponding output column without changing which input column (or aggregate) is used:
+
+```flt
+read("input.avro") |> group_by(:foo, :bar) |> select(:foo, foo_bar: :bar, total: sum(:qty))
+```
+
+Here, `:foo` keeps its own name, `:bar` is renamed to `foo_bar`, and `sum(:qty)` is renamed to `total`.
+
+If the desired output name isn't a valid bare identifier (for example, it contains a space), quote it:
+
+```flt
+read("input.avro") |> select(:foo, "foo bar": :bar)
+```
+
+Aliasing works the same way for plain projections, global aggregates, and grouped aggregates (including group keys named in `group_by()`).
+
+`group_by()` keys can also carry their own alias, using the same `name: value` / `"quoted name": value` syntax:
+
+```flt
+read("input.avro") |> group_by(key: :foo) |> select(:foo, total: sum(:qty))
+```
+
+`group_by()`'s alias sets the *default* output name for the key (`key` in this example), and `select()` may refer to that key either by its underlying column (`:foo`) or by the alias itself (`:key`)—both forms are equivalent:
+
+```flt
+read("input.avro") |> group_by(key: :foo) |> select(:key, total: sum(:qty))
+# equivalent to: select(:foo, total: sum(:qty))
+```
+
+If `select()` also gives that same column its own alias, `select()`'s alias wins, regardless of whether `select()` referred to the key by its underlying column or by `group_by()`'s alias:
+
+```flt
+read("input.avro") |> group_by(from_group_by: :foo) |> select(from_select: :foo, total: sum(:qty))
+# output column is "from_select", not "from_group_by"
+```
 
 ### Data preview (`head`, `tail`, and `sample`)
 

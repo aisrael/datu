@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 
@@ -17,7 +18,7 @@ pub enum ReplPipelineStage {
         sql: String,
     },
     GroupBy {
-        columns: Vec<ColumnSpec>,
+        columns: Vec<GroupByKey>,
     },
     Select {
         columns: Vec<SelectItem>,
@@ -114,30 +115,56 @@ fn format_column_spec(c: &ColumnSpec) -> String {
     }
 }
 
+/// Quotes an alias key when it isn't a valid bare identifier (mirrors
+/// `flt::ast::expr::KeyValue`'s own `Display`, which applies the same rule to map literals).
+fn format_alias_key(key: &str) -> String {
+    let is_bare = key
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+        && key.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if is_bare {
+        key.to_string()
+    } else {
+        format!("{key:?}")
+    }
+}
+
+fn format_group_by_key(key: &GroupByKey) -> String {
+    let body = format_column_spec(&key.spec);
+    match &key.alias {
+        Some(alias) => format!("{}: {body}", format_alias_key(alias)),
+        None => body,
+    }
+}
+
+fn format_select_item(item: &SelectItem) -> String {
+    let body = match item {
+        SelectItem::Column(c, _) => format_column_spec(c),
+        SelectItem::Sum(c, _) => format!("sum({})", format_column_spec(c)),
+        SelectItem::Avg(c, _) => format!("avg({})", format_column_spec(c)),
+        SelectItem::Min(c, _) => format!("min({})", format_column_spec(c)),
+        SelectItem::Max(c, _) => format!("max({})", format_column_spec(c)),
+        SelectItem::Count(c, _) => format!("count({})", format_column_spec(c)),
+        SelectItem::CountDistinct(c, _) => format!("count_distinct({})", format_column_spec(c)),
+    };
+    match item.alias() {
+        Some(alias) => format!("{}: {body}", format_alias_key(alias)),
+        None => body,
+    }
+}
+
 impl fmt::Display for ReplPipelineStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReplPipelineStage::Read { path } => write!(f, r#"read("{path}")"#),
             ReplPipelineStage::Filter { sql } => write!(f, "filter({sql:?})"),
             ReplPipelineStage::GroupBy { columns } => {
-                let cols: Vec<String> = columns.iter().map(format_column_spec).collect();
+                let cols: Vec<String> = columns.iter().map(format_group_by_key).collect();
                 write!(f, "group_by({})", cols.join(", "))
             }
             ReplPipelineStage::Select { columns } => {
-                let cols: Vec<String> = columns
-                    .iter()
-                    .map(|item| match item {
-                        SelectItem::Column(c) => format_column_spec(c),
-                        SelectItem::Sum(c) => format!("sum({})", format_column_spec(c)),
-                        SelectItem::Avg(c) => format!("avg({})", format_column_spec(c)),
-                        SelectItem::Min(c) => format!("min({})", format_column_spec(c)),
-                        SelectItem::Max(c) => format!("max({})", format_column_spec(c)),
-                        SelectItem::Count(c) => format!("count({})", format_column_spec(c)),
-                        SelectItem::CountDistinct(c) => {
-                            format!("count_distinct({})", format_column_spec(c))
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let cols: Vec<String> = columns.iter().map(format_select_item).collect();
                 write!(f, "select({})", cols.join(", "))
             }
             ReplPipelineStage::Head { n } => write!(f, "head({n})"),

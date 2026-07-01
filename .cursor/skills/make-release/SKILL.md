@@ -90,6 +90,8 @@ Keep prose consistent with prior entries in `CHANGELOG.md`.
 - PR title example: `Release vX.Y.Z`.
 - PR body: short summary + pointer to the new CHANGELOG section + link to full diff vs `main`.
 
+Do **NOT** mention `/tag-and-publish-release` in the release PR's description as it is an internal tool.
+
 Ensure the reported PR URL is the full GitHub URL (clickable).
 
 ## Quick reference

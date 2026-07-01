@@ -1,24 +1,37 @@
 # datu Version Notes
 
-## Unreleased
+## v0.3.6
+
+### Highlights
+
+- **Concat and split commands**: New `datu concat` merges multiple input files; `datu split` partitions a file into multiple outputs.
+- **Diff command**: Renamed `--max-diffs` to `--limit` for consistency with other commands (`--max-diffs` remains supported but deprecated). Added `--json` and `--output json` for structured diff output.
+- **REPL aliasing**: `select()` and `group_by()` support `name: value` keyword syntax for column and aggregate aliases.
 
 ### Improvements
+
+- **CLI**
+  - `datu concat` and `datu split` with Cucumber coverage and pipeline support.
+  - `datu diff` uses `--limit` instead of `--max-diffs`; the old flag prints a deprecation warning.
+  - `datu diff` accepts `--json` and `--output json` for machine-readable output.
 
 - **REPL**
   - `select()` supports column/aggregate aliasing via `name: value` (and quoted `"name with space": value`) keyword syntax, e.g. `select(:foo, foo_bar: :bar, total: sum(:qty))`. Works for plain projections, global aggregates, and grouped aggregates (including `group_by` keys), and for ORC's plain-column select path.
   - `group_by()` keys can also carry their own alias (e.g. `group_by(key: :foo)`), which becomes the default output name for that key; a matching `select()` alias still takes precedence when present. `select()` may refer to the key by its underlying column or by the `group_by()` alias itself (e.g. `group_by(key: :foo) |> select(:key, total: sum(:qty))`).
 
-## v0.3.6
+- **Docs**
+  - README expanded for concat, split, diff JSON output, and REPL aliasing.
 
-### Highlights
+- **Tooling**
+  - Claude Code GitHub workflow added.
+  - Dependency updates (`rand` 0.8.6).
 
-- **Diff command**: Renamed `--max-diffs` to `--limit` for consistency with other commands. `--max-diffs` remains supported but is deprecated.
+### Changelog Stats
 
-### Improvements
-
-- **CLI**
-  - `datu diff` uses `--limit` instead of `--max-diffs`; the old flag prints a deprecation warning.
-  - README and Cucumber coverage updated for the new flag.
+- 10 commits
+- 36 files changed
+- 3516 insertions
+- 499 deletions
 
 ## v0.3.5
 

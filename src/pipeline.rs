@@ -33,6 +33,7 @@ pub use record_batch::RecordBatchSelect;
 pub use record_batch::RecordBatchSink;
 pub use record_batch::RecordBatchTail;
 pub use split::SplitOutcome;
+pub use split::SplitSize;
 pub use split::split_file;
 
 pub mod display;

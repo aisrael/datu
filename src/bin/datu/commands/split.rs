@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
+use datu::pipeline::SplitSize;
 use datu::pipeline::split_file;
 use eyre::Result;
 use indicatif::ProgressBar;
@@ -34,10 +35,14 @@ pub struct SplitArgs {
     pub output: Option<FileType>,
     #[arg(
         long,
-        default_value_t = 100_000,
-        help = "Maximum number of rows per output partition."
+        default_value_t = SplitSize::Rows(100_000),
+        value_parser = clap::value_parser!(SplitSize),
+        help = "Maximum size of each output partition: a row count (e.g. 100000), or a byte size \
+                with a unit -- kb, mb, gb, tb (decimal) or kib, mib, gib, tib (binary), \
+                case-insensitive (e.g. 64mb, 1.5GiB). Byte sizes are approximate, estimated from \
+                in-memory row size rather than the exact on-disk/compressed size."
     )]
-    pub split: usize,
+    pub split: SplitSize,
     #[arg(
         long,
         default_value_t = 0,
@@ -129,7 +134,7 @@ mod tests {
     fn split_args_for_tests(
         input_path: &str,
         output_path: Option<&str>,
-        split: usize,
+        split: SplitSize,
     ) -> SplitArgs {
         SplitArgs {
             input_path: input_path.to_string(),
@@ -151,7 +156,7 @@ mod tests {
         let args = split_args_for_tests(
             "fixtures/table.parquet",
             Some(output_path.to_str().expect("valid utf-8 path")),
-            2,
+            SplitSize::Rows(2),
         );
 
         let result = split(args).await;
@@ -167,7 +172,7 @@ mod tests {
         let mut args = split_args_for_tests(
             "fixtures/concat_part1.avro",
             Some(output_path.to_str().expect("valid utf-8 path")),
-            2,
+            SplitSize::Rows(2),
         );
         args.output = Some(FileType::Csv);
 
@@ -185,10 +190,29 @@ mod tests {
         let args = split_args_for_tests(
             "fixtures/table.parquet",
             Some(output_path.to_str().expect("valid utf-8 path")),
-            0,
+            SplitSize::Rows(0),
         );
 
         let result = split(args).await;
         assert!(result.is_err(), "split with --split 0 should fail");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_split_by_byte_size() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("u.avro");
+        let file_bytes = std::fs::metadata("fixtures/userdata5.avro")
+            .expect("failed to stat fixture")
+            .len();
+        let args = split_args_for_tests(
+            "fixtures/userdata5.avro",
+            Some(output_path.to_str().expect("valid utf-8 path")),
+            SplitSize::Bytes(file_bytes / 5),
+        );
+
+        let result = split(args).await;
+        assert!(result.is_ok(), "split failed: {:?}", result.err());
+        assert!(temp_dir.path().join("u.part00001.avro").exists());
+        assert!(temp_dir.path().join("u.part00002.avro").exists());
     }
 }

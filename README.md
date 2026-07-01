@@ -124,7 +124,7 @@ datu split <INPUT> [OUTPUT] [OPTIONS]
 |--------|-------------|
 | `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `-O`, `--output <TYPE>` | Output file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
-| `--split <N>` | Maximum number of rows per output partition. Default: `100000`. |
+| `--split <N>` | Maximum size of each output partition: a row count (e.g. `100000`), or a byte size with a unit — `kb`/`mb`/`gb`/`tb` (decimal, base 1000) or `kib`/`mib`/`gib`/`tib` (binary, base 1024), case-insensitive (e.g. `64mb`, `1.5GiB`). Byte sizes are approximate, estimated from in-memory row size rather than the exact on-disk/compressed size. Default: `100000` rows. |
 | `--limit <N>` | Maximum number of total rows to process across all partitions. Default: `0` (unlimited). |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When splitting to JSON, format output with indentation and newlines. Ignored for other output formats. |
@@ -147,6 +147,12 @@ datu split large-file.parquet --split 2000 --limit 10000
 
 # Split Avro into Parquet partitions
 datu split large-file.avro out.parquet --split 100000
+
+# Split into ~64MB partitions instead of a row count
+datu split large-file.avro --split 64mb
+
+# Split into ~1.5GiB partitions (binary unit)
+datu split large-file.parquet --split 1.5GiB
 ```
 
 ---

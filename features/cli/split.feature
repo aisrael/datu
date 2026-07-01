@@ -1,8 +1,9 @@
 Feature: Split
-  Split a single input file into multiple output files of at most N rows each. Input and output
-  formats are inferred from file extensions, or can be specified explicitly with --input and
-  --output. Partition files are named by inserting a zero-padded ".partNNNNN" segment before the
-  extension of the (optional) output path, which defaults to the input path.
+  Split a single input file into multiple output files of at most N rows (or, approximately, N
+  bytes) each. Input and output formats are inferred from file extensions, or can be specified
+  explicitly with --input and --output. Partition files are named by inserting a zero-padded
+  ".partNNNNN" segment before the extension of the (optional) output path, which defaults to the
+  input path.
 
   Scenario: Split Parquet into partitions of 2 rows
     Given a file "fixtures/table.parquet"
@@ -57,5 +58,40 @@ Feature: Split
   Scenario: Split fails when --split is 0
     Given a file "fixtures/table.parquet"
     When I run `datu split fixtures/table.parquet $TEMPDIR/out.parquet --split 0`
+    Then the command should fail
+    And the output should contain "must be greater than 0"
+
+  Scenario: Split by a decimal byte size (kb) produces multiple partitions
+    Given a file "fixtures/userdata5.avro"
+    When I run `datu split fixtures/userdata5.avro $TEMPDIR/u.avro --split 20kb`
+    Then the command should succeed
+    And the output should contain "Split fixtures/userdata5.avro into"
+    And the output should contain "rows)"
+    And the file "$TEMPDIR/u.part00001.avro" should exist
+    And the file "$TEMPDIR/u.part00002.avro" should exist
+
+  Scenario: Split by size units is case-insensitive
+    Given a file "fixtures/userdata5.avro"
+    When I run `datu split fixtures/userdata5.avro $TEMPDIR/u.avro --split 10KB`
+    Then the command should succeed
+    And the file "$TEMPDIR/u.part00001.avro" should exist
+    And the file "$TEMPDIR/u.part00002.avro" should exist
+
+  Scenario: Split by a binary byte size (MiB) succeeds
+    Given a file "fixtures/userdata5.avro"
+    When I run `datu split fixtures/userdata5.avro $TEMPDIR/u.avro --split 1MiB`
+    Then the command should succeed
+    And the output should contain "Split fixtures/userdata5.avro into 1 file (1000 rows)"
+    And the file "$TEMPDIR/u.part00001.avro" should exist
+
+  Scenario: Split fails on an unknown size unit
+    Given a file "fixtures/table.parquet"
+    When I run `datu split fixtures/table.parquet $TEMPDIR/out.parquet --split 10xb`
+    Then the command should fail
+    And the output should contain "unknown size unit"
+
+  Scenario: Split fails when a byte size of 0 is given
+    Given a file "fixtures/table.parquet"
+    When I run `datu split fixtures/table.parquet $TEMPDIR/out.parquet --split 0mb`
     Then the command should fail
     And the output should contain "must be greater than 0"

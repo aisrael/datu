@@ -4,6 +4,7 @@ pub mod avro;
 pub mod concat;
 pub mod csv;
 pub mod dataframe;
+pub mod split;
 
 pub use avro::DataframeAvroWriter;
 pub use avro::RecordBatchAvroWriter;
@@ -31,6 +32,9 @@ pub use record_batch::RecordBatchSample;
 pub use record_batch::RecordBatchSelect;
 pub use record_batch::RecordBatchSink;
 pub use record_batch::RecordBatchTail;
+pub use split::SplitOutcome;
+pub use split::SplitSize;
+pub use split::split_file;
 
 pub mod display;
 pub mod json;

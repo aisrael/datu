@@ -12,11 +12,13 @@ use commands::count;
 use commands::diff;
 use commands::heads_or_tails;
 use commands::schema;
+use commands::split;
 use datu::cli::repl::Repl;
 
 use crate::commands::concat::ConcatArgs;
 use crate::commands::convert::ConvertArgs;
 use crate::commands::diff::DiffArgs;
+use crate::commands::split::SplitArgs;
 
 /// Top-level CLI structure that parses command-line arguments.
 #[derive(Parser)]
@@ -46,6 +48,8 @@ pub enum Command {
     Tail(datu::cli::HeadsOrTails),
     /// display the schema of a file
     Schema(datu::cli::SchemaArgs),
+    /// split a large input file into multiple output files of at most N rows each
+    Split(SplitArgs),
     /// print the datu version
     Version,
 }
@@ -63,6 +67,7 @@ async fn main() -> eyre::Result<()> {
         Some(Command::Head(args)) => heads_or_tails(args, HeadsOrTailsCmd::Head).await,
         Some(Command::Sample(args)) => heads_or_tails(args, HeadsOrTailsCmd::Sample).await,
         Some(Command::Schema(args)) => schema(args).await,
+        Some(Command::Split(args)) => split(args).await,
         Some(Command::Tail(args)) => heads_or_tails(args, HeadsOrTailsCmd::Tail).await,
         Some(Command::Version) => {
             println!("datu v{}", datu::VERSION);

@@ -8,6 +8,7 @@ use super::stage::ReplPipelineStage;
 use super::stage::repl_pipeline_last_select_is_terminal;
 use crate::Error;
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 
@@ -61,18 +62,33 @@ pub(super) fn is_statement_complete(pending_exprs: &[Expr]) -> bool {
     }
 }
 
+fn expr_is_aggregate_call(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::FunctionCall(n, a)
+            if matches!(
+                n.to_string().as_str(),
+                "sum" | "avg" | "min" | "max" | "count" | "count_distinct"
+            ) && a.len() == 1
+    )
+}
+
+/// Flattens `select()` args into their value expressions, unwrapping the trailing
+/// `MapLiteral` (keyword args, i.e. `alias: value`) that `flt` appends for `name: value` pairs.
+fn flatten_select_value_exprs(args: &[Expr]) -> Vec<&Expr> {
+    let mut values = Vec::new();
+    for expr in args {
+        match expr {
+            Expr::MapLiteral(entries) => values.extend(entries.iter().map(|kv| &kv.value)),
+            other => values.push(other),
+        }
+    }
+    values
+}
+
 fn select_args_are_all_aggregates(args: &[Expr]) -> bool {
-    !args.is_empty()
-        && args.iter().all(|e| {
-            matches!(
-                e,
-                Expr::FunctionCall(n, a)
-                    if matches!(
-                        n.to_string().as_str(),
-                        "sum" | "avg" | "min" | "max" | "count" | "count_distinct"
-                    ) && a.len() == 1
-            )
-        })
+    let values = flatten_select_value_exprs(args);
+    !values.is_empty() && values.iter().all(|e| expr_is_aggregate_call(e))
 }
 
 /// Extracts a single path string from a function's argument list.
@@ -106,55 +122,92 @@ fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
 
 fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
     match name {
-        "sum" => SelectItem::Sum(col),
-        "avg" => SelectItem::Avg(col),
-        "min" => SelectItem::Min(col),
-        "max" => SelectItem::Max(col),
-        "count" => SelectItem::Count(col),
-        "count_distinct" => SelectItem::CountDistinct(col),
+        "sum" => SelectItem::sum(col),
+        "avg" => SelectItem::avg(col),
+        "min" => SelectItem::min(col),
+        "max" => SelectItem::max(col),
+        "count" => SelectItem::count(col),
+        "count_distinct" => SelectItem::count_distinct(col),
         _ => unreachable!(
             "select_aggregate_item only called for sum, avg, min, max, count, or count_distinct"
         ),
     }
 }
 
-/// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)` /
-/// `count(column)` / `count_distinct(column)`.
-pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
-    const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
-    args.iter()
-        .map(|expr| match expr {
-            Expr::FunctionCall(name, inner) => {
-                let name_str = name.to_string();
-                match name_str.as_str() {
-                    "sum" | "avg" | "min" | "max" | "count" | "count_distinct" => {
-                        match inner.as_slice() {
-                            [one] => Ok(select_aggregate_item(
-                                name_str.as_str(),
-                                extract_one_column_spec(one)?,
-                            )),
-                            _ => Err(Error::UnsupportedFunctionCall(format!(
-                                "{name_str}() expects exactly one column argument"
-                            ))),
-                        }
+const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
+
+/// Converts one `select()` value expression (a plain column ref or an aggregate call)
+/// into an unaliased [`SelectItem`]. Callers attach an alias separately when the value
+/// came from a `name: value` keyword argument.
+fn select_item_from_expr(expr: &Expr) -> crate::Result<SelectItem> {
+    match expr {
+        Expr::FunctionCall(name, inner) => {
+            let name_str = name.to_string();
+            match name_str.as_str() {
+                "sum" | "avg" | "min" | "max" | "count" | "count_distinct" => {
+                    match inner.as_slice() {
+                        [one] => Ok(select_aggregate_item(
+                            name_str.as_str(),
+                            extract_one_column_spec(one)?,
+                        )),
+                        _ => Err(Error::UnsupportedFunctionCall(format!(
+                            "{name_str}() expects exactly one column argument"
+                        ))),
                     }
-                    _ => Err(Error::UnsupportedFunctionCall(format!(
-                        "{SELECT_AGG_EXPECTED}, got {expr:?}"
-                    ))),
+                }
+                _ => Err(Error::UnsupportedFunctionCall(format!(
+                    "{SELECT_AGG_EXPECTED}, got {expr:?}"
+                ))),
+            }
+        }
+        Expr::Literal(Literal::Symbol(s)) => {
+            Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone())))
+        }
+        Expr::Literal(Literal::String(s)) => Ok(SelectItem::column(ColumnSpec::Exact(s.clone()))),
+        Expr::Ident(s) => Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone()))),
+        _ => Err(Error::UnsupportedFunctionCall(format!(
+            "{SELECT_AGG_EXPECTED}, got {expr:?}"
+        ))),
+    }
+}
+
+/// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)` /
+/// `count(column)` / `count_distinct(column)`, plus aliases from `name: value` / `"quoted name": value`
+/// keyword arguments (collected by `flt` into a trailing `MapLiteral`).
+pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
+    let mut items = Vec::new();
+    for expr in args {
+        match expr {
+            Expr::MapLiteral(entries) => {
+                for kv in entries {
+                    let item = select_item_from_expr(&kv.value)?.with_alias(kv.key.clone());
+                    items.push(item);
                 }
             }
-            Expr::Literal(Literal::Symbol(s)) => {
-                Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone())))
+            other => items.push(select_item_from_expr(other)?),
+        }
+    }
+    Ok(items)
+}
+
+/// Extracts `group_by(...)` keys, plus aliases from `name: value` / `"quoted name": value`
+/// keyword arguments (collected by `flt` into a trailing `MapLiteral`). A key's alias becomes
+/// the default output name for that column in `select()`, unless `select()` gives its own alias.
+pub(super) fn extract_group_by_keys(args: &[Expr]) -> crate::Result<Vec<GroupByKey>> {
+    let mut keys = Vec::new();
+    for expr in args {
+        match expr {
+            Expr::MapLiteral(entries) => {
+                for kv in entries {
+                    let key = GroupByKey::new(extract_one_column_spec(&kv.value)?)
+                        .with_alias(kv.key.clone());
+                    keys.push(key);
+                }
             }
-            Expr::Literal(Literal::String(s)) => {
-                Ok(SelectItem::Column(ColumnSpec::Exact(s.clone())))
-            }
-            Expr::Ident(s) => Ok(SelectItem::Column(ColumnSpec::CaseInsensitive(s.clone()))),
-            _ => Err(Error::UnsupportedFunctionCall(format!(
-                "{SELECT_AGG_EXPECTED}, got {expr:?}"
-            ))),
-        })
-        .collect()
+            other => keys.push(GroupByKey::new(extract_one_column_spec(other)?)),
+        }
+    }
+    Ok(keys)
 }
 
 #[cfg(test)]
@@ -186,10 +239,7 @@ pub(super) fn plan_stage(expr: Expr) -> crate::Result<ReplPipelineStage> {
                             "group_by expects at least one column".to_string(),
                         ));
                     }
-                    let columns = args
-                        .iter()
-                        .map(extract_one_column_spec)
-                        .collect::<crate::Result<Vec<_>>>()?;
+                    let columns = extract_group_by_keys(&args)?;
                     Ok(ReplPipelineStage::GroupBy { columns })
                 }
                 "select" => {
@@ -268,12 +318,12 @@ pub(super) fn plan_pipeline_with_state(
     Ok((stages, statement_incomplete))
 }
 
-fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::Result<()> {
+fn validate_grouped_select(keys: &[GroupByKey], items: &[SelectItem]) -> crate::Result<()> {
     for key in keys {
         let mut found = false;
         for item in items {
-            if let SelectItem::Column(c) = item
-                && c == key
+            if let SelectItem::Column(c, _) = item
+                && key.matches_select_column(c)
             {
                 found = true;
                 break;
@@ -287,20 +337,20 @@ fn validate_grouped_select(keys: &[ColumnSpec], items: &[SelectItem]) -> crate::
     }
     for item in items {
         match item {
-            SelectItem::Column(c) => {
-                if !keys.iter().any(|k| k == c) {
+            SelectItem::Column(c, _) => {
+                if !keys.iter().any(|k| k.matches_select_column(c)) {
                     return Err(Error::InvalidReplPipeline(
                         "select with group_by: non-key columns must use an aggregate (sum, avg, min, max, count, or count_distinct), not plain columns"
                             .to_string(),
                     ));
                 }
             }
-            SelectItem::Sum(_)
-            | SelectItem::Avg(_)
-            | SelectItem::Min(_)
-            | SelectItem::Max(_)
-            | SelectItem::Count(_)
-            | SelectItem::CountDistinct(_) => {}
+            SelectItem::Sum(..)
+            | SelectItem::Avg(..)
+            | SelectItem::Min(..)
+            | SelectItem::Max(..)
+            | SelectItem::Count(..)
+            | SelectItem::CountDistinct(..) => {}
         }
     }
     Ok(())
@@ -327,7 +377,7 @@ pub(super) fn validate_repl_pipeline_stages(stages: &[ReplPipelineStage]) -> cra
     let mut i = 1usize;
     let mut filter_indices: Vec<usize> = Vec::new();
     let mut select_idx: Option<usize> = None;
-    let mut group_by_cols: Option<&Vec<ColumnSpec>> = None;
+    let mut group_by_cols: Option<&Vec<GroupByKey>> = None;
     let mut select_items: Option<&Vec<SelectItem>> = None;
 
     while i < body.len() {

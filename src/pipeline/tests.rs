@@ -9,6 +9,7 @@ use crate::FileType;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DataframeParquetReader;
 use crate::pipeline::FilterSpec;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::avro::DataframeAvroWriter;
@@ -226,10 +227,12 @@ fn test_pipeline_builder_grouped_select_post_aggregate_filter_sets_flag() {
         .read("fixtures/table.parquet")
         .select_spec(SelectSpec {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
-            group_by: Some(vec![ColumnSpec::CaseInsensitive("two".into())]),
+            group_by: Some(vec![GroupByKey::new(ColumnSpec::CaseInsensitive(
+                "two".into(),
+            ))]),
         })
         .filter_after_select("sum(three) > 0")
         .head(5);
@@ -252,10 +255,12 @@ fn test_pipeline_builder_both_filters_before_and_after_select() {
         .filter_before_select("one > 0")
         .select_spec(SelectSpec {
             columns: vec![
-                SelectItem::Column(ColumnSpec::CaseInsensitive("two".into())),
-                SelectItem::Sum(ColumnSpec::CaseInsensitive("three".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("two".into())),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("three".into())),
             ],
-            group_by: Some(vec![ColumnSpec::CaseInsensitive("two".into())]),
+            group_by: Some(vec![GroupByKey::new(ColumnSpec::CaseInsensitive(
+                "two".into(),
+            ))]),
         })
         .filter_after_select("sum(three) > 0")
         .head(5);
@@ -453,8 +458,8 @@ fn test_select_spec_from_cli_args_parsing() {
     assert_eq!(
         spec.columns,
         vec![
-            SelectItem::Column(ColumnSpec::Exact("a".into())),
-            SelectItem::Column(ColumnSpec::Exact("b".into())),
+            SelectItem::column(ColumnSpec::Exact("a".into())),
+            SelectItem::column(ColumnSpec::Exact("b".into())),
         ]
     );
     let spec = SelectSpec::from_cli_args(&Some(vec!["a, b".to_string(), "c".to_string()]))
@@ -462,9 +467,9 @@ fn test_select_spec_from_cli_args_parsing() {
     assert_eq!(
         spec.columns,
         vec![
-            SelectItem::Column(ColumnSpec::Exact("a".into())),
-            SelectItem::Column(ColumnSpec::Exact("b".into())),
-            SelectItem::Column(ColumnSpec::Exact("c".into())),
+            SelectItem::column(ColumnSpec::Exact("a".into())),
+            SelectItem::column(ColumnSpec::Exact("b".into())),
+            SelectItem::column(ColumnSpec::Exact("c".into())),
         ]
     );
     let spec =
@@ -472,8 +477,8 @@ fn test_select_spec_from_cli_args_parsing() {
     assert_eq!(
         spec.columns,
         vec![
-            SelectItem::Column(ColumnSpec::Exact("one".into())),
-            SelectItem::Column(ColumnSpec::Exact("two".into())),
+            SelectItem::column(ColumnSpec::Exact("one".into())),
+            SelectItem::column(ColumnSpec::Exact("two".into())),
         ]
     );
 }

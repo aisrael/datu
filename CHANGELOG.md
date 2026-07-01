@@ -1,5 +1,13 @@
 # datu Version Notes
 
+## Unreleased
+
+### Improvements
+
+- **REPL**
+  - `select()` supports column/aggregate aliasing via `name: value` (and quoted `"name with space": value`) keyword syntax, e.g. `select(:foo, foo_bar: :bar, total: sum(:qty))`. Works for plain projections, global aggregates, and grouped aggregates (including `group_by` keys), and for ORC's plain-column select path.
+  - `group_by()` keys can also carry their own alias (e.g. `group_by(key: :foo)`), which becomes the default output name for that key; a matching `select()` alias still takes precedence when present. `select()` may refer to the key by its underlying column or by the `group_by()` alias itself (e.g. `group_by(key: :foo) |> select(:key, total: sum(:qty))`).
+
 ## v0.3.6
 
 ### Highlights

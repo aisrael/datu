@@ -79,6 +79,7 @@ pub use sampling::tail_batches;
 pub use spec::ColumnSpec;
 pub(crate) use spec::DisplaySlice;
 pub use spec::FilterSpec;
+pub use spec::GroupByKey;
 pub use spec::SelectItem;
 pub use spec::SelectSpec;
 pub use step::Producer;

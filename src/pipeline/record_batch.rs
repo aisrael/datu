@@ -63,6 +63,24 @@ impl Step for RecordBatchSelect {
             })
             .collect::<crate::Result<Vec<_>>>()?;
         let projected_schema = reader.schema().project(&indices)?;
+        // Rename fields per-item alias (REPL `name: value` syntax); data is untouched.
+        let fields: Vec<arrow::datatypes::FieldRef> = projected_schema
+            .fields()
+            .iter()
+            .zip(self.select.columns.iter())
+            .map(|(field, item)| match item.alias() {
+                Some(alias) => std::sync::Arc::new(arrow::datatypes::Field::new(
+                    alias,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )),
+                None => field.clone(),
+            })
+            .collect();
+        let projected_schema = arrow::datatypes::Schema::new_with_metadata(
+            fields,
+            projected_schema.metadata().clone(),
+        );
         let projected_reader = SelectColumnRecordBatchReader {
             reader,
             schema: std::sync::Arc::new(projected_schema),
@@ -91,9 +109,14 @@ impl Iterator for SelectColumnRecordBatchReader {
     type Item = arrow::error::Result<arrow::record_batch::RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.reader
-            .next()
-            .map(|batch| batch.and_then(|b| b.project(&self.indices)))
+        self.reader.next().map(|batch| {
+            batch.and_then(|b| b.project(&self.indices)).and_then(|b| {
+                // `RecordBatch::with_schema` requires the new schema to be a superset (by name) of
+                // the current one, so it can't rename fields; rebuild the batch instead, keeping
+                // the same column data and swapping in the alias-renamed schema.
+                RecordBatch::try_new(self.schema.clone(), b.columns().to_vec())
+            })
+        })
     }
 }
 
@@ -520,11 +543,11 @@ mod tests {
         assert_eq!(step.select.len(), 2);
         assert_eq!(
             step.select[0],
-            SelectItem::Column(ColumnSpec::Exact("one".into()))
+            SelectItem::column(ColumnSpec::Exact("one".into()))
         );
         assert_eq!(
             step.select[1],
-            SelectItem::Column(ColumnSpec::Exact("two".into()))
+            SelectItem::column(ColumnSpec::Exact("two".into()))
         );
     }
 
@@ -535,11 +558,11 @@ mod tests {
         assert_eq!(step.select.len(), 2);
         assert_eq!(
             step.select[0],
-            SelectItem::Column(ColumnSpec::Exact("one".into()))
+            SelectItem::column(ColumnSpec::Exact("one".into()))
         );
         assert_eq!(
             step.select[1],
-            SelectItem::Column(ColumnSpec::Exact("two".into()))
+            SelectItem::column(ColumnSpec::Exact("two".into()))
         );
     }
 
@@ -559,8 +582,8 @@ mod tests {
         let select_step = RecordBatchSelect {
             select: SelectSpec {
                 columns: vec![
-                    SelectItem::Column(ColumnSpec::Exact("two".to_string())),
-                    SelectItem::Column(ColumnSpec::Exact("four".to_string())),
+                    SelectItem::column(ColumnSpec::Exact("two".to_string())),
+                    SelectItem::column(ColumnSpec::Exact("four".to_string())),
                 ],
                 group_by: None,
             },
@@ -588,5 +611,41 @@ mod tests {
         assert_eq!(projected_batch.num_columns(), 2);
         assert_eq!(projected_batch.column(0).len(), batch_rows);
         assert_eq!(projected_batch.column(1).len(), batch_rows);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_select_columns_with_alias_renames_field() {
+        let args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+        let parquet_step = RecordBatchParquetReader { args };
+
+        let source: RecordBatchReaderSource = Box::new(parquet_step);
+        let select_step = RecordBatchSelect {
+            select: SelectSpec {
+                columns: vec![
+                    SelectItem::column(ColumnSpec::Exact("two".to_string())),
+                    SelectItem::column(ColumnSpec::Exact("four".to_string()))
+                        .with_alias("four_alias"),
+                ],
+                group_by: None,
+            },
+        };
+        let mut projected_source = select_step
+            .execute(source)
+            .await
+            .expect("Failed to execute select columns");
+        let mut projected_reader = projected_source
+            .get()
+            .await
+            .expect("Failed to get record batch reader");
+
+        // Reader-level schema reflects the alias.
+        let projected_schema = projected_reader.schema();
+        assert_eq!(projected_schema.field(0).name(), "two");
+        assert_eq!(projected_schema.field(1).name(), "four_alias");
+
+        // Each yielded batch's own schema also reflects the alias (not just the reader's).
+        let batch = projected_reader.next().unwrap().unwrap();
+        assert_eq!(batch.schema().field(0).name(), "two");
+        assert_eq!(batch.schema().field(1).name(), "four_alias");
     }
 }

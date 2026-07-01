@@ -2,14 +2,17 @@
 
 use async_trait::async_trait;
 use datafusion::prelude::DataFrame;
+use indicatif::ProgressBar;
 
 use super::source::DataFrameSource;
 use crate::Error;
 use crate::FileType;
 use crate::errors::PipelineExecutionError;
 use crate::pipeline::Producer;
+use crate::pipeline::ProgressVecRecordBatchReader;
 use crate::pipeline::Step;
 use crate::pipeline::VecRecordBatchReader;
+use crate::pipeline::avro;
 use crate::pipeline::csv::DataframeCsvWriter;
 use crate::pipeline::json::DataframeJsonPrettyWriter;
 use crate::pipeline::json::DataframeJsonWriter;
@@ -69,6 +72,57 @@ pub async fn write_dataframe_pipeline_output(
             PipelineExecutionError::UnsupportedOutputFileType(args.file_type),
         )),
     }
+}
+
+/// Writes a [`DataFrameSource`] to any pipeline output format: Parquet, CSV, and JSON via
+/// [`write_dataframe_pipeline_output`]; Avro via [`crate::pipeline::avro::DataframeAvroWriter`];
+/// ORC, XLSX, and YAML by collecting batches and calling [`write_record_batches_from_reader`].
+///
+/// Shared by the `convert` write sink ([`crate::pipeline::dataframe::DataFramePipeline`]) and the
+/// `concat` command so both go through identical output dispatch.
+pub(crate) async fn write_dataframe_to_path(
+    source: DataFrameSource,
+    output_path: String,
+    output_file_type: FileType,
+    sparse: bool,
+    json_pretty: bool,
+    progress: Option<ProgressBar>,
+) -> crate::Result<()> {
+    let write_args = WriteArgs {
+        path: output_path.clone(),
+        file_type: output_file_type,
+        sparse: Some(sparse),
+        pretty: Some(json_pretty),
+    };
+
+    match output_file_type {
+        FileType::Parquet | FileType::Csv | FileType::Json => {
+            write_dataframe_pipeline_output(source, write_args).await?;
+        }
+        FileType::Avro => {
+            avro::DataframeAvroWriter { args: write_args }
+                .execute(Box::new(source))
+                .await?;
+        }
+        FileType::Orc | FileType::Xlsx | FileType::Yaml => {
+            let mut source = source;
+            let df = source
+                .df
+                .take()
+                .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
+            let batches = df.collect().await?;
+            let inner = VecRecordBatchReader::new(batches);
+            let mut reader = ProgressVecRecordBatchReader { inner, progress };
+            write_record_batches_from_reader(
+                &mut reader,
+                &output_path,
+                output_file_type,
+                sparse,
+                json_pretty,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait(?Send)]

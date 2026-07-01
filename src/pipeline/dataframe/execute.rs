@@ -5,27 +5,22 @@ use indicatif::ProgressBar;
 use super::from_path::read_dataframe_from_path;
 use super::source::DataFrameSource;
 use super::transform::finalize_dataframe_source;
-use super::writer::write_dataframe_pipeline_output;
+use super::writer::write_dataframe_to_path;
 use crate::Error;
 use crate::FileType;
 use crate::cli::DisplayOutputFormat;
 use crate::errors::PipelineExecutionError;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::FilterSpec;
-use crate::pipeline::ProgressVecRecordBatchReader;
 use crate::pipeline::SelectSpec;
 use crate::pipeline::Step;
-use crate::pipeline::VecRecordBatchReader;
 use crate::pipeline::VecRecordBatchReaderSource;
-use crate::pipeline::avro;
 use crate::pipeline::block_on_pipeline_future;
 use crate::pipeline::count_rows;
 use crate::pipeline::display::DisplayWriterStep;
 use crate::pipeline::schema::get_schema_fields;
 use crate::pipeline::schema::print_schema_fields;
 use crate::pipeline::schema::schema_fields_from_arrow;
-use crate::pipeline::write::WriteArgs;
-use crate::pipeline::write::write_record_batches_from_reader;
 
 /// File output vs stdout display; the tail of [`DataFramePipeline`] after read/select/slice.
 pub enum DataFrameSink {
@@ -171,7 +166,7 @@ impl DataFramePipeline {
                     json_pretty,
                     progress,
                 } => {
-                    let mut source = dataframe_pipeline_prepare_source(
+                    let source = dataframe_pipeline_prepare_source(
                         input_path,
                         input_file_type,
                         select,
@@ -182,38 +177,15 @@ impl DataFramePipeline {
                     )
                     .await?;
 
-                    let write_args = WriteArgs {
-                        path: output_path.clone(),
-                        file_type: output_file_type,
-                        sparse: Some(sparse),
-                        pretty: Some(json_pretty),
-                    };
-
-                    match output_file_type {
-                        FileType::Parquet | FileType::Csv | FileType::Json => {
-                            write_dataframe_pipeline_output(source, write_args).await?;
-                        }
-                        FileType::Avro => {
-                            avro::DataframeAvroWriter { args: write_args }
-                                .execute(Box::new(source))
-                                .await?;
-                        }
-                        FileType::Orc | FileType::Xlsx | FileType::Yaml => {
-                            let df = source.df.take().ok_or_else(|| {
-                                Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
-                            })?;
-                            let batches = df.collect().await?;
-                            let inner = VecRecordBatchReader::new(batches);
-                            let mut reader = ProgressVecRecordBatchReader { inner, progress };
-                            write_record_batches_from_reader(
-                                &mut reader,
-                                &output_path,
-                                output_file_type,
-                                sparse,
-                                json_pretty,
-                            )?;
-                        }
-                    }
+                    write_dataframe_to_path(
+                        source,
+                        output_path,
+                        output_file_type,
+                        sparse,
+                        json_pretty,
+                        progress,
+                    )
+                    .await?;
                     Ok::<(), Error>(())
                 }
                 DataFrameSink::Display {

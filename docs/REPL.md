@@ -105,17 +105,6 @@ let data = read("input.parquet")
 head(data, 10)
 ```
 
-### Variables
-
-Variables in FLT are bindings (labels) attached to underlying values. They differ from variables in conventional languages in that the values they point to are _immutable_ and cannot change. Variables can only be reassigned.
-
-```flt
-u = read("users.avro")
-p = read("project.avro")
-j = u |> join(p, on: p.owner_id = u.id)
-select(j, id: u.id, user_name: u.name, project_name: p.name)
-```
-
 ## datu Functions
 
 For the following functions, note that the function signatures and types provided are for illustration purposes only. All functions in `datu` are internally implemented in Rust, and the actual types aren't very helpful for the purpose of documenting the REPL.

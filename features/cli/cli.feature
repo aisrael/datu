@@ -13,6 +13,7 @@ Feature: CLI
       Usage: datu [COMMAND]
 
       Commands:
+        concat   concatenate multiple input files into a single output file
         convert  convert between file formats
         count    return the number of rows in a file
         diff     compare two data files row-by-row
@@ -37,6 +38,7 @@ Feature: CLI
       Usage: datu [COMMAND]
 
       Commands:
+        concat   concatenate multiple input files into a single output file
         convert  convert between file formats
         count    return the number of rows in a file
         diff     compare two data files row-by-row

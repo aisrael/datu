@@ -1807,6 +1807,7 @@ dependencies = [
  "flt",
  "futures",
  "gherkin",
+ "glob",
  "hashlink",
  "indicatif",
  "log",

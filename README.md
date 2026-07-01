@@ -32,13 +32,13 @@ cargo install --git https://github.com/aisrael/datu
 | JSON (pretty)                 |  —   |   —   |    ✓    |
 | YAML                          |  —   |   —   |    ✓    |
 
-- **Read** — Input file formats for `convert`, `count`, `schema`, `head`, and `tail`.
-- **Write** — Output file formats for `convert`.
+- **Read** — Input file formats for `concat`, `convert`, `count`, `schema`, `head`, and `tail`.
+- **Write** — Output file formats for `concat` and `convert`.
 - **Display** — Output format when printing to stdout (`schema`, `head`, `tail` via `--output`: csv, json, json-pretty, yaml).
 
-**File type detection:** By default, file types are inferred from extensions. Use `--input <TYPE>` (`-I`) to override input format detection, and `--output <TYPE>` (`-O`, `convert` only) to override output format detection. Valid types: `avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`.
+**File type detection:** By default, file types are inferred from extensions. Use `--input <TYPE>` (`-I`) to override input format detection, and `--output <TYPE>` (`-O`, `concat` and `convert` only) to override output format detection. Valid types: `avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`.
 
-**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `convert`, `count`, `schema`, `head`, and `tail`.
+**CSV options:** When reading CSV files, the `--input-headers` option controls whether the first row is treated as column names. Omitted or `--input-headers` means true (header present); `--input-headers=false` for headerless CSV. Applies to `concat`, `convert`, `count`, `schema`, `head`, and `tail`.
 
 Usage
 =====
@@ -61,6 +61,48 @@ datu
 Perform the same conversion and column filtering.
 
 ## Commands
+
+### `concat`
+
+Concatenate two or more input files into a single output file. The last positional argument is the output file; every argument before it is an input file path or shell-style glob pattern (e.g. `part*.avro`). Input and output formats are inferred from file extensions, or can be specified explicitly with `--input` and `--output`. All inputs must have a compatible (union-able) schema.
+
+**Supported input formats:** Parquet (`.parquet`, `.parq`), Avro (`.avro`), CSV (`.csv`), JSON (`.json`), ORC (`.orc`).
+
+**Supported output formats:** CSV (`.csv`), JSON (`.json`), Parquet (`.parquet`, `.parq`), Avro (`.avro`), ORC (`.orc`), XLSX (`.xlsx`).
+
+**Usage (CLI):**
+
+```sh
+datu concat <INPUT>... <OUTPUT> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-I`, `--input <TYPE>` | Input file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection for every input. |
+| `-O`, `--output <TYPE>` | Output file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
+| `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
+| `--json-pretty` | When concatenating to JSON, format output with indentation and newlines. Ignored for other output formats. |
+| `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
+
+**Examples:**
+
+```sh
+# Concatenate explicit files into one Parquet file
+datu concat part0.avro part1.avro part3.avro all.parquet
+
+# Concatenate using a glob pattern
+datu concat "part*.avro" all.parquet
+
+# Mix literal paths and globs
+datu concat 2024-*.csv late-arrival.csv all-2024.csv
+
+# Concatenate Parquet files into a single CSV
+datu concat batch1.parquet batch2.parquet combined.csv
+```
+
+---
 
 ### `convert`
 

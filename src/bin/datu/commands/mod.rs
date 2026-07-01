@@ -1,11 +1,13 @@
-//! CLI command implementations (convert, count, diff, head/tail/sample, schema).
+//! CLI command implementations (concat, convert, count, diff, head/tail/sample, schema).
 
+pub mod concat;
 pub mod convert;
 mod count;
 pub mod diff;
 mod heads_or_tails;
 mod schema;
 
+pub use concat::concat;
 pub use convert::convert;
 pub use count::count;
 pub use diff::diff;

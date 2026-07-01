@@ -1,11 +1,13 @@
 //! The `pipeline` module is the core of the datu crate.
 
 pub mod avro;
+pub mod concat;
 pub mod csv;
 pub mod dataframe;
 
 pub use avro::DataframeAvroWriter;
 pub use avro::RecordBatchAvroWriter;
+pub use concat::concat_files;
 pub use csv::DataframeCsvWriter;
 pub use csv::RecordBatchCsvWriter;
 pub use dataframe::DataFramePipeline;

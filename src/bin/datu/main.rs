@@ -6,6 +6,7 @@ use clap::Subcommand;
 mod commands;
 
 use commands::HeadsOrTailsCmd;
+use commands::concat;
 use commands::convert;
 use commands::count;
 use commands::diff;
@@ -13,6 +14,7 @@ use commands::heads_or_tails;
 use commands::schema;
 use datu::cli::repl::Repl;
 
+use crate::commands::concat::ConcatArgs;
 use crate::commands::convert::ConvertArgs;
 use crate::commands::diff::DiffArgs;
 
@@ -28,6 +30,8 @@ struct Cli {
 /// The `datu` CLI top-level command
 #[derive(Subcommand)]
 pub enum Command {
+    /// concatenate multiple input files into a single output file
+    Concat(ConcatArgs),
     /// convert between file formats
     Convert(ConvertArgs),
     /// return the number of rows in a file
@@ -52,6 +56,7 @@ async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => run_repl().await,
+        Some(Command::Concat(args)) => concat(args).await,
         Some(Command::Convert(args)) => convert(args).await,
         Some(Command::Count(args)) => count(args).await,
         Some(Command::Diff(args)) => diff(args).await,

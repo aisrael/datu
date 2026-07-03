@@ -715,4 +715,4 @@ datu convert input.parquet output.yaml --select id,name,email
 
 constructs a pipeline that's composed of:
   - a (DataFrame) Parquet reader step that reads the `input.parquet` file and filters for only the `id`, `name`, and `email` columns, that chains to
-  - a YAML writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.csv`
+  - a YAML writer step, that writes the `id`, `name`, and `email` columns from `input.parquet` to `output.yaml`

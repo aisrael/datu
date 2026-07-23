@@ -23,3 +23,6 @@ target/
 .DS_Store
 
 /tmp/
+
+# wasm-pack build output (generated via `wasm-pack build`, not checked in)
+/crates/*/pkg/

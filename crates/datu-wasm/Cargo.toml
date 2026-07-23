@@ -1,0 +1,35 @@
+[package]
+name = "datu-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WASM bindings for datu's Parquet/Avro/CSV/JSON inspection and conversion"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# chrono-tz is needed to format named timezones (e.g. "UTC") when writing timestamp
+# columns to CSV/JSON; it's a pure-Rust static tz database, so it's still wasm32-safe.
+arrow = { version = "57.2", features = ["chrono-tz"] }
+# zstd/bzip2/xz codecs wrap C libraries (zstd-sys/bzip2-sys/liblzma-sys) that need a
+# wasm32-capable C toolchain to build; keep only the pure-Rust codecs (deflate, snappy)
+# so avro reading/writing works on wasm32-unknown-unknown without a C cross-compiler.
+arrow-avro = { version = "57.2", default-features = false, features = ["deflate", "snappy"] }
+# Same rationale: zstd (default feature) wraps zstd-sys; disable it and keep the other
+# (pure-Rust) codecs so parquet reading/writing works without a C cross-compiler.
+parquet = { version = "57.2", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "base64", "simdutf8"] }
+bytes = "1"
+# rand (via arrow-avro) and ahash (via arrow, transitively) each pull in a different
+# semver-major getrandom; both need their wasm backend enabled explicitly for
+# wasm32-unknown-unknown (see .cargo/config.toml for the matching RUSTFLAGS cfg).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+serde_json = "1.0"
+thiserror = "2.0"
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]

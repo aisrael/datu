@@ -56,7 +56,11 @@ pub fn read_json(bytes: &[u8]) -> Result<Vec<RecordBatch>, WasmError> {
 }
 
 /// Writes record batches as a JSON array (compact or pretty).
-pub fn write_json(batches: &[RecordBatch], sparse: bool, pretty: bool) -> Result<Vec<u8>, WasmError> {
+pub fn write_json(
+    batches: &[RecordBatch],
+    sparse: bool,
+    pretty: bool,
+) -> Result<Vec<u8>, WasmError> {
     let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
     let mut compact = Vec::new();
     let builder = WriterBuilder::new().with_explicit_nulls(!sparse);

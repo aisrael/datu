@@ -54,10 +54,62 @@ pub enum Command {
     Version,
 }
 
+/// Top-level subcommand names that are read-only queries; everything else listed
+/// under the top-level `Commands:` help is treated as a mutating/creating command.
+const QUERY_COMMANDS: &[&str] = &["count", "diff", "head", "sample", "tail", "schema"];
+
+/// Builds the top-level `--help` text, splitting clap's default flat `Commands:`
+/// listing into "Queries:" and "Commands:" sections based on [`QUERY_COMMANDS`].
+fn grouped_help(cmd: &clap::Command) -> String {
+    let mut plain = cmd.clone();
+    plain = plain.color(clap::ColorChoice::Never);
+    let rendered = plain.render_help().to_string();
+
+    let lines: Vec<&str> = rendered.lines().collect();
+    let Some(heading_idx) = lines.iter().position(|line| *line == "Commands:") else {
+        return rendered;
+    };
+    let block_end = lines[heading_idx + 1..]
+        .iter()
+        .position(|line| line.trim().is_empty())
+        .map(|offset| heading_idx + 1 + offset)
+        .unwrap_or(lines.len());
+    let block = &lines[heading_idx + 1..block_end];
+
+    let mut queries = Vec::new();
+    let mut commands = Vec::new();
+    for line in block {
+        let name = line.split_whitespace().next().unwrap_or("");
+        if QUERY_COMMANDS.contains(&name) {
+            queries.push(*line);
+        } else {
+            commands.push(*line);
+        }
+    }
+
+    let mut out: Vec<&str> = Vec::new();
+    out.extend_from_slice(&lines[..heading_idx]);
+    out.push("Queries:");
+    out.extend_from_slice(&queries);
+    out.push("");
+    out.push("Commands:");
+    out.extend_from_slice(&commands);
+    out.extend_from_slice(&lines[block_end..]);
+
+    out.join("\n")
+}
+
 /// Application entry point; parses CLI args and dispatches to the appropriate command.
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let cli = Cli::parse();
+    use clap::{CommandFactory, FromArgMatches};
+
+    let mut cmd = Cli::command();
+    let help_text = grouped_help(&cmd);
+    cmd = cmd.override_help(help_text);
+    let matches = cmd.get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
+
     match cli.command {
         None => run_repl().await,
         Some(Command::Concat(args)) => concat(args).await,

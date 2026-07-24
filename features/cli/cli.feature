@@ -12,15 +12,17 @@ Feature: CLI
 
       Usage: datu [COMMAND]
 
-      Commands:
-        concat   concatenate multiple input files into a single output file
-        convert  convert between file formats
+      Queries:
         count    return the number of rows in a file
         diff     compare two data files row-by-row
         head     print the first n lines of a file
         sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
+
+      Commands:
+        concat   concatenate multiple input files into a single output file
+        convert  convert between file formats
         split    split a large input file into multiple output files of at most N rows each
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)
@@ -38,15 +40,17 @@ Feature: CLI
 
       Usage: datu [COMMAND]
 
-      Commands:
-        concat   concatenate multiple input files into a single output file
-        convert  convert between file formats
+      Queries:
         count    return the number of rows in a file
         diff     compare two data files row-by-row
         head     print the first n lines of a file
         sample   sample n random rows from a file
         tail     print the last n lines of a file
         schema   display the schema of a file
+
+      Commands:
+        concat   concatenate multiple input files into a single output file
+        convert  convert between file formats
         split    split a large input file into multiple output files of at most N rows each
         version  print the datu version
         help     Print this message or the help of the given subcommand(s)

@@ -7,6 +7,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::error::WasmError;
 use crate::formats;
+use crate::metadata::MetadataEntry;
 use crate::schema::SchemaField;
 
 #[derive(Clone, Copy)]
@@ -73,6 +74,14 @@ fn schema_any(
     }
 }
 
+fn metadata_any(bytes: &[u8], format: Format) -> Result<Vec<MetadataEntry>, WasmError> {
+    match format {
+        Format::Parquet => formats::parquet::parquet_metadata(Bytes::copy_from_slice(bytes)),
+        Format::Avro => formats::avro::avro_metadata(bytes),
+        Format::Csv | Format::Json => Ok(Vec::new()),
+    }
+}
+
 fn read_any(
     bytes: &[u8],
     format: Format,
@@ -115,6 +124,16 @@ pub fn inspect_schema(bytes: &[u8], format: &str, options: JsValue) -> Result<Js
     serde_wasm_bindgen::to_value(&fields).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Reads key/value metadata from a Parquet or Avro file (as bytes) and returns it as a JS
+/// array of `{ key, value }` objects. Returns an empty array for CSV/JSON, or when the file
+/// has no key/value metadata.
+#[wasm_bindgen(js_name = inspectMetadata)]
+pub fn inspect_metadata(bytes: &[u8], format: &str) -> Result<JsValue, JsError> {
+    let format = Format::parse(format)?;
+    let entries = metadata_any(bytes, format)?;
+    serde_wasm_bindgen::to_value(&entries).map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Converts file bytes from one format to another. `from_format`/`to_format` are one of
 /// `"parquet"`, `"avro"`, `"csv"`, `"json"`.
 #[wasm_bindgen]
@@ -145,6 +164,19 @@ mod tests {
         let options = ConvertOptions::default();
         let fields = schema_any(&bytes, Format::Parquet, &options).unwrap();
         assert_eq!(fields.len(), 6);
+    }
+
+    #[test]
+    fn test_metadata_any_parquet() {
+        let bytes = fixture_bytes();
+        let entries = metadata_any(&bytes, Format::Parquet).unwrap();
+        assert!(entries.iter().any(|e| e.key == "pandas"));
+    }
+
+    #[test]
+    fn test_metadata_any_csv_json_empty() {
+        assert!(metadata_any(&[], Format::Csv).unwrap().is_empty());
+        assert!(metadata_any(&[], Format::Json).unwrap().is_empty());
     }
 
     #[test]

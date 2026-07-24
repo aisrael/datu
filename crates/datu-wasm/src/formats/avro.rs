@@ -11,6 +11,7 @@ use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
 
 use crate::error::WasmError;
+use crate::metadata::MetadataEntry;
 use crate::schema::SchemaField;
 use crate::schema::schema_fields_from_arrow;
 
@@ -18,6 +19,21 @@ use crate::schema::schema_fields_from_arrow;
 pub fn avro_schema(bytes: &[u8]) -> Result<Vec<SchemaField>, WasmError> {
     let reader = ReaderBuilder::new().build(Cursor::new(bytes))?;
     Ok(schema_fields_from_arrow(reader.schema().as_ref()))
+}
+
+/// Extracts OCF header metadata from Avro file bytes, excluding the `avro.schema` entry
+/// (a large duplicate of what the schema-inspection functions already return).
+pub fn avro_metadata(bytes: &[u8]) -> Result<Vec<MetadataEntry>, WasmError> {
+    let reader = ReaderBuilder::new().build(Cursor::new(bytes))?;
+    Ok(reader
+        .avro_header()
+        .metadata()
+        .filter(|(key, _)| *key != b"avro.schema")
+        .map(|(key, value)| MetadataEntry {
+            key: String::from_utf8_lossy(key).into_owned(),
+            value: Some(String::from_utf8_lossy(value).into_owned()),
+        })
+        .collect())
 }
 
 /// Reads all record batches from Avro file bytes.
@@ -131,5 +147,12 @@ mod tests {
         let batches = read_avro(&bytes).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 1000);
+    }
+
+    #[test]
+    fn test_metadata_excludes_avro_schema() {
+        let bytes = std::fs::read("../../fixtures/userdata5.avro").unwrap();
+        let entries = avro_metadata(&bytes).unwrap();
+        assert!(entries.iter().all(|e| e.key != "avro.schema"));
     }
 }

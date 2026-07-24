@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 pub mod api;
 pub mod error;
 pub mod formats;
+pub mod metadata;
 pub mod schema;
 
 #[wasm_bindgen(start)]

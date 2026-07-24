@@ -10,6 +10,7 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::schema::types::ColumnDescriptor;
 
 use crate::error::WasmError;
+use crate::metadata::MetadataEntry;
 use crate::schema::SchemaField;
 
 fn column_to_schema_field(column: &Arc<ColumnDescriptor>) -> SchemaField {
@@ -45,6 +46,23 @@ pub fn parquet_schema(bytes: Bytes) -> Result<Vec<SchemaField>, WasmError> {
         .iter()
         .map(column_to_schema_field)
         .collect())
+}
+
+/// Extracts key/value metadata from Parquet file bytes (metadata only, no data read).
+pub fn parquet_metadata(bytes: Bytes) -> Result<Vec<MetadataEntry>, WasmError> {
+    let metadata = ParquetMetaDataReader::new().parse_and_finish(&bytes)?;
+    Ok(metadata
+        .file_metadata()
+        .key_value_metadata()
+        .map(|kvs| {
+            kvs.iter()
+                .map(|kv| MetadataEntry {
+                    key: kv.key.clone(),
+                    value: kv.value.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 /// Reads all record batches from Parquet file bytes.
@@ -110,5 +128,24 @@ mod tests {
         let batches = read_parquet(Bytes::from(bytes)).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
+    }
+
+    #[test]
+    fn test_metadata_from_fixture() {
+        let bytes = std::fs::read("../../fixtures/table.parquet").unwrap();
+        let entries = parquet_metadata(Bytes::from(bytes)).unwrap();
+        let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+        assert!(keys.contains(&"pandas"));
+        assert!(keys.contains(&"ARROW:schema"));
+    }
+
+    #[test]
+    fn test_metadata_includes_arrow_schema_for_written_file() {
+        // ArrowWriter embeds an "ARROW:schema" key by default (round-trip support), even
+        // when the caller supplies no custom key/value metadata.
+        let batch = make_test_batch();
+        let bytes = write_parquet(std::slice::from_ref(&batch), batch.schema()).unwrap();
+        let entries = parquet_metadata(Bytes::from(bytes)).unwrap();
+        assert!(entries.iter().any(|e| e.key == "ARROW:schema"));
     }
 }

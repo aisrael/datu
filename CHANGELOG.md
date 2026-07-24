@@ -1,5 +1,28 @@
 # datu Version Notes
 
+## Unreleased
+
+### Highlights
+
+- **`datu-wasm` crate**: New workspace member compiling schema-inspection, metadata-inspection,
+  and format-conversion (Parquet/Avro/CSV/JSON) to `wasm32-unknown-unknown`, for use in the
+  browser via `wasm-bindgen`.
+
+### Improvements
+
+- **WASM bindings**
+  - `inspectSchema`, `inspectMetadata`, and `convert` exported for Parquet, Avro, CSV, and JSON.
+  - Pure-Rust codec/feature selection (no C toolchain needed) so the crate builds cleanly for
+    `wasm32-unknown-unknown` via `wasm-pack`.
+
+- **Examples**
+  - `examples/verification/` — smoke-tests a `pkg/` build against a fixed fixture file.
+  - `examples/conversion/` — drop in a `.parquet`/`.avro` file and inspect it via a tabbed
+    Metadata / Schema / Preview viewer, with paginated preview rows, entirely client-side.
+
+- **Docs**
+  - README documents the WASM bindings API and both browser examples.
+
 ## v0.3.6
 
 ### Highlights

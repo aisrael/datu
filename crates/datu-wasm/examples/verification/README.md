@@ -24,5 +24,5 @@ Browsers block `fetch()` on `file://` URLs, so this must be served over HTTP. Fr
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000/crates/datu-wasm/examples/browser/index.html> and click
+Then open <http://localhost:8000/crates/datu-wasm/examples/verification/index.html> and click
 **Run verification**.

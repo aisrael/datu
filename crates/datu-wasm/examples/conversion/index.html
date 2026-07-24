@@ -220,10 +220,10 @@
 
   <div class="tabs-wrap" id="tabs-wrap">
     <div class="tab-list" role="tablist">
-      <button class="tab-btn" id="tab-btn-metadata" role="tab" aria-selected="true" aria-controls="tab-panel-metadata">
+      <button class="tab-btn" id="tab-btn-metadata" role="tab" aria-selected="false" aria-controls="tab-panel-metadata">
         Metadata
       </button>
-      <button class="tab-btn" id="tab-btn-schema" role="tab" aria-selected="false" aria-controls="tab-panel-schema">
+      <button class="tab-btn" id="tab-btn-schema" role="tab" aria-selected="true" aria-controls="tab-panel-schema">
         Schema
       </button>
       <button class="tab-btn" id="tab-btn-preview" role="tab" aria-selected="false" aria-controls="tab-panel-preview">
@@ -231,10 +231,10 @@
       </button>
     </div>
 
-    <div class="tab-panel active" id="tab-panel-metadata" role="tabpanel">
+    <div class="tab-panel" id="tab-panel-metadata" role="tabpanel">
       <div class="inner" id="metadata-content"></div>
     </div>
-    <div class="tab-panel" id="tab-panel-schema" role="tabpanel">
+    <div class="tab-panel active" id="tab-panel-schema" role="tabpanel">
       <div class="inner" id="schema-content"></div>
     </div>
     <div class="tab-panel" id="tab-panel-preview" role="tabpanel">
@@ -453,7 +453,7 @@
     fileNameEl.textContent = file.name;
     fileSizeChip.textContent = formatBytes(file.size);
     tabsWrap.classList.add("visible");
-    selectTab("metadata");
+    selectTab("schema");
 
     try {
       const entries = inspectMetadata(bytes, format);

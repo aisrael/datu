@@ -177,6 +177,18 @@
   .pagination button:disabled { opacity: 0.4; cursor: default; }
   .pagination button:not(:disabled):hover { border-color: var(--accent); }
 
+  .convert-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; padding: 0.25rem 0; }
+  .convert-btn {
+    display: flex; align-items: center; gap: 0.55rem; font-family: var(--font-ui);
+    font-size: 0.88rem; font-weight: 600; color: var(--text);
+    background: var(--panel-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.7rem 1.1rem; cursor: pointer;
+  }
+  .convert-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .convert-btn .icon { font-size: 1rem; }
+  .convert-status { margin: 0.85rem 0 0; font-size: 0.85rem; color: var(--muted); }
+  .convert-status.error { color: var(--bad); }
+
   footer.note {
     color: var(--muted); font-size: 0.8rem; line-height: 1.6; border-top: 1px solid var(--border); padding-top: 1.1rem;
   }
@@ -229,6 +241,9 @@
       <button class="tab-btn" id="tab-btn-preview" role="tab" aria-selected="false" aria-controls="tab-panel-preview">
         Preview
       </button>
+      <button class="tab-btn" id="tab-btn-convert" role="tab" aria-selected="false" aria-controls="tab-panel-convert">
+        Convert
+      </button>
     </div>
 
     <div class="tab-panel" id="tab-panel-metadata" role="tabpanel">
@@ -239,6 +254,21 @@
     </div>
     <div class="tab-panel" id="tab-panel-preview" role="tabpanel">
       <div class="inner" id="preview-content"></div>
+    </div>
+    <div class="tab-panel" id="tab-panel-convert" role="tabpanel">
+      <div class="inner">
+        <div class="convert-actions">
+          <button type="button" class="convert-btn" id="convert-download-parquet">
+            <span class="icon">&#8681;</span>
+            <span>Download as Parquet</span>
+          </button>
+          <button type="button" class="convert-btn" id="convert-download-avro">
+            <span class="icon">&#8681;</span>
+            <span>Download as Avro</span>
+          </button>
+        </div>
+        <p class="convert-status" id="convert-status"></p>
+      </div>
     </div>
   </div>
 
@@ -264,13 +294,17 @@
   const errorBanner = document.getElementById("error-banner");
   const tabsWrap = document.getElementById("tabs-wrap");
 
-  const tabs = ["metadata", "schema", "preview"];
+  const tabs = ["metadata", "schema", "preview", "convert"];
   const tabButtons = Object.fromEntries(tabs.map((id) => [id, document.getElementById(`tab-btn-${id}`)]));
   const tabPanels = Object.fromEntries(tabs.map((id) => [id, document.getElementById(`tab-panel-${id}`)]));
 
   let previewRows = [];
   let previewPage = 0;
   let previewRowHeightPx = null;
+
+  let currentBytes = null;
+  let currentFormat = null;
+  let currentBaseName = null;
 
   function lockPreviewHeight(container) {
     const table = container.querySelector("table.data-table");
@@ -437,6 +471,43 @@
       `<p class="empty-state">Failed to load: ${escapeHtml(err && err.message ? err.message : err)}</p>`;
   }
 
+  function downloadName(targetFormat) {
+    const stripped = currentBaseName.replace(/\.(parquet|parq|avro)$/i, "");
+    return `${stripped}.${targetFormat}`;
+  }
+
+  function triggerDownload(bytes, filename) {
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function setConvertStatus(message, isError) {
+    const status = document.getElementById("convert-status");
+    status.textContent = message;
+    status.classList.toggle("error", Boolean(isError));
+  }
+
+  function downloadAs(targetFormat) {
+    try {
+      const bytes = convert(currentBytes, currentFormat, targetFormat, undefined);
+      const filename = downloadName(targetFormat);
+      triggerDownload(bytes, filename);
+      setConvertStatus(`Downloaded ${filename}.`, false);
+    } catch (err) {
+      setConvertStatus(`Conversion failed: ${err && err.message ? err.message : err}`, true);
+    }
+  }
+
+  document.getElementById("convert-download-parquet").addEventListener("click", () => downloadAs("parquet"));
+  document.getElementById("convert-download-avro").addEventListener("click", () => downloadAs("avro"));
+
   async function loadFile(file) {
     clearError();
     const format = detectFormat(file.name);
@@ -446,6 +517,11 @@
     }
 
     const bytes = new Uint8Array(await file.arrayBuffer());
+
+    currentBytes = bytes;
+    currentFormat = format;
+    currentBaseName = file.name;
+    setConvertStatus("", false);
 
     dropzone.classList.add("hidden");
     fileBar.classList.add("visible");
@@ -488,6 +564,10 @@
     previewRows = [];
     previewPage = 0;
     previewRowHeightPx = null;
+    currentBytes = null;
+    currentFormat = null;
+    currentBaseName = null;
+    setConvertStatus("", false);
   }
 
   dropzone.addEventListener("click", () => fileInput.click());

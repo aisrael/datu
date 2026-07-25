@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>datu-wasm — conversion example</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #f4f6f5;
+    --panel: #ffffff;
+    --panel-raised: #ffffff;
+    --text: #171b1e;
+    --muted: #5c6670;
+    --border: #dde3e6;
+    --accent: #1f8a7d;
+    --accent-soft: #e6f4ec;
+    --good: #2f8f5d;
+    --good-soft: #e6f4ec;
+    --warn: #a9760f;
+    --warn-soft: #faf0dc;
+    --bad: #c03f2c;
+    --bad-soft: #fbe9e5;
+    --shadow: 0 1px 2px rgba(23, 27, 30, 0.06), 0 8px 24px -12px rgba(23, 27, 30, 0.12);
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161b;
+      --panel: #1a1f26;
+      --panel-raised: #1f252c;
+      --text: #e7ebee;
+      --muted: #8793a0;
+      --border: #262c34;
+      --accent: #55c2b5;
+      --accent-soft: #163530;
+      --good: #5fbf8d;
+      --good-soft: #163526;
+      --warn: #e0b04d;
+      --warn-soft: #382c14;
+      --bad: #e2705d;
+      --bad-soft: #3a1f1a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161b; --panel: #1a1f26; --panel-raised: #1f252c; --text: #e7ebee; --muted: #8793a0;
+    --border: #262c34; --accent: #55c2b5; --accent-soft: #163530; --good: #5fbf8d; --good-soft: #163526;
+    --warn: #e0b04d; --warn-soft: #382c14; --bad: #e2705d; --bad-soft: #3a1f1a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6f5; --panel: #ffffff; --panel-raised: #ffffff; --text: #171b1e; --muted: #5c6670;
+    --border: #dde3e6; --accent: #1f8a7d; --accent-soft: #e6f4ec; --good: #2f8f5d; --good-soft: #e6f4ec;
+    --warn: #a9760f; --warn-soft: #faf0dc; --bad: #c03f2c; --bad-soft: #fbe9e5;
+    --shadow: 0 1px 2px rgba(23, 27, 30, 0.06), 0 8px 24px -12px rgba(23, 27, 30, 0.12);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-ui); }
+  body { padding: 2.5rem 1.25rem 4rem; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  .page { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.75rem; }
+
+  header.masthead { display: flex; flex-direction: column; gap: 0.6rem; }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1 { font-size: 1.7rem; line-height: 1.2; margin: 0; font-weight: 650; text-wrap: balance; }
+  .dek { margin: 0; color: var(--muted); font-size: 0.95rem; max-width: 62ch; line-height: 1.55; }
+
+  /* Upload dropzone */
+  .dropzone {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.6rem; text-align: center; padding: 3rem 1.5rem; border-radius: 12px;
+    border: 2px dashed var(--border); background: var(--panel); box-shadow: var(--shadow);
+    cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); outline: none; }
+  .dropzone.dragover { border-color: var(--accent); background: var(--accent-soft); }
+  .dropzone .icon { font-size: 1.8rem; }
+  .dropzone strong { font-size: 0.98rem; font-weight: 600; }
+  .dropzone span.hint { color: var(--muted); font-size: 0.82rem; }
+  .dropzone input[type="file"] { display: none; }
+
+  .dropzone.hidden { display: none; }
+
+  /* Loaded-file summary bar */
+  .file-bar {
+    display: none; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    padding: 0.85rem 1.1rem; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow);
+  }
+  .file-bar.visible { display: flex; }
+  .file-bar .file-info { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+  .file-bar .file-name {
+    font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chip {
+    font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.02em; padding: 0.2rem 0.55rem;
+    border-radius: 999px; white-space: nowrap; background: var(--border); color: var(--muted); flex: none;
+  }
+  .chip.accent { background: var(--accent-soft); color: var(--accent); }
+  button.link-btn {
+    font-family: var(--font-ui); font-size: 0.82rem; font-weight: 600; color: var(--accent);
+    background: none; border: none; cursor: pointer; padding: 0.3rem 0.1rem; flex: none;
+  }
+  button.link-btn:hover { text-decoration: underline; }
+
+  .error-banner {
+    display: none; padding: 0.8rem 1rem; border-radius: 8px; background: var(--bad-soft);
+    color: var(--bad); font-size: 0.85rem; border: 1px solid var(--bad);
+  }
+  .error-banner.visible { display: block; }
+
+  /* Tabs */
+  .tabs-wrap { display: none; flex-direction: column; gap: 0; }
+  .tabs-wrap.visible { display: flex; }
+  .tab-list { display: flex; gap: 0.3rem; margin-bottom: -1px; position: relative; z-index: 1; }
+  .tab-btn {
+    font-family: var(--font-ui); font-size: 0.86rem; font-weight: 600; color: var(--muted);
+    background: var(--panel-raised); border: 1px solid var(--border);
+    border-radius: 8px 8px 0 0; padding: 0.6rem 1rem; cursor: pointer;
+  }
+  .tab-btn[aria-selected="true"] { color: var(--accent); background: var(--panel); border-bottom-color: var(--panel); }
+  .tab-btn:hover { color: var(--text); }
+
+  .tab-panel {
+    display: none; padding: 1.1rem 0 0; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 0 10px 10px 10px; box-shadow: var(--shadow); position: relative;
+  }
+  .tab-panel.active { display: block; }
+  .tab-panel .inner { padding: 0 1.1rem 1.1rem; }
+
+  .empty-state { color: var(--muted); font-size: 0.88rem; padding: 1rem 0; }
+
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table.data-table { border-collapse: collapse; width: 100%; font-size: 0.83rem; }
+  table.data-table th, table.data-table td {
+    text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.data-table th {
+    font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--muted); background: var(--panel-raised); position: sticky; top: 0;
+  }
+  table.data-table td.value-cell {
+    font-family: var(--font-mono); max-width: 32rem; overflow-x: auto; white-space: pre-wrap;
+    word-break: break-word;
+  }
+  table.data-table td.truncate-cell {
+    font-family: var(--font-mono); max-width: 16rem; overflow: hidden; text-overflow: ellipsis;
+  }
+  table.data-table tbody tr:last-child td { border-bottom: none; }
+
+  /* Fixed layout keeps column widths and panel height stable across pages of the
+     same file — otherwise auto layout resizes columns/rows to fit each page's content. */
+  #tab-panel-preview table.data-table { table-layout: fixed; }
+  table.data-table td.nullable-yes { color: var(--good); }
+  table.data-table td.nullable-no { color: var(--muted); }
+
+  .pagination {
+    display: flex; align-items: center; justify-content: center; gap: 0.85rem;
+    margin-top: 0.85rem; font-size: 0.82rem; color: var(--muted);
+  }
+  .pagination button {
+    font-family: var(--font-ui); font-size: 0.8rem; font-weight: 600; color: var(--text);
+    background: var(--panel-raised); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.35rem 0.7rem; cursor: pointer;
+  }
+  .pagination button:disabled { opacity: 0.4; cursor: default; }
+  .pagination button:not(:disabled):hover { border-color: var(--accent); }
+
+  .convert-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; padding: 0.25rem 0; }
+  .convert-btn {
+    display: flex; align-items: center; gap: 0.55rem; font-family: var(--font-ui);
+    font-size: 0.88rem; font-weight: 600; color: var(--text);
+    background: var(--panel-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.7rem 1.1rem; cursor: pointer;
+  }
+  .convert-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .convert-btn .icon { font-size: 1rem; }
+  .convert-status { margin: 0.85rem 0 0; font-size: 0.85rem; color: var(--muted); }
+  .convert-status.error { color: var(--bad); }
+
+  footer.note {
+    color: var(--muted); font-size: 0.8rem; line-height: 1.6; border-top: 1px solid var(--border); padding-top: 1.1rem;
+  }
+  footer.note code {
+    font-family: var(--font-mono); font-size: 0.78rem; background: var(--panel-raised);
+    border: 1px solid var(--border); padding: 0.05rem 0.35rem; border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">datu-wasm &middot; conversion example</div>
+    <h1>Inspect a Parquet or Avro file in the browser</h1>
+    <p class="dek">
+      Drop in a <code>.parquet</code> or <code>.avro</code> file and inspect its embedded
+      metadata, schema, and a paginated preview of its rows &mdash; entirely client-side, via
+      the <code>datu-wasm</code> package built by <code>wasm-pack</code>. See
+      <code>crates/datu-wasm/examples/conversion/README.md</code> for how to build and serve
+      this.
+    </p>
+  </header>
+
+  <div class="error-banner" id="error-banner"></div>
+
+  <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload a Parquet or Avro file">
+    <div class="icon">&#128193;</div>
+    <strong>Drop a Parquet or Avro file here, or click to browse</strong>
+    <span class="hint">.parquet, .parq, or .avro</span>
+    <input type="file" id="file-input" accept=".parquet,.parq,.avro" />
+  </div>
+
+  <div class="file-bar" id="file-bar">
+    <div class="file-info">
+      <span class="chip accent" id="file-format-chip">&mdash;</span>
+      <span class="file-name" id="file-name">&mdash;</span>
+      <span class="chip" id="file-size-chip">&mdash;</span>
+    </div>
+    <button type="button" class="link-btn" id="choose-another">Choose a different file</button>
+  </div>
+
+  <div class="tabs-wrap" id="tabs-wrap">
+    <div class="tab-list" role="tablist">
+      <button class="tab-btn" id="tab-btn-metadata" role="tab" aria-selected="false" aria-controls="tab-panel-metadata">
+        Metadata
+      </button>
+      <button class="tab-btn" id="tab-btn-schema" role="tab" aria-selected="true" aria-controls="tab-panel-schema">
+        Schema
+      </button>
+      <button class="tab-btn" id="tab-btn-preview" role="tab" aria-selected="false" aria-controls="tab-panel-preview">
+        Preview
+      </button>
+      <button class="tab-btn" id="tab-btn-convert" role="tab" aria-selected="false" aria-controls="tab-panel-convert">
+        Convert
+      </button>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-metadata" role="tabpanel">
+      <div class="inner" id="metadata-content"></div>
+    </div>
+    <div class="tab-panel active" id="tab-panel-schema" role="tabpanel">
+      <div class="inner" id="schema-content"></div>
+    </div>
+    <div class="tab-panel" id="tab-panel-preview" role="tabpanel">
+      <div class="inner" id="preview-content"></div>
+    </div>
+    <div class="tab-panel" id="tab-panel-convert" role="tabpanel">
+      <div class="inner">
+        <div class="convert-actions">
+          <button type="button" class="convert-btn" id="convert-download-parquet">
+            <span class="icon">&#8681;</span>
+            <span>Download as Parquet</span>
+          </button>
+          <button type="button" class="convert-btn" id="convert-download-avro">
+            <span class="icon">&#8681;</span>
+            <span>Download as Avro</span>
+          </button>
+        </div>
+        <p class="convert-status" id="convert-status"></p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="note">
+    Built with <code>wasm-pack build crates/datu-wasm --target web --out-dir crates/datu-wasm/pkg</code>.
+    The preview tab converts the whole file to JSON client-side and paginates it in memory
+    &mdash; fine for this demo, not meant for huge files.
+  </footer>
+</div>
+
+<script type="module">
+  import init, { inspectSchema, inspectMetadata, convert } from "../../pkg/datu_wasm.js";
+
+  const PAGE_SIZE = 20;
+
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("file-input");
+  const fileBar = document.getElementById("file-bar");
+  const fileFormatChip = document.getElementById("file-format-chip");
+  const fileNameEl = document.getElementById("file-name");
+  const fileSizeChip = document.getElementById("file-size-chip");
+  const chooseAnother = document.getElementById("choose-another");
+  const errorBanner = document.getElementById("error-banner");
+  const tabsWrap = document.getElementById("tabs-wrap");
+
+  const tabs = ["metadata", "schema", "preview", "convert"];
+  const tabButtons = Object.fromEntries(tabs.map((id) => [id, document.getElementById(`tab-btn-${id}`)]));
+  const tabPanels = Object.fromEntries(tabs.map((id) => [id, document.getElementById(`tab-panel-${id}`)]));
+
+  let previewRows = [];
+  let previewPage = 0;
+  let previewRowHeightPx = null;
+
+  let currentBytes = null;
+  let currentFormat = null;
+  let currentBaseName = null;
+
+  function lockPreviewHeight(container) {
+    const table = container.querySelector("table.data-table");
+    const firstRow = table && table.querySelector("tbody tr");
+    if (!firstRow) return;
+    if (previewRowHeightPx === null) {
+      previewRowHeightPx = firstRow.getBoundingClientRect().height;
+    }
+    const thead = table.querySelector("thead");
+    const headerHeight = thead ? thead.getBoundingClientRect().height : 0;
+    const scroll = container.querySelector(".table-scroll");
+    if (scroll) {
+      scroll.style.minHeight = `${headerHeight + previewRowHeightPx * PAGE_SIZE}px`;
+    }
+  }
+
+  function detectFormat(filename) {
+    const lower = filename.toLowerCase();
+    if (lower.endsWith(".parquet") || lower.endsWith(".parq")) return "parquet";
+    if (lower.endsWith(".avro")) return "avro";
+    return null;
+  }
+
+  function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  function showError(message) {
+    errorBanner.textContent = message;
+    errorBanner.classList.add("visible");
+  }
+
+  function clearError() {
+    errorBanner.textContent = "";
+    errorBanner.classList.remove("visible");
+  }
+
+  function selectTab(id) {
+    for (const t of tabs) {
+      const isActive = t === id;
+      tabButtons[t].setAttribute("aria-selected", String(isActive));
+      tabPanels[t].classList.toggle("active", isActive);
+    }
+  }
+
+  for (const t of tabs) {
+    tabButtons[t].addEventListener("click", () => selectTab(t));
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+  }
+
+  function renderMetadata(entries) {
+    const container = document.getElementById("metadata-content");
+    if (!entries.length) {
+      container.innerHTML = `<p class="empty-state">No metadata found in this file.</p>`;
+      return;
+    }
+    const rows = entries
+      .map(
+        (e) => `<tr><td>${escapeHtml(e.key)}</td><td class="value-cell">${escapeHtml(e.value ?? "")}</td></tr>`
+      )
+      .join("");
+    container.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Key</th><th>Value</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderSchema(fields) {
+    const container = document.getElementById("schema-content");
+    if (!fields.length) {
+      container.innerHTML = `<p class="empty-state">No fields found.</p>`;
+      return;
+    }
+    const rows = fields
+      .map(
+        (f) => `<tr>
+          <td>${escapeHtml(f.name)}</td>
+          <td class="value-cell">${escapeHtml(f.data_type)}</td>
+          <td class="${f.nullable ? "nullable-yes" : "nullable-no"}">${f.nullable ? "yes" : "no"}</td>
+        </tr>`
+      )
+      .join("");
+    container.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Name</th><th>Data type</th><th>Nullable</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderPreviewPage() {
+    const container = document.getElementById("preview-content");
+    const total = previewRows.length;
+    const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    previewPage = Math.min(previewPage, pageCount - 1);
+
+    if (!total) {
+      container.innerHTML = `<p class="empty-state">No rows in this file.</p>`;
+      return;
+    }
+
+    const start = previewPage * PAGE_SIZE;
+    const pageRows = previewRows.slice(start, start + PAGE_SIZE);
+    const columns = Object.keys(pageRows[0]);
+
+    const head = columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+    const body = pageRows
+      .map((row) => {
+        const cells = columns
+          .map((c) => `<td class="truncate-cell">${escapeHtml(row[c] === null || row[c] === undefined ? "" : row[c])}</td>`)
+          .join("");
+        return `<tr>${cells}</tr>`;
+      })
+      .join("");
+
+    const end = Math.min(start + PAGE_SIZE, total);
+    const rangeText =
+      pageCount <= 1
+        ? `${total.toLocaleString()} of ${total.toLocaleString()}`
+        : `${(start + 1).toLocaleString()}..${end.toLocaleString()} of ${total.toLocaleString()}`;
+
+    const pagination = `
+      <div class="pagination">
+        <button type="button" id="preview-prev" ${previewPage === 0 ? "disabled" : ""}>Prev</button>
+        <span>${rangeText}</span>
+        <button type="button" id="preview-next" ${previewPage >= pageCount - 1 ? "disabled" : ""}>Next</button>
+      </div>`;
+
+    container.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>${head}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      ${pagination}`;
+
+    lockPreviewHeight(container);
+
+    document.getElementById("preview-prev").addEventListener("click", () => {
+      previewPage -= 1;
+      renderPreviewPage();
+    });
+    document.getElementById("preview-next").addEventListener("click", () => {
+      previewPage += 1;
+      renderPreviewPage();
+    });
+  }
+
+  function renderTabError(contentId, err) {
+    document.getElementById(contentId).innerHTML =
+      `<p class="empty-state">Failed to load: ${escapeHtml(err && err.message ? err.message : err)}</p>`;
+  }
+
+  function downloadName(targetFormat) {
+    const stripped = currentBaseName.replace(/\.(parquet|parq|avro)$/i, "");
+    return `${stripped}.${targetFormat}`;
+  }
+
+  function triggerDownload(bytes, filename) {
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function setConvertStatus(message, isError) {
+    const status = document.getElementById("convert-status");
+    status.textContent = message;
+    status.classList.toggle("error", Boolean(isError));
+  }
+
+  function downloadAs(targetFormat) {
+    try {
+      const bytes = convert(currentBytes, currentFormat, targetFormat, undefined);
+      const filename = downloadName(targetFormat);
+      triggerDownload(bytes, filename);
+      setConvertStatus(`Downloaded ${filename}.`, false);
+    } catch (err) {
+      setConvertStatus(`Conversion failed: ${err && err.message ? err.message : err}`, true);
+    }
+  }
+
+  document.getElementById("convert-download-parquet").addEventListener("click", () => downloadAs("parquet"));
+  document.getElementById("convert-download-avro").addEventListener("click", () => downloadAs("avro"));
+
+  async function loadFile(file) {
+    clearError();
+    const format = detectFormat(file.name);
+    if (!format) {
+      showError(`Unsupported file type for "${file.name}" — please choose a .parquet or .avro file.`);
+      return;
+    }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+
+    currentBytes = bytes;
+    currentFormat = format;
+    currentBaseName = file.name;
+    setConvertStatus("", false);
+
+    dropzone.classList.add("hidden");
+    fileBar.classList.add("visible");
+    fileFormatChip.textContent = format;
+    fileNameEl.textContent = file.name;
+    fileSizeChip.textContent = formatBytes(file.size);
+    tabsWrap.classList.add("visible");
+    selectTab("schema");
+
+    try {
+      const entries = inspectMetadata(bytes, format);
+      renderMetadata(entries);
+    } catch (err) {
+      renderTabError("metadata-content", err);
+    }
+
+    try {
+      const fields = inspectSchema(bytes, format, undefined);
+      renderSchema(fields);
+    } catch (err) {
+      renderTabError("schema-content", err);
+    }
+
+    try {
+      const jsonBytes = convert(bytes, format, "json", { sparse: false, pretty: false });
+      previewRows = JSON.parse(new TextDecoder().decode(jsonBytes));
+      previewPage = 0;
+      renderPreviewPage();
+    } catch (err) {
+      renderTabError("preview-content", err);
+    }
+  }
+
+  function reset() {
+    dropzone.classList.remove("hidden");
+    fileBar.classList.remove("visible");
+    tabsWrap.classList.remove("visible");
+    clearError();
+    fileInput.value = "";
+    previewRows = [];
+    previewPage = 0;
+    previewRowHeightPx = null;
+    currentBytes = null;
+    currentFormat = null;
+    currentBaseName = null;
+    setConvertStatus("", false);
+  }
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+  dropzone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropzone.classList.add("dragover");
+  });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) loadFile(file);
+  });
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (file) loadFile(file);
+  });
+  chooseAnother.addEventListener("click", reset);
+
+  async function main() {
+    await init();
+  }
+
+  main().catch((err) => {
+    showError("Failed to load the wasm module. See the browser console for details.");
+    console.error(err);
+  });
+</script>
+</body>
+</html>

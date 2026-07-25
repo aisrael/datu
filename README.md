@@ -702,6 +702,36 @@ Functions can be chained in any order to build more complex pipelines:
 
 ---
 
+## Browser / WASM Bindings
+
+`crates/datu-wasm` compiles a subset of `datu`'s functionality to `wasm32-unknown-unknown`,
+for use in the browser (or any JS runtime) with no server-side component. It exposes three
+functions, callable after loading the package with `wasm-bindgen`:
+
+| Function | Description |
+|----------|-------------|
+| `inspectSchema(bytes, format, options)` | Reads a Parquet, Avro, CSV, or JSON file's schema; returns `[{ name, data_type, nullable }, ...]`. |
+| `inspectMetadata(bytes, format)` | Reads a Parquet or Avro file's embedded key/value metadata; returns `[{ key, value }, ...]` (empty for CSV/JSON). |
+| `convert(bytes, fromFormat, toFormat, options)` | Converts file bytes between Parquet, Avro, CSV, and JSON; returns the encoded output as bytes. |
+
+`format`/`fromFormat`/`toFormat` are one of `"parquet"`, `"avro"`, `"csv"`, `"json"`. `options`
+is an optional object with `hasHeader` (CSV input), and `sparse`/`pretty` (JSON output).
+
+**Build the package:**
+
+```sh
+wasm-pack build crates/datu-wasm --target web --out-dir pkg
+```
+
+**Examples:** two static, no-build-step demo pages under `crates/datu-wasm/examples/` (see
+each for serve instructions):
+
+- [`verification/`](crates/datu-wasm/examples/verification) — runs the schema-inspection and
+  format-conversion functions against a fixed fixture file, to smoke-test a `pkg/` build.
+- [`conversion/`](crates/datu-wasm/examples/conversion) — drop in your own `.parquet` or
+  `.avro` file and inspect it via a tabbed Metadata / Schema / Preview viewer (Preview is
+  paginated, 20 rows per page), entirely client-side.
+
 ## How it Works Internally
 
 Internally, `datu` constructs a pipeline based on the command and arguments. When possible, it uses the [Datafusion DataFrame API](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html) for efficiency and performance. However, ORC, .XLSX, YAML, and JSON (pretty) aren't natively supported by Datafusion, and `datu` uses internal adapters for those file formats.

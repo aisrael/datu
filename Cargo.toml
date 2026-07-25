@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/datu-wasm"]
+
 [package]
 name = "datu"
 version = "0.3.6"

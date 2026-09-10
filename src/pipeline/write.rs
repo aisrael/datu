@@ -4,6 +4,7 @@ use crate::Error;
 use crate::FileType;
 use crate::Result;
 use crate::cli::AvroCompression;
+use crate::cli::ParquetCompression;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::avro;
 use crate::pipeline::dataframe::write_dataframe_pipeline_output;
@@ -21,6 +22,7 @@ pub struct WriteArgs {
     pub sparse: Option<bool>,
     pub pretty: Option<bool>,
     pub avro_compression: AvroCompression,
+    pub parquet_compression: ParquetCompression,
 }
 
 /// Arguments for writing a JSON file.
@@ -51,13 +53,16 @@ pub fn write_record_batches_from_reader(
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
 ) -> Result<()> {
     if output_file_type != FileType::Json && json_pretty {
         eprintln!("Warning: --json-pretty is only supported when converting to JSON");
     }
 
     match output_file_type {
-        FileType::Parquet => write_record_batches_with_sink(output_path, reader, ParquetSink::new)?,
+        FileType::Parquet => write_record_batches_with_sink(output_path, reader, move |p, s| {
+            ParquetSink::new(p, s, parquet_compression)
+        })?,
         FileType::Csv => crate::pipeline::csv::write_record_batches(output_path, reader)?,
         FileType::Json => {
             RecordBatchJsonWriter::new(sparse, json_pretty).write_to_path(reader, output_path)?;

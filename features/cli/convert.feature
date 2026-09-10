@@ -136,6 +136,48 @@ Feature: Convert
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_bogus.avro --output-avro-compression bogus`
     Then the command should fail
 
+  Scenario: Parquet to Parquet with --output-parquet-compression snappy
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_snappy.parquet --output-parquet-compression snappy`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_snappy.parquet" should exist
+    And the file "$TEMPDIR/table_snappy.parquet" should be a valid Parquet file with codec "snappy"
+
+  Scenario: Parquet to Parquet with --output-parquet-compression gzip
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_gzip.parquet --output-parquet-compression gzip`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_gzip.parquet" should exist
+    And the file "$TEMPDIR/table_gzip.parquet" should be a valid Parquet file with codec "gzip"
+
+  Scenario: Parquet to Parquet with --output-parquet-compression ZSTD (case-insensitive)
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_zstd.parquet --output-parquet-compression ZSTD`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_zstd.parquet" should exist
+    And the file "$TEMPDIR/table_zstd.parquet" should be a valid Parquet file with codec "zstd"
+
+  Scenario: Avro to Parquet with --output-parquet-compression brotli (record-batch write path)
+    Given a file "fixtures/userdata5.avro"
+    When I run `datu convert fixtures/userdata5.avro $TEMPDIR/userdata5.orc --select id,first_name --limit 10`
+    Then the command should succeed
+    When I run `datu convert $TEMPDIR/userdata5.orc $TEMPDIR/userdata5_brotli.parquet --output-parquet-compression brotli`
+    Then the command should succeed
+    And the file "$TEMPDIR/userdata5_brotli.parquet" should exist
+    And the file "$TEMPDIR/userdata5_brotli.parquet" should be a valid Parquet file with codec "brotli"
+
+  Scenario: Parquet to Parquet with --output-parquet-compression NULL (case-insensitive alias for none)
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_null.parquet --output-parquet-compression NULL`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_null.parquet" should exist
+    And the file "$TEMPDIR/table_null.parquet" should be a valid Parquet file with codec "none"
+
+  Scenario: Parquet to Parquet with an unknown --output-parquet-compression value fails
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_bogus.parquet --output-parquet-compression bogus`
+    Then the command should fail
+
   Scenario: Parquet to Avro with --limit
     Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_limit.avro --limit 2`

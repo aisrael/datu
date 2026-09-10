@@ -10,6 +10,7 @@ use crate::FileType;
 use crate::Result;
 use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
+use crate::cli::ParquetCompression;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::dataframe::DataFramePipeline;
 use crate::pipeline::dataframe::DataFrameSink;
@@ -42,6 +43,7 @@ pub struct PipelineBuilder {
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
     progress: Option<ProgressBar>,
     display_output_format: Option<DisplayOutputFormat>,
     display_csv_headers: Option<bool>,
@@ -66,6 +68,7 @@ impl Default for PipelineBuilder {
             sparse: true,
             json_pretty: false,
             avro_compression: AvroCompression::None,
+            parquet_compression: ParquetCompression::None,
             progress: None,
             display_output_format: None,
             display_csv_headers: None,
@@ -183,6 +186,12 @@ impl PipelineBuilder {
         self
     }
 
+    /// When writing Parquet: compression codec (none/null, snappy, gzip, zstd, brotli, lz4, lz4_raw). Ignored for other output formats.
+    pub fn parquet_compression(&mut self, parquet_compression: ParquetCompression) -> &mut Self {
+        self.parquet_compression = parquet_compression;
+        self
+    }
+
     /// Optional progress bar updated while writing from collected batches.
     pub fn progress(&mut self, progress: Option<ProgressBar>) -> &mut Self {
         self.progress = progress;
@@ -246,6 +255,7 @@ impl PipelineBuilder {
                 output_file_type,
                 json_pretty: self.json_pretty,
                 avro_compression: self.avro_compression,
+                parquet_compression: self.parquet_compression,
                 progress: self.progress.clone(),
             },
         ))
@@ -487,6 +497,7 @@ enum UnifiedSink {
         output_file_type: FileType,
         json_pretty: bool,
         avro_compression: AvroCompression,
+        parquet_compression: ParquetCompression,
         progress: Option<ProgressBar>,
     },
     Display {
@@ -543,12 +554,14 @@ fn unified_to_dataframe_sink(sink: UnifiedSink) -> DataFrameSink {
             output_file_type,
             json_pretty,
             avro_compression,
+            parquet_compression,
             progress,
         } => DataFrameSink::Write {
             output_path,
             output_file_type,
             json_pretty,
             avro_compression,
+            parquet_compression,
             progress,
         },
         UnifiedSink::Display {
@@ -576,12 +589,14 @@ fn unified_to_record_batch_sink(sink: UnifiedSink) -> RecordBatchSink {
             output_file_type,
             json_pretty,
             avro_compression,
+            parquet_compression,
             progress,
         } => RecordBatchSink::Write {
             output_path,
             output_file_type,
             json_pretty,
             avro_compression,
+            parquet_compression,
             progress,
         },
         UnifiedSink::Display {

@@ -55,6 +55,14 @@ Feature: Concat
     And the file "$TEMPDIR/all_snappy.avro" should exist
     And the file "$TEMPDIR/all_snappy.avro" should be a valid Avro file with codec "snappy"
 
+  Scenario: Concat two Avro files into Parquet with --output-parquet-compression gzip
+    Given a file "fixtures/concat_part1.avro"
+    Given a file "fixtures/concat_part2.avro"
+    When I run `datu concat fixtures/concat_part1.avro fixtures/concat_part2.avro $TEMPDIR/all_gzip.parquet --output-parquet-compression gzip`
+    Then the command should succeed
+    And the file "$TEMPDIR/all_gzip.parquet" should exist
+    And the file "$TEMPDIR/all_gzip.parquet" should be a valid Parquet file with codec "gzip"
+
   Scenario: Concat fails on incompatible schemas
     Given a file "fixtures/file1.avro"
     Given a file "fixtures/file2.avro"

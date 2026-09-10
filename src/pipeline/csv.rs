@@ -164,6 +164,7 @@ mod tests {
             sparse: None,
             pretty: None,
             avro_compression: crate::cli::AvroCompression::None,
+            parquet_compression: crate::cli::ParquetCompression::None,
         };
         let writer = RecordBatchCsvWriter { args, source };
         let result = writer.execute(()).await;

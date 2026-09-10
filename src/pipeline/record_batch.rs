@@ -9,6 +9,7 @@ use crate::Error;
 use crate::FileType;
 use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
+use crate::cli::ParquetCompression;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
 use crate::pipeline::ProgressRecordBatchReader;
@@ -302,6 +303,7 @@ pub enum RecordBatchSink {
         output_file_type: FileType,
         json_pretty: bool,
         avro_compression: AvroCompression,
+        parquet_compression: ParquetCompression,
         progress: Option<ProgressBar>,
     },
     Display {
@@ -375,12 +377,14 @@ impl RecordBatchPipeline {
                 output_file_type,
                 json_pretty,
                 avro_compression,
+                parquet_compression,
                 progress,
             } => RecordBatchSink::Write {
                 output_path: output_path.clone(),
                 output_file_type: *output_file_type,
                 json_pretty: *json_pretty,
                 avro_compression: *avro_compression,
+                parquet_compression: *parquet_compression,
                 progress: progress.clone(),
             },
             RecordBatchSink::Display {
@@ -442,6 +446,7 @@ impl RecordBatchPipeline {
                     output_file_type,
                     json_pretty,
                     avro_compression,
+                    parquet_compression,
                     progress,
                 } => {
                     let mut source =
@@ -461,6 +466,7 @@ impl RecordBatchPipeline {
                             sparse,
                             json_pretty,
                             avro_compression,
+                            parquet_compression,
                         )?;
                     } else {
                         let mut reader = reader;
@@ -471,6 +477,7 @@ impl RecordBatchPipeline {
                             sparse,
                             json_pretty,
                             avro_compression,
+                            parquet_compression,
                         )?;
                     }
                     Ok::<(), Error>(())

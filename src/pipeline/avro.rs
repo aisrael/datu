@@ -287,6 +287,7 @@ mod tests {
             sparse: None,
             pretty: None,
             avro_compression: AvroCompression::None,
+            parquet_compression: crate::cli::ParquetCompression::None,
         };
         let step = DataframeAvroWriter { args };
         step.execute(Box::new(read_step))

@@ -8,6 +8,7 @@ use super::run::Pipeline;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::dataframe::DataFramePipeline;
@@ -40,6 +41,7 @@ pub struct PipelineBuilder {
     csv_has_header: Option<bool>,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
     progress: Option<ProgressBar>,
     display_output_format: Option<DisplayOutputFormat>,
     display_csv_headers: Option<bool>,
@@ -63,6 +65,7 @@ impl Default for PipelineBuilder {
             csv_has_header: None,
             sparse: true,
             json_pretty: false,
+            avro_compression: AvroCompression::None,
             progress: None,
             display_output_format: None,
             display_csv_headers: None,
@@ -174,6 +177,12 @@ impl PipelineBuilder {
         self
     }
 
+    /// When writing Avro: compression codec (none/null, deflate, snappy). Ignored for other output formats.
+    pub fn avro_compression(&mut self, avro_compression: AvroCompression) -> &mut Self {
+        self.avro_compression = avro_compression;
+        self
+    }
+
     /// Optional progress bar updated while writing from collected batches.
     pub fn progress(&mut self, progress: Option<ProgressBar>) -> &mut Self {
         self.progress = progress;
@@ -236,6 +245,7 @@ impl PipelineBuilder {
                 output_path: output_path.to_string(),
                 output_file_type,
                 json_pretty: self.json_pretty,
+                avro_compression: self.avro_compression,
                 progress: self.progress.clone(),
             },
         ))
@@ -476,6 +486,7 @@ enum UnifiedSink {
         output_path: String,
         output_file_type: FileType,
         json_pretty: bool,
+        avro_compression: AvroCompression,
         progress: Option<ProgressBar>,
     },
     Display {
@@ -531,11 +542,13 @@ fn unified_to_dataframe_sink(sink: UnifiedSink) -> DataFrameSink {
             output_path,
             output_file_type,
             json_pretty,
+            avro_compression,
             progress,
         } => DataFrameSink::Write {
             output_path,
             output_file_type,
             json_pretty,
+            avro_compression,
             progress,
         },
         UnifiedSink::Display {
@@ -562,11 +575,13 @@ fn unified_to_record_batch_sink(sink: UnifiedSink) -> RecordBatchSink {
             output_path,
             output_file_type,
             json_pretty,
+            avro_compression,
             progress,
         } => RecordBatchSink::Write {
             output_path,
             output_file_type,
             json_pretty,
+            avro_compression,
             progress,
         },
         UnifiedSink::Display {

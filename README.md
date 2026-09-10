@@ -92,6 +92,7 @@ read("table.parquet") |> select(:id, :email) |> write("table.csv")
 | `--limit <N>` | Maximum number of records to read from the input. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When converting to JSON, format output with indentation and newlines. Ignored for other output formats. |
+| `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when converting to Avro output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
@@ -105,6 +106,9 @@ datu convert data.csv data.parquet
 
 # Parquet to Avro (first 1000 rows)
 datu convert data.parquet data.avro --limit 1000
+
+# Parquet to Avro with Snappy compression
+datu convert data.parquet data.avro --output-avro-compression snappy
 
 # Avro to CSV, only specific columns
 datu convert events.avro events.csv --select id,timestamp,user_id
@@ -523,6 +527,7 @@ datu concat <INPUT>... <OUTPUT> [OPTIONS]
 | `-O`, `--output <TYPE>` | Output file type (`avro`, `csv`, `json`, `orc`, `parquet`, `xlsx`, `yaml`). Overrides extension-based detection. |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When concatenating to JSON, format output with indentation and newlines. Ignored for other output formats. |
+| `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when concatenating to Avro output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
@@ -567,6 +572,7 @@ datu split <INPUT> [OUTPUT] [OPTIONS]
 | `--limit <N>` | Maximum number of total rows to process across all partitions. Default: `0` (unlimited). |
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When splitting to JSON, format output with indentation and newlines. Ignored for other output formats. |
+| `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when splitting to Avro output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**

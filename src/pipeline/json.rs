@@ -115,6 +115,7 @@ impl Step for DataframeJsonPrettyWriter {
             FileType::Json,
             sparse,
             json_pretty,
+            self.args.avro_compression,
         )?;
         Ok(())
     }

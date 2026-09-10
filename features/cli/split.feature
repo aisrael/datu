@@ -90,6 +90,13 @@ Feature: Split
     Then the command should fail
     And the output should contain "unknown size unit"
 
+  Scenario: Split Avro into partitions with --output-avro-compression deflate
+    Given a file "fixtures/concat_part1.avro"
+    When I run `datu split fixtures/concat_part1.avro $TEMPDIR/part_deflate.avro --split 2 --output-avro-compression deflate`
+    Then the command should succeed
+    And the file "$TEMPDIR/part_deflate.part00001.avro" should exist
+    And the file "$TEMPDIR/part_deflate.part00001.avro" should be a valid Avro file with codec "deflate"
+
   Scenario: Split fails when a byte size of 0 is given
     Given a file "fixtures/table.parquet"
     When I run `datu split fixtures/table.parquet $TEMPDIR/out.parquet --split 0mb`

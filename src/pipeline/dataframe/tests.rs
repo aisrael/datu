@@ -3,6 +3,7 @@ use arrow::array::RecordBatchReader;
 use super::DataframeSelect;
 use super::DataframeTail;
 use crate::FileType;
+use crate::cli::AvroCompression;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DataframeParquetReader;
 use crate::pipeline::DataframeToRecordBatch;
@@ -49,6 +50,7 @@ async fn test_dataframe_steps_parquet_tail_to_csv() {
         file_type: FileType::Csv,
         sparse: None,
         pretty: None,
+        avro_compression: AvroCompression::None,
     };
     DataframeCsvWriter { args: write_args }
         .execute(Box::new(source))
@@ -223,10 +225,44 @@ async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
         file_type: FileType::Avro,
         sparse: None,
         pretty: None,
+        avro_compression: AvroCompression::None,
     };
     RecordBatchAvroWriter { args: write_args }
         .execute(Box::new(reader))
         .await
         .unwrap();
     assert!(std::path::Path::new(&output).exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_record_batch_avro_writer_with_snappy_compression() {
+    let read_args = ReadArgs::new("fixtures/table.parquet", FileType::Parquet);
+    let source = DataframeParquetReader { args: read_args }
+        .execute(())
+        .await
+        .unwrap();
+    let reader = DataframeToRecordBatch::try_new(source).await.unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = temp_path(&temp_dir, "out.avro");
+    let write_args = WriteArgs {
+        path: output.clone(),
+        file_type: FileType::Avro,
+        sparse: None,
+        pretty: None,
+        avro_compression: AvroCompression::Snappy,
+    };
+    RecordBatchAvroWriter { args: write_args }
+        .execute(Box::new(reader))
+        .await
+        .unwrap();
+    let bytes = std::fs::read(&output).unwrap();
+    let avro_reader = arrow_avro::reader::ReaderBuilder::new()
+        .build(std::io::Cursor::new(bytes))
+        .unwrap();
+    let codec = avro_reader
+        .avro_header()
+        .metadata()
+        .find(|(key, _)| *key == b"avro.codec")
+        .map(|(_, value)| String::from_utf8_lossy(value).into_owned());
+    assert_eq!(codec.as_deref(), Some("snappy"));
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
+use datu::cli::AvroCompression;
 use datu::pipeline::concat_files;
 use eyre::Context;
 use eyre::Result;
@@ -44,6 +45,13 @@ pub struct ConcatArgs {
         help = "When concatenating to JSON, format output with indentation and newlines. Ignored for other output formats."
     )]
     pub json_pretty: bool,
+    #[arg(
+        long = "output-avro-compression",
+        default_value_t = AvroCompression::None,
+        value_parser = clap::value_parser!(AvroCompression),
+        help = "Avro output compression codec: none, null, deflate, or snappy (case-insensitive; \"null\" is an alias for \"none\"). Only applies when concatenating to Avro output. Default: none."
+    )]
+    pub output_avro_compression: AvroCompression,
     #[arg(
         long,
         value_parser = clap::value_parser!(bool),
@@ -129,6 +137,7 @@ pub async fn concat(args: ConcatArgs) -> Result<()> {
         args.input_headers,
         args.sparse,
         args.json_pretty,
+        args.output_avro_compression,
         Some(progress.clone()),
     )
     .await;
@@ -242,6 +251,7 @@ mod tests {
             output: None,
             sparse: true,
             json_pretty: false,
+            output_avro_compression: AvroCompression::None,
             input_headers: None,
         }
     }

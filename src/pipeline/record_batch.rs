@@ -7,6 +7,7 @@ use indicatif::ProgressBar;
 
 use crate::Error;
 use crate::FileType;
+use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
@@ -300,6 +301,7 @@ pub enum RecordBatchSink {
         output_path: String,
         output_file_type: FileType,
         json_pretty: bool,
+        avro_compression: AvroCompression,
         progress: Option<ProgressBar>,
     },
     Display {
@@ -372,11 +374,13 @@ impl RecordBatchPipeline {
                 output_path,
                 output_file_type,
                 json_pretty,
+                avro_compression,
                 progress,
             } => RecordBatchSink::Write {
                 output_path: output_path.clone(),
                 output_file_type: *output_file_type,
                 json_pretty: *json_pretty,
+                avro_compression: *avro_compression,
                 progress: progress.clone(),
             },
             RecordBatchSink::Display {
@@ -437,6 +441,7 @@ impl RecordBatchPipeline {
                     output_path,
                     output_file_type,
                     json_pretty,
+                    avro_compression,
                     progress,
                 } => {
                     let mut source =
@@ -455,6 +460,7 @@ impl RecordBatchPipeline {
                             output_file_type,
                             sparse,
                             json_pretty,
+                            avro_compression,
                         )?;
                     } else {
                         let mut reader = reader;
@@ -464,6 +470,7 @@ impl RecordBatchPipeline {
                             output_file_type,
                             sparse,
                             json_pretty,
+                            avro_compression,
                         )?;
                     }
                     Ok::<(), Error>(())

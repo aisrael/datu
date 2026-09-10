@@ -220,6 +220,7 @@ mod tests {
             file_type: FileType::Parquet,
             sparse: None,
             pretty: None,
+            avro_compression: crate::cli::AvroCompression::None,
         };
         let step = DataframeParquetWriter { args };
         step.execute(Box::new(read_step))

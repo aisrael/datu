@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
+use datu::cli::AvroCompression;
 use datu::pipeline::SplitSize;
 use datu::pipeline::split_file;
 use eyre::Result;
@@ -62,6 +63,13 @@ pub struct SplitArgs {
     )]
     pub json_pretty: bool,
     #[arg(
+        long = "output-avro-compression",
+        default_value_t = AvroCompression::None,
+        value_parser = clap::value_parser!(AvroCompression),
+        help = "Avro output compression codec: none, null, deflate, or snappy (case-insensitive; \"null\" is an alias for \"none\"). Only applies when splitting to Avro output. Default: none."
+    )]
+    pub output_avro_compression: AvroCompression,
+    #[arg(
         long,
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
@@ -101,6 +109,7 @@ pub async fn split(args: SplitArgs) -> Result<()> {
         args.limit,
         args.sparse,
         args.json_pretty,
+        args.output_avro_compression,
         Some(progress.clone()),
     )
     .await;
@@ -145,6 +154,7 @@ mod tests {
             limit: 0,
             sparse: true,
             json_pretty: false,
+            output_avro_compression: AvroCompression::None,
             input_headers: None,
         }
     }

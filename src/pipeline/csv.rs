@@ -163,6 +163,7 @@ mod tests {
             file_type: FileType::Csv,
             sparse: None,
             pretty: None,
+            avro_compression: crate::cli::AvroCompression::None,
         };
         let writer = RecordBatchCsvWriter { args, source };
         let result = writer.execute(()).await;

@@ -57,6 +57,7 @@ pub async fn write_batches(
         output_file_type,
         sparse,
         json_pretty,
+        crate::cli::AvroCompression::None,
     );
     writer_step.execute(source).await?;
     Ok(())

@@ -8,6 +8,7 @@ use super::transform::finalize_dataframe_source;
 use super::writer::write_dataframe_to_path;
 use crate::Error;
 use crate::FileType;
+use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
 use crate::errors::PipelineExecutionError;
 use crate::pipeline::DisplaySlice;
@@ -28,6 +29,7 @@ pub enum DataFrameSink {
         output_path: String,
         output_file_type: FileType,
         json_pretty: bool,
+        avro_compression: AvroCompression,
         progress: Option<ProgressBar>,
     },
     Display {
@@ -72,11 +74,13 @@ impl DataFramePipeline {
                 output_path,
                 output_file_type,
                 json_pretty,
+                avro_compression,
                 progress,
             } => DataFrameSink::Write {
                 output_path: output_path.clone(),
                 output_file_type: *output_file_type,
                 json_pretty: *json_pretty,
+                avro_compression: *avro_compression,
                 progress: progress.clone(),
             },
             DataFrameSink::Display {
@@ -164,6 +168,7 @@ impl DataFramePipeline {
                     output_path,
                     output_file_type,
                     json_pretty,
+                    avro_compression,
                     progress,
                 } => {
                     let source = dataframe_pipeline_prepare_source(
@@ -183,6 +188,7 @@ impl DataFramePipeline {
                         output_file_type,
                         sparse,
                         json_pretty,
+                        avro_compression,
                         progress,
                     )
                     .await?;

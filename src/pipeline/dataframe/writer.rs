@@ -7,6 +7,7 @@ use indicatif::ProgressBar;
 use super::source::DataFrameSource;
 use crate::Error;
 use crate::FileType;
+use crate::cli::AvroCompression;
 use crate::errors::PipelineExecutionError;
 use crate::pipeline::Producer;
 use crate::pipeline::ProgressVecRecordBatchReader;
@@ -26,6 +27,7 @@ pub struct DataFrameWriter {
     output_file_type: FileType,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
 }
 
 impl DataFrameWriter {
@@ -35,12 +37,14 @@ impl DataFrameWriter {
         output_file_type: FileType,
         sparse: bool,
         json_pretty: bool,
+        avro_compression: AvroCompression,
     ) -> Self {
         Self {
             output_path: output_path.into(),
             output_file_type,
             sparse,
             json_pretty,
+            avro_compression,
         }
     }
 }
@@ -86,6 +90,7 @@ pub(crate) async fn write_dataframe_to_path(
     output_file_type: FileType,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
     progress: Option<ProgressBar>,
 ) -> crate::Result<()> {
     let write_args = WriteArgs {
@@ -93,6 +98,7 @@ pub(crate) async fn write_dataframe_to_path(
         file_type: output_file_type,
         sparse: Some(sparse),
         pretty: Some(json_pretty),
+        avro_compression,
     };
 
     match output_file_type {
@@ -119,6 +125,7 @@ pub(crate) async fn write_dataframe_to_path(
                 output_file_type,
                 sparse,
                 json_pretty,
+                avro_compression,
             )?;
         }
     }
@@ -143,6 +150,7 @@ impl Step for DataFrameWriter {
             self.output_file_type,
             self.sparse,
             self.json_pretty,
+            self.avro_compression,
         )
     }
 }

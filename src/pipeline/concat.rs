@@ -6,6 +6,7 @@ use indicatif::ProgressBar;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::cli::AvroCompression;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::dataframe::DataFrameSource;
 use crate::pipeline::dataframe::read_dataframe_from_path;
@@ -29,6 +30,7 @@ pub async fn concat_files(
     csv_has_header: Option<bool>,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
     progress: Option<ProgressBar>,
 ) -> Result<()> {
     if input_paths.is_empty() {
@@ -69,6 +71,7 @@ pub async fn concat_files(
         output_file_type,
         sparse,
         json_pretty,
+        avro_compression,
         progress,
     )
     .await
@@ -90,6 +93,7 @@ mod tests {
             None,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -108,6 +112,7 @@ mod tests {
             None,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -130,6 +135,7 @@ mod tests {
             None,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -163,6 +169,7 @@ mod tests {
             None,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -184,6 +191,7 @@ mod tests {
             None,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;

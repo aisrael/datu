@@ -110,6 +110,32 @@ Feature: Convert
     And the first line of that file should contain "id,first_name,email"
     And that file should have 1001 lines
 
+  Scenario: Parquet to Avro with --output-avro-compression deflate
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_deflate.avro --output-avro-compression deflate`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_deflate.avro" should exist
+    And the file "$TEMPDIR/table_deflate.avro" should be a valid Avro file with codec "deflate"
+
+  Scenario: Parquet to Avro with --output-avro-compression snappy
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_snappy.avro --output-avro-compression snappy`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_snappy.avro" should exist
+    And the file "$TEMPDIR/table_snappy.avro" should be a valid Avro file with codec "snappy"
+
+  Scenario: Parquet to Avro with --output-avro-compression NULL (case-insensitive alias for none)
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_null.avro --output-avro-compression NULL`
+    Then the command should succeed
+    And the file "$TEMPDIR/table_null.avro" should exist
+    And the file "$TEMPDIR/table_null.avro" should be a valid Avro file with codec "none"
+
+  Scenario: Parquet to Avro with an unknown --output-avro-compression value fails
+    Given a file "fixtures/table.parquet"
+    When I run `datu convert fixtures/table.parquet $TEMPDIR/table_bogus.avro --output-avro-compression bogus`
+    Then the command should fail
+
   Scenario: Parquet to Avro with --limit
     Given a file "fixtures/table.parquet"
     When I run `datu convert fixtures/table.parquet $TEMPDIR/table_limit.avro --limit 2`

@@ -10,6 +10,11 @@
 
 ### Improvements
 
+- **CLI**
+  - `convert`, `concat`, and `split` gain `--output-avro-compression <CODEC>` (`none`, `null`,
+    `deflate`, or `snappy`, case-insensitive) to control the compression codec used when writing
+    Avro output. Defaults to `none` (uncompressed), matching prior behavior.
+
 - **WASM bindings**
   - `inspectSchema`, `inspectMetadata`, and `convert` exported for Parquet, Avro, CSV, and JSON.
   - Pure-Rust codec/feature selection (no C toolchain needed) so the crate builds cleanly for

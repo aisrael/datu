@@ -12,6 +12,7 @@ use indicatif::ProgressBar;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::cli::AvroCompression;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::batch_readers::VecRecordBatchReader;
 use crate::pipeline::batch_readers::build_reader;
@@ -304,6 +305,7 @@ pub async fn split_file(
     limit: usize,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
     progress: Option<ProgressBar>,
 ) -> Result<SplitOutcome> {
     if split_size.is_zero() {
@@ -343,6 +345,7 @@ pub async fn split_file(
             output_file_type,
             sparse,
             json_pretty,
+            avro_compression,
         )?;
 
         rows_written += partition_reader.consumed;
@@ -479,6 +482,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -499,6 +503,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await;
@@ -519,6 +524,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await
@@ -563,6 +569,7 @@ mod tests {
             250,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await
@@ -589,6 +596,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await
@@ -613,6 +621,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await
@@ -647,6 +656,7 @@ mod tests {
             0,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await
@@ -690,6 +700,7 @@ mod tests {
             250,
             true,
             false,
+            AvroCompression::None,
             None,
         )
         .await

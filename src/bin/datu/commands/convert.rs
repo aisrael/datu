@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use clap::Args;
 use datu::FileType;
+use datu::cli::AvroCompression;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
@@ -50,6 +51,13 @@ pub struct ConvertArgs {
     )]
     pub json_pretty: bool,
     #[arg(
+        long = "output-avro-compression",
+        default_value_t = AvroCompression::None,
+        value_parser = clap::value_parser!(AvroCompression),
+        help = "Avro output compression codec: none, null, deflate, or snappy (case-insensitive; \"null\" is an alias for \"none\"). Only applies when converting to Avro output. Default: none."
+    )]
+    pub output_avro_compression: AvroCompression,
+    #[arg(
         long,
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
@@ -74,6 +82,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         .csv_has_header(args.input_headers)
         .sparse(args.sparse)
         .json_pretty(args.json_pretty)
+        .avro_compression(args.output_avro_compression)
         .progress(Some(progress.clone()));
 
     if let Some(spec) = select_spec {
@@ -190,6 +199,7 @@ mod tests {
             limit,
             sparse: true,
             json_pretty: false,
+            output_avro_compression: AvroCompression::None,
             input_headers: None,
         }
     }
@@ -364,5 +374,29 @@ mod tests {
             vec!["one".to_string(), "two".to_string()],
             "Avro schema columns do not match selected columns"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_convert_parquet_to_avro_with_snappy_compression() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let (output_path_buf, output_path) = temp_output_path(&temp_dir, "table.avro");
+        let args = ConvertArgs {
+            output_avro_compression: AvroCompression::Snappy,
+            ..convert_args_for_tests("fixtures/table.parquet", output_path, None, None)
+        };
+
+        let result = convert(args).await;
+        assert!(result.is_ok(), "Convert failed: {:?}", result.err());
+
+        let bytes = std::fs::read(&output_path_buf).expect("Failed to read output file");
+        let reader = arrow_avro::reader::ReaderBuilder::new()
+            .build(std::io::Cursor::new(bytes))
+            .expect("written file should be valid Avro");
+        let codec = reader
+            .avro_header()
+            .metadata()
+            .find(|(key, _)| *key == b"avro.codec")
+            .map(|(_, value)| String::from_utf8_lossy(value).into_owned());
+        assert_eq!(codec.as_deref(), Some("snappy"));
     }
 }

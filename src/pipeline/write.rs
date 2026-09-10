@@ -3,6 +3,7 @@ use arrow::array::RecordBatchReader;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::cli::AvroCompression;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::avro;
 use crate::pipeline::dataframe::write_dataframe_pipeline_output;
@@ -19,6 +20,7 @@ pub struct WriteArgs {
     pub file_type: FileType,
     pub sparse: Option<bool>,
     pub pretty: Option<bool>,
+    pub avro_compression: AvroCompression,
 }
 
 /// Arguments for writing a JSON file.
@@ -48,6 +50,7 @@ pub fn write_record_batches_from_reader(
     output_file_type: FileType,
     sparse: bool,
     json_pretty: bool,
+    avro_compression: AvroCompression,
 ) -> Result<()> {
     if output_file_type != FileType::Json && json_pretty {
         eprintln!("Warning: --json-pretty is only supported when converting to JSON");
@@ -63,7 +66,7 @@ pub fn write_record_batches_from_reader(
             let file = std::fs::File::create(output_path).map_err(Error::IoError)?;
             display::write_record_batches_as_yaml(reader, file, sparse)?;
         }
-        FileType::Avro => avro::write_record_batches(output_path, reader)?,
+        FileType::Avro => avro::write_record_batches(output_path, reader, avro_compression.into())?,
         FileType::Orc => orc::write_record_batches(output_path, reader)?,
         FileType::Xlsx => xlsx::write_record_batch_to_xlsx(output_path, reader)?,
     }

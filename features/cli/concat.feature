@@ -47,6 +47,14 @@ Feature: Concat
     Then the command should fail
     And the output should contain "matched no files"
 
+  Scenario: Concat two Avro files with --output-avro-compression snappy
+    Given a file "fixtures/concat_part1.avro"
+    Given a file "fixtures/concat_part2.avro"
+    When I run `datu concat fixtures/concat_part1.avro fixtures/concat_part2.avro $TEMPDIR/all_snappy.avro --output-avro-compression snappy`
+    Then the command should succeed
+    And the file "$TEMPDIR/all_snappy.avro" should exist
+    And the file "$TEMPDIR/all_snappy.avro" should be a valid Avro file with codec "snappy"
+
   Scenario: Concat fails on incompatible schemas
     Given a file "fixtures/file1.avro"
     Given a file "fixtures/file2.avro"

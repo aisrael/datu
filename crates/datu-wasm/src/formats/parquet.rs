@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_write_and_read_roundtrip() {
         let batch = make_test_batch();
-        let bytes = write_parquet(&[batch.clone()], batch.schema()).unwrap();
+        let bytes = write_parquet(std::slice::from_ref(&batch), batch.schema()).unwrap();
         let read_back = read_parquet(Bytes::from(bytes)).unwrap();
         assert_eq!(read_back.len(), 1);
         assert_eq!(read_back[0].num_rows(), 3);

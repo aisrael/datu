@@ -53,6 +53,48 @@ impl FromStr for DisplayOutputFormat {
     }
 }
 
+/// Avro output compression codec (none/null, deflate, snappy). Case-insensitive from CLI.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AvroCompression {
+    #[default]
+    None,
+    Deflate,
+    Snappy,
+}
+
+impl TryFrom<&str> for AvroCompression {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s.to_lowercase().as_str() {
+            "none" | "null" => Ok(AvroCompression::None),
+            "deflate" => Ok(AvroCompression::Deflate),
+            "snappy" => Ok(AvroCompression::Snappy),
+            _ => Err(format!(
+                "unknown avro compression '{s}', expected none, null, deflate, or snappy"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for AvroCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AvroCompression::None => write!(f, "none"),
+            AvroCompression::Deflate => write!(f, "deflate"),
+            AvroCompression::Snappy => write!(f, "snappy"),
+        }
+    }
+}
+
+impl FromStr for AvroCompression {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
+    }
+}
+
 /// Arguments for the `datu schema` command.
 #[derive(Args)]
 pub struct SchemaArgs {
@@ -180,4 +222,24 @@ pub struct HeadsOrTails {
         help = "For CSV output: whether to print column headers. Default: true when omitted. Use --output-headers=false to suppress headers."
     )]
     pub output_headers: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_avro_compression_case_insensitive_and_null_alias() {
+        assert_eq!(
+            AvroCompression::try_from("DEFLATE"),
+            Ok(AvroCompression::Deflate)
+        );
+        assert_eq!(AvroCompression::try_from("Null"), Ok(AvroCompression::None));
+        assert_eq!(AvroCompression::try_from("none"), Ok(AvroCompression::None));
+        assert_eq!(
+            AvroCompression::try_from("snappy"),
+            Ok(AvroCompression::Snappy)
+        );
+        assert!(AvroCompression::try_from("bogus").is_err());
+    }
 }

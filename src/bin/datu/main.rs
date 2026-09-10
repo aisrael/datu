@@ -102,7 +102,8 @@ fn grouped_help(cmd: &clap::Command) -> String {
 /// Application entry point; parses CLI args and dispatches to the appropriate command.
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    use clap::{CommandFactory, FromArgMatches};
+    use clap::CommandFactory;
+    use clap::FromArgMatches;
 
     let mut cmd = Cli::command();
     let help_text = grouped_help(&cmd);

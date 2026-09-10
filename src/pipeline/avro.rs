@@ -9,8 +9,10 @@ use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_avro::compression::CompressionCodec;
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::writer::AvroWriter;
+use arrow_avro::writer::WriterBuilder;
 use async_trait::async_trait;
 use datafusion::prelude::DataFrame;
 use eyre::Result as EyreResult;
@@ -18,6 +20,7 @@ use eyre::Result as EyreResult;
 use crate::Error;
 use crate::FileType;
 use crate::Result;
+use crate::cli::AvroCompression;
 use crate::pipeline::DataFrameSource;
 use crate::pipeline::Producer;
 use crate::pipeline::Step;
@@ -46,7 +49,11 @@ impl Step for DataframeAvroWriter {
         let df = input.get().await?;
         let source = DataFrameSource::new(*df);
         let mut reader = DataframeToRecordBatch::try_new(source).await?;
-        write_record_batches(self.args.path.as_str(), &mut reader)
+        write_record_batches(
+            self.args.path.as_str(),
+            &mut reader,
+            self.args.avro_compression.into(),
+        )
     }
 }
 
@@ -161,9 +168,23 @@ pub struct RecordBatchAvroWriter {
     pub args: WriteArgs,
 }
 
+impl From<AvroCompression> for Option<CompressionCodec> {
+    fn from(c: AvroCompression) -> Self {
+        match c {
+            AvroCompression::None => None,
+            AvroCompression::Deflate => Some(CompressionCodec::Deflate),
+            AvroCompression::Snappy => Some(CompressionCodec::Snappy),
+        }
+    }
+}
+
 /// Write record batches from a reader to an Avro file.
 /// Int16 columns are upcast to Int32 so the arrow-avro writer can write them.
-pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> Result<()> {
+pub fn write_record_batches(
+    path: &str,
+    reader: &mut dyn RecordBatchReader,
+    codec: Option<CompressionCodec>,
+) -> Result<()> {
     let schema = reader.schema();
     if schema_has_int16(schema.as_ref()) {
         let compat_schema = schema_for_avro_writer(schema.as_ref());
@@ -171,9 +192,9 @@ pub fn write_record_batches(path: &str, reader: &mut dyn RecordBatchReader) -> R
             reader,
             compat_schema,
         };
-        write_record_batches_with_sink(path, &mut wrapper, AvroSink::new)
+        write_record_batches_with_sink(path, &mut wrapper, move |p, s| AvroSink::new(p, s, codec))
     } else {
-        write_record_batches_with_sink(path, reader, AvroSink::new)
+        write_record_batches_with_sink(path, reader, move |p, s| AvroSink::new(p, s, codec))
     }
 }
 
@@ -182,9 +203,16 @@ struct AvroSink {
 }
 
 impl AvroSink {
-    fn new(path: &str, schema: arrow::datatypes::SchemaRef) -> Result<Self> {
+    fn new(
+        path: &str,
+        schema: arrow::datatypes::SchemaRef,
+        codec: Option<CompressionCodec>,
+    ) -> Result<Self> {
         let file = std::fs::File::create(path).map_err(Error::IoError)?;
-        let writer = AvroWriter::new(file, (*schema).clone()).map_err(Error::ArrowError)?;
+        let writer: AvroWriter<std::fs::File> = WriterBuilder::new((*schema).clone())
+            .with_compression(codec)
+            .build(file)
+            .map_err(Error::ArrowError)?;
         Ok(Self { writer })
     }
 }
@@ -206,7 +234,11 @@ impl Step for RecordBatchAvroWriter {
     type Output = WriteResult;
 
     async fn execute(mut self, mut input: Self::Input) -> Result<Self::Output> {
-        write_record_batches(&self.args.path, &mut input)?;
+        write_record_batches(
+            &self.args.path,
+            &mut input,
+            self.args.avro_compression.into(),
+        )?;
         Ok(WriteResult)
     }
 }
@@ -254,6 +286,7 @@ mod tests {
             file_type: FileType::Avro,
             sparse: None,
             pretty: None,
+            avro_compression: AvroCompression::None,
         };
         let step = DataframeAvroWriter { args };
         step.execute(Box::new(read_step))
@@ -282,7 +315,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("out.avro");
         let mut reader = VecRecordBatchReader::new(vec![batch]);
-        write_record_batches(path.to_str().unwrap(), &mut reader).unwrap();
+        write_record_batches(path.to_str().unwrap(), &mut reader, None).unwrap();
         let file = std::fs::File::open(&path).unwrap();
         let avro_reader = ReaderBuilder::new()
             .build(BufReader::new(file))
@@ -305,6 +338,49 @@ mod tests {
         assert_eq!(ints.value(0), 1);
         assert_eq!(ints.value(1), 2);
         assert_eq!(ints.value(2), 3);
+    }
+
+    fn write_and_read_codec(codec: Option<CompressionCodec>) -> Option<String> {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("out.avro");
+        let mut reader = VecRecordBatchReader::new(vec![batch]);
+        write_record_batches(path.to_str().unwrap(), &mut reader, codec).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let avro_reader = ReaderBuilder::new()
+            .build(BufReader::new(file))
+            .expect("written file should be valid Avro");
+        avro_reader
+            .avro_header()
+            .metadata()
+            .find(|(key, _)| *key == b"avro.codec")
+            .map(|(_, value)| String::from_utf8_lossy(value).into_owned())
+    }
+
+    #[test]
+    fn test_write_avro_with_deflate_compression() {
+        let codec = write_and_read_codec(Some(CompressionCodec::Deflate));
+        assert_eq!(codec.as_deref(), Some("deflate"));
+    }
+
+    #[test]
+    fn test_write_avro_with_snappy_compression() {
+        let codec = write_and_read_codec(Some(CompressionCodec::Snappy));
+        assert_eq!(codec.as_deref(), Some("snappy"));
+    }
+
+    #[test]
+    fn test_write_avro_with_no_compression_omits_codec_metadata() {
+        let codec = write_and_read_codec(None);
+        assert!(
+            codec.is_none() || codec.as_deref() == Some("null"),
+            "expected no codec metadata or 'null', got {codec:?}"
+        );
     }
 
     #[test]

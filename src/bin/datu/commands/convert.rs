@@ -3,6 +3,7 @@ use std::time::Duration;
 use clap::Args;
 use datu::FileType;
 use datu::cli::AvroCompression;
+use datu::cli::ParquetCompression;
 use datu::pipeline::PipelineBuilder;
 use datu::pipeline::SelectSpec;
 use datu::resolve_file_type;
@@ -58,6 +59,13 @@ pub struct ConvertArgs {
     )]
     pub output_avro_compression: AvroCompression,
     #[arg(
+        long = "output-parquet-compression",
+        default_value_t = ParquetCompression::None,
+        value_parser = clap::value_parser!(ParquetCompression),
+        help = "Parquet output compression codec: none, null, snappy, gzip, zstd, brotli, lz4, or lz4_raw (case-insensitive; \"null\" is an alias for \"none\"). Only applies when converting to Parquet output. Default: none."
+    )]
+    pub output_parquet_compression: ParquetCompression,
+    #[arg(
         long,
         value_parser = clap::value_parser!(bool),
         num_args = 0..=1,
@@ -83,6 +91,7 @@ pub async fn convert(args: ConvertArgs) -> eyre::Result<()> {
         .sparse(args.sparse)
         .json_pretty(args.json_pretty)
         .avro_compression(args.output_avro_compression)
+        .parquet_compression(args.output_parquet_compression)
         .progress(Some(progress.clone()));
 
     if let Some(spec) = select_spec {
@@ -200,6 +209,7 @@ mod tests {
             sparse: true,
             json_pretty: false,
             output_avro_compression: AvroCompression::None,
+            output_parquet_compression: ParquetCompression::None,
             input_headers: None,
         }
     }
@@ -398,5 +408,27 @@ mod tests {
             .find(|(key, _)| *key == b"avro.codec")
             .map(|(_, value)| String::from_utf8_lossy(value).into_owned());
         assert_eq!(codec.as_deref(), Some("snappy"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_convert_parquet_to_parquet_with_zstd_compression() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let (output_path_buf, output_path) = temp_output_path(&temp_dir, "table_zstd.parquet");
+        let args = ConvertArgs {
+            output_parquet_compression: ParquetCompression::Zstd,
+            ..convert_args_for_tests("fixtures/table.parquet", output_path, None, None)
+        };
+
+        let result = convert(args).await;
+        assert!(result.is_ok(), "Convert failed: {:?}", result.err());
+
+        let file = std::fs::File::open(&output_path_buf).expect("Failed to open output file");
+        let reader = parquet::file::reader::SerializedFileReader::new(file)
+            .expect("written file should be valid Parquet");
+        let metadata = parquet::file::reader::FileReader::metadata(&reader);
+        let compression = metadata.row_group(0).column(0).compression();
+        // Parquet's on-disk column metadata stores only the codec identifier, not the level used
+        // to write it, so only the variant is checked here.
+        assert!(matches!(compression, parquet::basic::Compression::ZSTD(_)));
     }
 }

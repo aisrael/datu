@@ -13,6 +13,7 @@ use crate::Error;
 use crate::FileType;
 use crate::Result;
 use crate::cli::AvroCompression;
+use crate::cli::ParquetCompression;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::batch_readers::VecRecordBatchReader;
 use crate::pipeline::batch_readers::build_reader;
@@ -306,6 +307,7 @@ pub async fn split_file(
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
     progress: Option<ProgressBar>,
 ) -> Result<SplitOutcome> {
     if split_size.is_zero() {
@@ -346,6 +348,7 @@ pub async fn split_file(
             sparse,
             json_pretty,
             avro_compression,
+            parquet_compression,
         )?;
 
         rows_written += partition_reader.consumed;
@@ -483,6 +486,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -504,6 +508,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -525,6 +530,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await
@@ -570,6 +576,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await
@@ -597,6 +604,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await
@@ -622,6 +630,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await
@@ -657,6 +666,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await
@@ -701,6 +711,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await

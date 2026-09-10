@@ -8,6 +8,7 @@ use super::source::DataFrameSource;
 use crate::Error;
 use crate::FileType;
 use crate::cli::AvroCompression;
+use crate::cli::ParquetCompression;
 use crate::errors::PipelineExecutionError;
 use crate::pipeline::Producer;
 use crate::pipeline::ProgressVecRecordBatchReader;
@@ -28,6 +29,7 @@ pub struct DataFrameWriter {
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
 }
 
 impl DataFrameWriter {
@@ -38,6 +40,7 @@ impl DataFrameWriter {
         sparse: bool,
         json_pretty: bool,
         avro_compression: AvroCompression,
+        parquet_compression: ParquetCompression,
     ) -> Self {
         Self {
             output_path: output_path.into(),
@@ -45,6 +48,7 @@ impl DataFrameWriter {
             sparse,
             json_pretty,
             avro_compression,
+            parquet_compression,
         }
     }
 }
@@ -84,6 +88,7 @@ pub async fn write_dataframe_pipeline_output(
 ///
 /// Shared by the `convert` write sink ([`crate::pipeline::dataframe::DataFramePipeline`]) and the
 /// `concat` command so both go through identical output dispatch.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_dataframe_to_path(
     source: DataFrameSource,
     output_path: String,
@@ -91,6 +96,7 @@ pub(crate) async fn write_dataframe_to_path(
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
     progress: Option<ProgressBar>,
 ) -> crate::Result<()> {
     let write_args = WriteArgs {
@@ -99,6 +105,7 @@ pub(crate) async fn write_dataframe_to_path(
         sparse: Some(sparse),
         pretty: Some(json_pretty),
         avro_compression,
+        parquet_compression,
     };
 
     match output_file_type {
@@ -126,6 +133,7 @@ pub(crate) async fn write_dataframe_to_path(
                 sparse,
                 json_pretty,
                 avro_compression,
+                parquet_compression,
             )?;
         }
     }
@@ -151,6 +159,7 @@ impl Step for DataFrameWriter {
             self.sparse,
             self.json_pretty,
             self.avro_compression,
+            self.parquet_compression,
         )
     }
 }

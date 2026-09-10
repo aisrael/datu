@@ -93,6 +93,7 @@ read("table.parquet") |> select(:id, :email) |> write("table.csv")
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When converting to JSON, format output with indentation and newlines. Ignored for other output formats. |
 | `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when converting to Avro output. Default: `none`. |
+| `--output-parquet-compression <CODEC>` | Parquet output compression codec: `none`, `null`, `snappy`, `gzip`, `zstd`, `brotli`, `lz4`, or `lz4_raw`. Case-insensitive; `null` is an alias for `none`. Only applies when converting to Parquet output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
@@ -109,6 +110,9 @@ datu convert data.parquet data.avro --limit 1000
 
 # Parquet to Avro with Snappy compression
 datu convert data.parquet data.avro --output-avro-compression snappy
+
+# Parquet to Parquet with Zstd compression
+datu convert data.parquet compressed.parquet --output-parquet-compression zstd
 
 # Avro to CSV, only specific columns
 datu convert events.avro events.csv --select id,timestamp,user_id
@@ -528,6 +532,7 @@ datu concat <INPUT>... <OUTPUT> [OPTIONS]
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When concatenating to JSON, format output with indentation and newlines. Ignored for other output formats. |
 | `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when concatenating to Avro output. Default: `none`. |
+| `--output-parquet-compression <CODEC>` | Parquet output compression codec: `none`, `null`, `snappy`, `gzip`, `zstd`, `brotli`, `lz4`, or `lz4_raw`. Case-insensitive; `null` is an alias for `none`. Only applies when concatenating to Parquet output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
@@ -544,6 +549,9 @@ datu concat 2024-*.csv late-arrival.csv all-2024.csv
 
 # Concatenate Parquet files into a single CSV
 datu concat batch1.parquet batch2.parquet combined.csv
+
+# Concatenate into Parquet with Gzip compression
+datu concat part0.parquet part1.parquet all.parquet --output-parquet-compression gzip
 ```
 
 ---
@@ -573,6 +581,7 @@ datu split <INPUT> [OUTPUT] [OPTIONS]
 | `--sparse` | For JSON/YAML: omit keys with null/missing values. Default: `true`. Use `--sparse=false` to include default values (e.g. empty string). |
 | `--json-pretty` | When splitting to JSON, format output with indentation and newlines. Ignored for other output formats. |
 | `--output-avro-compression <CODEC>` | Avro output compression codec: `none`, `null`, `deflate`, or `snappy`. Case-insensitive; `null` is an alias for `none`. Only applies when splitting to Avro output. Default: `none`. |
+| `--output-parquet-compression <CODEC>` | Parquet output compression codec: `none`, `null`, `snappy`, `gzip`, `zstd`, `brotli`, `lz4`, or `lz4_raw`. Case-insensitive; `null` is an alias for `none`. Only applies when splitting to Parquet output. Default: `none`. |
 | `--input-headers [BOOL]` | For CSV input: whether the first row is a header. Default: `true` when omitted. Use `--input-headers=false` for headerless CSV. |
 
 **Examples:**
@@ -598,6 +607,9 @@ datu split large-file.avro --split 64mb
 
 # Split into ~1.5GiB partitions (binary unit)
 datu split large-file.parquet --split 1.5GiB
+
+# Split Parquet into partitions with Brotli compression
+datu split large-file.parquet --split 50000 --output-parquet-compression brotli
 ```
 
 ---

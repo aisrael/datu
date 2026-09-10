@@ -97,6 +97,13 @@ Feature: Split
     And the file "$TEMPDIR/part_deflate.part00001.avro" should exist
     And the file "$TEMPDIR/part_deflate.part00001.avro" should be a valid Avro file with codec "deflate"
 
+  Scenario: Split Parquet into partitions with --output-parquet-compression snappy
+    Given a file "fixtures/table.parquet"
+    When I run `datu split fixtures/table.parquet $TEMPDIR/out_snappy.parquet --split 2 --output-parquet-compression snappy`
+    Then the command should succeed
+    And the file "$TEMPDIR/out_snappy.part00001.parquet" should exist
+    And the file "$TEMPDIR/out_snappy.part00001.parquet" should be a valid Parquet file with codec "snappy"
+
   Scenario: Split fails when a byte size of 0 is given
     Given a file "fixtures/table.parquet"
     When I run `datu split fixtures/table.parquet $TEMPDIR/out.parquet --split 0mb`

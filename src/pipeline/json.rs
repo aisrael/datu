@@ -116,6 +116,7 @@ impl Step for DataframeJsonPrettyWriter {
             sparse,
             json_pretty,
             self.args.avro_compression,
+            self.args.parquet_compression,
         )?;
         Ok(())
     }

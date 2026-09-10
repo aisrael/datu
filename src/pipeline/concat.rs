@@ -7,6 +7,7 @@ use crate::Error;
 use crate::FileType;
 use crate::Result;
 use crate::cli::AvroCompression;
+use crate::cli::ParquetCompression;
 use crate::errors::PipelinePlanningError;
 use crate::pipeline::dataframe::DataFrameSource;
 use crate::pipeline::dataframe::read_dataframe_from_path;
@@ -31,6 +32,7 @@ pub async fn concat_files(
     sparse: bool,
     json_pretty: bool,
     avro_compression: AvroCompression,
+    parquet_compression: ParquetCompression,
     progress: Option<ProgressBar>,
 ) -> Result<()> {
     if input_paths.is_empty() {
@@ -72,6 +74,7 @@ pub async fn concat_files(
         sparse,
         json_pretty,
         avro_compression,
+        parquet_compression,
         progress,
     )
     .await
@@ -94,6 +97,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -113,6 +117,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -136,6 +141,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -170,6 +176,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;
@@ -192,6 +199,7 @@ mod tests {
             true,
             false,
             AvroCompression::None,
+            ParquetCompression::None,
             None,
         )
         .await;

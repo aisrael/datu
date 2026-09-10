@@ -5,6 +5,7 @@ use std::time::Duration;
 use clap::Args;
 use datu::FileType;
 use datu::cli::AvroCompression;
+use datu::cli::ParquetCompression;
 use datu::pipeline::concat_files;
 use eyre::Context;
 use eyre::Result;
@@ -52,6 +53,13 @@ pub struct ConcatArgs {
         help = "Avro output compression codec: none, null, deflate, or snappy (case-insensitive; \"null\" is an alias for \"none\"). Only applies when concatenating to Avro output. Default: none."
     )]
     pub output_avro_compression: AvroCompression,
+    #[arg(
+        long = "output-parquet-compression",
+        default_value_t = ParquetCompression::None,
+        value_parser = clap::value_parser!(ParquetCompression),
+        help = "Parquet output compression codec: none, null, snappy, gzip, zstd, brotli, lz4, or lz4_raw (case-insensitive; \"null\" is an alias for \"none\"). Only applies when concatenating to Parquet output. Default: none."
+    )]
+    pub output_parquet_compression: ParquetCompression,
     #[arg(
         long,
         value_parser = clap::value_parser!(bool),
@@ -138,6 +146,7 @@ pub async fn concat(args: ConcatArgs) -> Result<()> {
         args.sparse,
         args.json_pretty,
         args.output_avro_compression,
+        args.output_parquet_compression,
         Some(progress.clone()),
     )
     .await;
@@ -252,6 +261,7 @@ mod tests {
             sparse: true,
             json_pretty: false,
             output_avro_compression: AvroCompression::None,
+            output_parquet_compression: ParquetCompression::None,
             input_headers: None,
         }
     }

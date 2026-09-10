@@ -14,6 +14,10 @@
   - `convert`, `concat`, and `split` gain `--output-avro-compression <CODEC>` (`none`, `null`,
     `deflate`, or `snappy`, case-insensitive) to control the compression codec used when writing
     Avro output. Defaults to `none` (uncompressed), matching prior behavior.
+  - `convert`, `concat`, and `split` gain `--output-parquet-compression <CODEC>` (`none`, `null`,
+    `snappy`, `gzip`, `zstd`, `brotli`, `lz4`, or `lz4_raw`, case-insensitive) to control the
+    compression codec used when writing Parquet output. Defaults to `none` (uncompressed),
+    matching prior behavior.
 
 - **WASM bindings**
   - `inspectSchema`, `inspectMetadata`, and `convert` exported for Parquet, Avro, CSV, and JSON.

@@ -4,6 +4,7 @@ use super::DataframeSelect;
 use super::DataframeTail;
 use crate::FileType;
 use crate::cli::AvroCompression;
+use crate::cli::ParquetCompression;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::DataframeParquetReader;
 use crate::pipeline::DataframeToRecordBatch;
@@ -51,6 +52,7 @@ async fn test_dataframe_steps_parquet_tail_to_csv() {
         sparse: None,
         pretty: None,
         avro_compression: AvroCompression::None,
+        parquet_compression: ParquetCompression::None,
     };
     DataframeCsvWriter { args: write_args }
         .execute(Box::new(source))
@@ -226,6 +228,7 @@ async fn test_dataframe_to_record_batch_record_batch_avro_writer() {
         sparse: None,
         pretty: None,
         avro_compression: AvroCompression::None,
+        parquet_compression: ParquetCompression::None,
     };
     RecordBatchAvroWriter { args: write_args }
         .execute(Box::new(reader))
@@ -250,6 +253,7 @@ async fn test_record_batch_avro_writer_with_snappy_compression() {
         sparse: None,
         pretty: None,
         avro_compression: AvroCompression::Snappy,
+        parquet_compression: ParquetCompression::None,
     };
     RecordBatchAvroWriter { args: write_args }
         .execute(Box::new(reader))

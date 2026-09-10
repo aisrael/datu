@@ -503,6 +503,7 @@ async fn test_read_parquet_write_avro_steps() {
         sparse: None,
         pretty: None,
         avro_compression: crate::cli::AvroCompression::None,
+        parquet_compression: crate::cli::ParquetCompression::None,
     };
     let write_step = DataframeAvroWriter { args: write_args };
     write_step

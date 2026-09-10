@@ -95,6 +95,61 @@ impl FromStr for AvroCompression {
     }
 }
 
+/// Parquet output compression codec (none/null, snappy, gzip, zstd, brotli, lz4, lz4_raw).
+/// Case-insensitive from CLI.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParquetCompression {
+    #[default]
+    None,
+    Snappy,
+    Gzip,
+    Zstd,
+    Brotli,
+    Lz4,
+    Lz4Raw,
+}
+
+impl TryFrom<&str> for ParquetCompression {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s.to_lowercase().as_str() {
+            "none" | "null" => Ok(ParquetCompression::None),
+            "snappy" => Ok(ParquetCompression::Snappy),
+            "gzip" => Ok(ParquetCompression::Gzip),
+            "zstd" => Ok(ParquetCompression::Zstd),
+            "brotli" => Ok(ParquetCompression::Brotli),
+            "lz4" => Ok(ParquetCompression::Lz4),
+            "lz4_raw" | "lz4-raw" => Ok(ParquetCompression::Lz4Raw),
+            _ => Err(format!(
+                "unknown parquet compression '{s}', expected none, null, snappy, gzip, zstd, brotli, lz4, or lz4_raw"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for ParquetCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParquetCompression::None => write!(f, "none"),
+            ParquetCompression::Snappy => write!(f, "snappy"),
+            ParquetCompression::Gzip => write!(f, "gzip"),
+            ParquetCompression::Zstd => write!(f, "zstd"),
+            ParquetCompression::Brotli => write!(f, "brotli"),
+            ParquetCompression::Lz4 => write!(f, "lz4"),
+            ParquetCompression::Lz4Raw => write!(f, "lz4_raw"),
+        }
+    }
+}
+
+impl FromStr for ParquetCompression {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
+    }
+}
+
 /// Arguments for the `datu schema` command.
 #[derive(Args)]
 pub struct SchemaArgs {
@@ -241,5 +296,46 @@ mod tests {
             Ok(AvroCompression::Snappy)
         );
         assert!(AvroCompression::try_from("bogus").is_err());
+    }
+
+    #[test]
+    fn test_parquet_compression_case_insensitive_and_null_alias() {
+        assert_eq!(
+            ParquetCompression::try_from("SNAPPY"),
+            Ok(ParquetCompression::Snappy)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("Null"),
+            Ok(ParquetCompression::None)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("none"),
+            Ok(ParquetCompression::None)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("gzip"),
+            Ok(ParquetCompression::Gzip)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("ZSTD"),
+            Ok(ParquetCompression::Zstd)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("brotli"),
+            Ok(ParquetCompression::Brotli)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("lz4"),
+            Ok(ParquetCompression::Lz4)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("LZ4_RAW"),
+            Ok(ParquetCompression::Lz4Raw)
+        );
+        assert_eq!(
+            ParquetCompression::try_from("lz4-raw"),
+            Ok(ParquetCompression::Lz4Raw)
+        );
+        assert!(ParquetCompression::try_from("bogus").is_err());
     }
 }

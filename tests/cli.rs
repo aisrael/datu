@@ -14,6 +14,7 @@ mod common;
 use common::TEMPDIR_PLACEHOLDER;
 use common::assert_avro_codec;
 use common::assert_output_contains;
+use common::assert_parquet_codec;
 use common::assert_valid_parquet_file;
 use common::get_row_count;
 use common::replace_tempdir;
@@ -377,6 +378,12 @@ fn that_file_should_be_valid_parquet(world: &mut CliWorld) {
 fn file_should_be_avro_with_codec(world: &mut CliWorld, path: String, expected_codec: String) {
     let path_resolved = resolve_path(world, &path);
     assert_avro_codec(&path_resolved, &expected_codec);
+}
+
+#[then(regex = r#"^the file "(.+)" should be a valid Parquet file with codec "(.+)"$"#)]
+fn file_should_be_parquet_with_codec(world: &mut CliWorld, path: String, expected_codec: String) {
+    let path_resolved = resolve_path(world, &path);
+    assert_parquet_codec(&path_resolved, &expected_codec);
 }
 
 #[then(regex = r#"^the file "(.+)" should contain:$"#)]

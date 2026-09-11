@@ -16,15 +16,15 @@ exclude = [
 [dependencies]
 eyre = "0.6"
 async-trait = "0.1"
-arrow = "57.2"
+arrow = "59.2"
 log = "0.4"
-arrow-avro = "57.2"
-arrow-json = "57.2"
+arrow-avro = "59.2"
+arrow-json = "59.2"
 clap = { version = "4.6", features = ["cargo", "derive"] }
 chrono = "0.4"
-datafusion = { version = "52.3", features = ["avro"] }
-parquet = "57.2"
-orc-rust = "0.7.1"
+datafusion = { version = "55.0", features = ["avro"] }
+parquet = "59.2"
+orc-rust = "0.9.0"
 futures = "0.3"
 tokio = { version = "1.50", features = ["macros", "rt", "sync"] }
 thiserror = "2.0"

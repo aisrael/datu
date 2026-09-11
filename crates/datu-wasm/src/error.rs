@@ -7,6 +7,8 @@ pub enum WasmError {
     #[error(transparent)]
     Arrow(#[from] arrow::error::ArrowError),
     #[error(transparent)]
+    Avro(#[from] arrow_avro::errors::AvroError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("Unknown format: '{0}' (expected one of: parquet, avro, csv, json)")]
     UnknownFormat(String),

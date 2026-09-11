@@ -4,8 +4,8 @@ use std::path::Path;
 use async_trait::async_trait;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
+use datafusion::execution::options::JsonReadOptions;
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::NdJsonReadOptions;
 use datafusion::prelude::ParquetReadOptions;
 use datafusion::prelude::SessionContext;
 use orc_rust::ArrowReaderBuilder;
@@ -124,7 +124,7 @@ pub async fn read_to_dataframe(
                 .await?
         }
         FileType::Json => {
-            ctx.read_json(input_path, NdJsonReadOptions::default())
+            ctx.read_json(input_path, JsonReadOptions::default())
                 .await?
         }
         FileType::Csv => {

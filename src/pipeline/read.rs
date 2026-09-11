@@ -2,9 +2,9 @@ use std::fs::File;
 use std::path::Path;
 
 use async_trait::async_trait;
+use datafusion::execution::options::JsonReadOptions;
 use datafusion::prelude::AvroReadOptions;
 use datafusion::prelude::CsvReadOptions;
-use datafusion::execution::options::JsonReadOptions;
 use datafusion::prelude::DataFrame;
 use datafusion::prelude::ParquetReadOptions;
 use datafusion::prelude::SessionContext;

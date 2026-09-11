@@ -212,18 +212,18 @@ impl AvroSink {
         let writer: AvroWriter<std::fs::File> = WriterBuilder::new((*schema).clone())
             .with_compression(codec)
             .build(file)
-            .map_err(Error::ArrowError)?;
+            .map_err(Error::AvroError)?;
         Ok(Self { writer })
     }
 }
 
 impl BatchWriteSink for AvroSink {
     fn write_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch).map_err(Error::ArrowError)
+        self.writer.write(batch).map_err(Error::AvroError)
     }
 
     fn finish(mut self) -> Result<()> {
-        self.writer.finish().map_err(Error::ArrowError)?;
+        self.writer.finish().map_err(Error::AvroError)?;
         Ok(())
     }
 }

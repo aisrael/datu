@@ -219,26 +219,26 @@ Feature: Convert
       ```
       [
         {
-          "__index_level_0__": "a",
-          "five": "2022-12-23T11:43:49",
-          "four": "2022-12-23T00:00:00Z",
           "one": -1.0,
+          "two": "foo",
           "three": true,
-          "two": "foo"
+          "four": "2022-12-23T00:00:00Z",
+          "five": "2022-12-23T11:43:49",
+          "__index_level_0__": "a"
         },
         {
-          "__index_level_0__": "b",
-          "five": "2021-12-23T12:44:50",
-          "four": "2021-12-23T00:00:00Z",
+          "two": "bar",
           "three": false,
-          "two": "bar"
+          "four": "2021-12-23T00:00:00Z",
+          "five": "2021-12-23T12:44:50",
+          "__index_level_0__": "b"
         },
         {
-          "__index_level_0__": "c",
-          "five": "2020-12-23T13:45:51",
-          "four": "2020-12-23T00:00:00Z",
           "one": 2.5,
-          "two": "baz"
+          "two": "baz",
+          "four": "2020-12-23T00:00:00Z",
+          "five": "2020-12-23T13:45:51",
+          "__index_level_0__": "c"
         }
       ]
       ```

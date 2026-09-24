@@ -19,6 +19,17 @@ To install from source:
 cargo install --git https://github.com/aisrael/datu
 ```
 
+### Agent Skill
+
+[`.claude/skills/datu/`](.claude/skills/datu/SKILL.md) contains a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that teaches AI coding agents to use the `datu` CLI for inspecting, converting, validating, diffing, concatenating, and splitting data files. It also documents gotchas that trip up agents, such as `diff` exiting `0` even when files differ, and JSON output omitting null keys by default.
+
+The skill is picked up automatically when working in this repository. To use it in other projects, copy it into your personal skills directory:
+
+```sh
+mkdir -p ~/.claude/skills
+cp -r .claude/skills/datu ~/.claude/skills/
+```
+
 ## Supported Formats
 
 | Format                        | Read | Write | Display |

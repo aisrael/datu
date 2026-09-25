@@ -13,7 +13,9 @@ use commands::diff;
 use commands::heads_or_tails;
 use commands::schema;
 use commands::split;
-use datu::cli::repl::Repl;
+use datu::cli::repl::DatuRepl;
+use datu::cli::repl::repl_history_path;
+use flt::repl::Repl;
 
 use crate::commands::concat::ConcatArgs;
 use crate::commands::convert::ConvertArgs;
@@ -131,6 +133,6 @@ async fn main() -> eyre::Result<()> {
 
 /// Runs the datu REPL.
 pub async fn run_repl() -> eyre::Result<()> {
-    let mut repl = Repl::new()?;
-    repl.run().await
+    let mut repl = Repl::new(DatuRepl::default(), repl_history_path())?;
+    repl.run()
 }

@@ -16,6 +16,9 @@ exclude = [
 [dependencies]
 eyre = "0.6"
 async-trait = "0.1"
+# Held at 59.2 (with arrow-avro, arrow-json and parquet) because datafusion 55.1
+# and orc-rust 0.9 still depend on arrow 59; mixing in arrow 60 duplicates the
+# arrow types and fails to compile. Bump together once both support arrow 60.
 arrow = "59.2"
 log = "0.4"
 arrow-avro = "59.2"

@@ -260,7 +260,7 @@ Feature: Convert
     And the file "$TEMPDIR/table.yaml" should be valid YAML
     And the file "$TEMPDIR/table.yaml" should contain:
       ```
-      - one: -1
+      - one: -1.0
         two: foo
         three: true
         four: "2022-12-23T00:00:00Z"

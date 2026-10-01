@@ -1,3 +1,7 @@
+[![CI Tests](https://github.com/aisrael/datu/actions/workflows/ci.yml/badge.svg)](https://github.com/aisrael/datu/actions/workflows/ci.yml/)
+[![Crates.io](https://img.shields.io/crates/v/datu.svg)](https://crates.io/crates/datu)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 datu - a data file utility
 =======================
 

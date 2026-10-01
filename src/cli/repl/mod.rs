@@ -5,7 +5,8 @@ mod interactive;
 mod plan;
 mod stage;
 
-pub use interactive::Repl;
+pub use interactive::DatuRepl;
+pub use interactive::repl_history_path;
 pub use stage::ReplPipelineStage;
 
 /// Column selection in REPL expressions (re-export of [`crate::pipeline::ColumnSpec`]).

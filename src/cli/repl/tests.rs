@@ -5,8 +5,8 @@ use flt::ast::Literal;
 use flt::parser::parse_expr;
 
 use super::ColumnSpec;
+use super::DatuRepl;
 use super::GroupByKey;
-use super::Repl;
 use super::SelectItem;
 use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::plan::collect_pipe_stages;
@@ -34,8 +34,8 @@ fn parse(input: &str) -> Expr {
     expr
 }
 
-fn test_repl() -> Repl {
-    Repl::new_for_tests().expect("repl for tests")
+fn test_repl() -> DatuRepl {
+    DatuRepl::default()
 }
 
 fn pipe_exprs(input: &str) -> Vec<Expr> {

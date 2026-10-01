@@ -16,39 +16,41 @@ exclude = [
 [dependencies]
 eyre = "0.6"
 async-trait = "0.1"
+# Held at 59.2 (with arrow-avro, arrow-json and parquet) because datafusion 55.1
+# and orc-rust 0.9 still depend on arrow 59; mixing in arrow 60 duplicates the
+# arrow types and fails to compile. Bump together once both support arrow 60.
 arrow = "59.2"
 log = "0.4"
 arrow-avro = "59.2"
 arrow-json = "59.2"
 clap = { version = "4.6", features = ["cargo", "derive"] }
 chrono = "0.4"
-datafusion = { version = "55.0", features = ["avro"] }
+datafusion = { version = "55.1.0", features = ["avro"] }
 parquet = "59.2"
 orc-rust = "0.9.0"
 futures = "0.3"
 tokio = { version = "1.50", features = ["macros", "rt", "sync"] }
 thiserror = "2.0"
 csv = "1.4"
-hashlink = "0.10"
-saphyr = "0.0.6"
+hashlink = "0.12.2"
+saphyr = "0.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rust_xlsxwriter = { version = "0.94", features = ["chrono"] }
-rustc-literal-escaper = "0.0.7"
-rustyline = "17"
-flt = "0.1"
+rust_xlsxwriter = { version = "0.99.1", features = ["chrono"] }
+rustc-literal-escaper = "0.0.8"
+flt = "0.1.2"
 dirs = { version = "2.0", package = "dirs-next" }
-rand = "0.9"
+rand = "0.10.3"
 reservoir-sampling = "0.5.1"
 indicatif = "0.18"
 glob = "0.3"
 
 [dev-dependencies]
-criterion = "0.5"
-cucumber = "0.22.1"
-expectrl = "0.8"
+criterion = "0.8.1"
+cucumber = "0.23.0"
+expectrl = "0.9.0"
 serde_yaml = "0.9"
-gherkin = "0.15"
+gherkin = "0.16.0"
 tempfile = "3"
 
 [[bench]]

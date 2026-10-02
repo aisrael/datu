@@ -81,7 +81,7 @@ pub enum ReadResult {
 impl std::fmt::Debug for ReadResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReadResult::DataFrame(source) => write!(f, "DataFrame({:?})", &source),
+            ReadResult::DataFrame(source) => write!(f, "DataFrame({:?})", source),
             ReadResult::OrcReaderBuilder(builder) => write!(f, "OrcReaderBuilder({:p})", &builder),
         }
     }

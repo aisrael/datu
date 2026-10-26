@@ -298,6 +298,7 @@ impl Step for RecordBatchSample {
 }
 
 /// File output vs stdout display; tail of [`RecordBatchPipeline`] after ORC read/select/slice.
+#[derive(Clone)]
 pub enum RecordBatchSink {
     Write {
         output_path: String,
@@ -386,38 +387,7 @@ impl RecordBatchPipeline {
         let select = self.select.clone();
         let slice = self.slice;
         let sparse = self.sparse;
-        let sink = match &self.sink {
-            RecordBatchSink::Write {
-                output_path,
-                output_file_type,
-                json_pretty,
-                avro_compression,
-                parquet_compression,
-                progress,
-            } => RecordBatchSink::Write {
-                output_path: output_path.clone(),
-                output_file_type: *output_file_type,
-                json_pretty: *json_pretty,
-                avro_compression: *avro_compression,
-                parquet_compression: *parquet_compression,
-                progress: progress.clone(),
-            },
-            RecordBatchSink::Display {
-                output_format,
-                csv_stdout_headers,
-            } => RecordBatchSink::Display {
-                output_format: *output_format,
-                csv_stdout_headers: *csv_stdout_headers,
-            },
-            RecordBatchSink::Schema {
-                output_format,
-                sparse: schema_sparse,
-            } => RecordBatchSink::Schema {
-                output_format: *output_format,
-                sparse: *schema_sparse,
-            },
-            RecordBatchSink::Count => RecordBatchSink::Count,
-        };
+        let sink = self.sink.clone();
 
         let fut = async move {
             match sink {

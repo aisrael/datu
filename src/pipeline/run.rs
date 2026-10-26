@@ -38,6 +38,14 @@ impl Pipeline {
             Pipeline::RecordBatch(p) => p.execute(),
         }
     }
+
+    /// Runs a pipeline that ends in `count()` and returns the row count instead of printing it.
+    pub fn execute_count(&mut self) -> Result<usize> {
+        match self {
+            Pipeline::DataFrame(p) => p.execute_count(),
+            Pipeline::RecordBatch(p) => p.execute_count(),
+        }
+    }
 }
 
 /// Writes record batches to output file. Used by REPL.

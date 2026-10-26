@@ -8,7 +8,7 @@ use crate::pipeline::SelectItem;
 use crate::pipeline::SelectSpec;
 
 /// A planned pipeline stage with validated, extracted arguments.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ReplPipelineStage {
     Read {
         path: String,
@@ -138,7 +138,7 @@ fn format_group_by_key(key: &GroupByKey) -> String {
     }
 }
 
-fn format_select_item(item: &SelectItem) -> String {
+pub(super) fn format_select_item(item: &SelectItem) -> String {
     let body = match item {
         SelectItem::Column(c, _) => format_column_spec(c),
         SelectItem::Sum(c, _) => format!("sum({})", format_column_spec(c)),

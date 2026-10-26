@@ -41,6 +41,8 @@ pub enum Error {
     PipelineExecutionError(#[from] PipelineExecutionError),
     #[error(transparent)]
     DatafusionError(#[from] datafusion::error::DataFusionError),
+    #[error(transparent)]
+    FltRuntime(#[from] flt::Error),
 }
 
 /// Errors produced while validating or constructing a pipeline plan.

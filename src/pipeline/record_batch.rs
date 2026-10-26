@@ -10,6 +10,7 @@ use crate::FileType;
 use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
 use crate::cli::ParquetCompression;
+use crate::errors::PipelinePlanningError;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::Producer;
 use crate::pipeline::ProgressRecordBatchReader;
@@ -347,6 +348,20 @@ async fn orc_source_after_select_and_slice(
     Ok(source)
 }
 
+/// ORC row count after optional column select.
+async fn orc_count(input_path: String, select: Option<SelectSpec>) -> crate::Result<usize> {
+    if select.is_none() {
+        return count_rows(&input_path, FileType::Orc, None).await;
+    }
+    let mut source = orc_source_after_select(input_path, select).await?;
+    let reader = source.get().await?;
+    let mut total = 0usize;
+    for batch in reader {
+        total += batch.map_err(Error::ArrowError)?.num_rows();
+    }
+    Ok(total)
+}
+
 /// ORC input via record-batch steps (see `PIPELINE.mermaid` RecordBatch branch).
 pub struct RecordBatchPipeline {
     pub(crate) input_path: String,
@@ -426,19 +441,8 @@ impl RecordBatchPipeline {
                     Ok::<(), Error>(())
                 }
                 RecordBatchSink::Count => {
-                    if select.is_none() {
-                        let total = count_rows(&input_path, FileType::Orc, None).await?;
-                        println!("{total}");
-                    } else {
-                        let mut source =
-                            orc_source_after_select(input_path.clone(), select).await?;
-                        let reader = source.get().await?;
-                        let mut total = 0usize;
-                        for batch in reader {
-                            total += batch.map_err(Error::ArrowError)?.num_rows();
-                        }
-                        println!("{total}");
-                    }
+                    let total = orc_count(input_path, select).await?;
+                    println!("{total}");
                     Ok::<(), Error>(())
                 }
                 RecordBatchSink::Write {
@@ -504,6 +508,21 @@ impl RecordBatchPipeline {
         };
 
         block_on_pipeline_future(fut)
+    }
+
+    /// Like [`Self::execute`] with a [`RecordBatchSink::Count`] sink, but returns the row count
+    /// instead of printing it, so the REPL can hand it back to flt as a value.
+    pub fn execute_count(&mut self) -> crate::Result<usize> {
+        if self.input_file_type != FileType::Orc {
+            return Err(Error::GenericError(format!(
+                "RecordBatchPipeline only supports ORC input, got {}",
+                self.input_file_type
+            )));
+        }
+        if !matches!(self.sink, RecordBatchSink::Count) {
+            return Err(PipelinePlanningError::MissingRequiredStage("count()".to_string()).into());
+        }
+        block_on_pipeline_future(orc_count(self.input_path.clone(), self.select.clone()))
     }
 }
 

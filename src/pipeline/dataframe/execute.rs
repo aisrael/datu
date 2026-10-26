@@ -12,6 +12,7 @@ use crate::cli::AvroCompression;
 use crate::cli::DisplayOutputFormat;
 use crate::cli::ParquetCompression;
 use crate::errors::PipelineExecutionError;
+use crate::errors::PipelinePlanningError;
 use crate::pipeline::DisplaySlice;
 use crate::pipeline::FilterSpec;
 use crate::pipeline::SelectSpec;
@@ -144,27 +145,15 @@ impl DataFramePipeline {
                     Ok::<(), Error>(())
                 }
                 DataFrameSink::Count => {
-                    let total = if select.is_none()
-                        && filter_before_select.is_none()
-                        && filter_after_select.is_none()
-                    {
-                        count_rows(&input_path, input_file_type, csv_has_header).await?
-                    } else {
-                        let mut source = dataframe_pipeline_prepare_source(
-                            input_path.clone(),
-                            input_file_type,
-                            select,
-                            filter_before_select.clone(),
-                            filter_after_select.clone(),
-                            None,
-                            csv_has_header,
-                        )
-                        .await?;
-                        let df = source.df.take().ok_or_else(|| {
-                            Error::from(PipelineExecutionError::DataFrameAlreadyTaken)
-                        })?;
-                        df.count().await?
-                    };
+                    let total = dataframe_count(
+                        input_path,
+                        input_file_type,
+                        select,
+                        filter_before_select,
+                        filter_after_select,
+                        csv_has_header,
+                    )
+                    .await?;
                     println!("{total}");
                     Ok::<(), Error>(())
                 }
@@ -232,6 +221,52 @@ impl DataFramePipeline {
 
         block_on_pipeline_future(fut)
     }
+
+    /// Like [`Self::execute`] with a [`DataFrameSink::Count`] sink, but returns the row count
+    /// instead of printing it, so the REPL can hand it back to flt as a value.
+    pub fn execute_count(&mut self) -> crate::Result<usize> {
+        if !matches!(self.sink, DataFrameSink::Count) {
+            return Err(PipelinePlanningError::MissingRequiredStage("count()".to_string()).into());
+        }
+        block_on_pipeline_future(dataframe_count(
+            self.input_path.clone(),
+            self.input_file_type,
+            self.select.clone(),
+            self.filter_before_select.clone(),
+            self.filter_after_select.clone(),
+            self.csv_has_header,
+        ))
+    }
+}
+
+/// Row count after optional select and filters.
+async fn dataframe_count(
+    input_path: String,
+    input_file_type: FileType,
+    select: Option<SelectSpec>,
+    filter_before_select: Option<FilterSpec>,
+    filter_after_select: Option<FilterSpec>,
+    csv_has_header: Option<bool>,
+) -> crate::Result<usize> {
+    // File metadata answers an unfiltered, unprojected count without scanning the data.
+    if select.is_none() && filter_before_select.is_none() && filter_after_select.is_none() {
+        return count_rows(&input_path, input_file_type, csv_has_header).await;
+    }
+    let mut source = dataframe_pipeline_prepare_source(
+        input_path,
+        input_file_type,
+        select,
+        filter_before_select,
+        filter_after_select,
+        None,
+        csv_has_header,
+    )
+    .await?;
+    let df = source
+        .df
+        .take()
+        .ok_or_else(|| Error::from(PipelineExecutionError::DataFrameAlreadyTaken))?;
+    Ok(df.count().await?)
 }
 
 /// Read into a [`DataFrameSource`], apply optional SQL filters before/after `select`, then optional head/tail/sample.

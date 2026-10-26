@@ -26,6 +26,7 @@ use crate::pipeline::schema::print_schema_fields;
 use crate::pipeline::schema::schema_fields_from_arrow;
 
 /// File output vs stdout display; the tail of [`DataFramePipeline`] after read/select/slice.
+#[derive(Clone)]
 pub enum DataFrameSink {
     Write {
         output_path: String,
@@ -72,38 +73,7 @@ impl DataFramePipeline {
         let slice = self.slice;
         let csv_has_header = self.csv_has_header;
         let sparse = self.sparse;
-        let sink = match &self.sink {
-            DataFrameSink::Write {
-                output_path,
-                output_file_type,
-                json_pretty,
-                avro_compression,
-                parquet_compression,
-                progress,
-            } => DataFrameSink::Write {
-                output_path: output_path.clone(),
-                output_file_type: *output_file_type,
-                json_pretty: *json_pretty,
-                avro_compression: *avro_compression,
-                parquet_compression: *parquet_compression,
-                progress: progress.clone(),
-            },
-            DataFrameSink::Display {
-                output_format,
-                csv_stdout_headers,
-            } => DataFrameSink::Display {
-                output_format: *output_format,
-                csv_stdout_headers: *csv_stdout_headers,
-            },
-            DataFrameSink::Schema {
-                output_format,
-                sparse: sink_sparse,
-            } => DataFrameSink::Schema {
-                output_format: *output_format,
-                sparse: *sink_sparse,
-            },
-            DataFrameSink::Count => DataFrameSink::Count,
-        };
+        let sink = self.sink.clone();
 
         let fut = async move {
             match sink {

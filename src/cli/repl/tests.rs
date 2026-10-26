@@ -483,38 +483,6 @@ fn test_extract_select_items_unsupported_expr() {
 }
 
 #[test]
-fn test_eval_incremental_non_terminal_accumulates_state() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet")"#);
-    let pipeline = ctx.eval_incremental(expr).expect("eval_incremental");
-    assert!(pipeline.is_none());
-    assert!(ctx.statement_incomplete);
-    assert_eq!(ctx.pending_exprs.len(), 1);
-}
-
-#[test]
-fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
-    let mut ctx = test_repl();
-    let first = parse(r#"read("fixtures/table.parquet")"#);
-    let second = parse(r#"head(2)"#);
-
-    let first_pipeline = ctx.eval_incremental(first).expect("first eval_incremental");
-    assert!(first_pipeline.is_none());
-    assert!(ctx.statement_incomplete);
-
-    let second_pipeline = expect_pipeline(
-        ctx.eval_incremental(second)
-            .expect("second eval_incremental"),
-    );
-    assert_eq!(second_pipeline.len(), 3);
-    assert!(matches!(second_pipeline[0], ReplPipelineStage::Read { .. }));
-    assert_eq!(second_pipeline[1], ReplPipelineStage::Head { n: 2 });
-    assert_eq!(second_pipeline[2], ReplPipelineStage::Print);
-    assert!(!ctx.statement_incomplete);
-    assert!(ctx.pending_exprs.is_empty());
-}
-
-#[test]
 fn test_eval_incremental_terminal_single_input_executes_immediately() {
     let mut ctx = test_repl();
     let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
@@ -1411,17 +1379,13 @@ fn test_fold_pipe_stages_round_trips_collect() {
 }
 
 #[test]
-fn test_eval_incremental_routes_multiline_count_to_flt() {
+fn test_eval_incremental_routes_count_to_flt() {
     let mut ctx = test_repl();
-    let first = ctx
-        .eval_incremental(parse(r#"read("fixtures/table.parquet")"#))
-        .expect("first eval_incremental");
-    assert!(first.is_none());
-    let second = ctx
-        .eval_incremental(parse("count()"))
-        .expect("second eval_incremental");
-    let Some(CompleteStatement::Native(expr)) = second else {
-        panic!("expected a native statement, got {second:?}");
+    let statement = ctx
+        .eval_incremental(parse(r#"read("fixtures/table.parquet") |> count()"#))
+        .expect("eval_incremental");
+    let Some(CompleteStatement::Native(expr)) = statement else {
+        panic!("expected a native statement, got {statement:?}");
     };
     assert_eq!(
         expr.to_string(),

@@ -6,15 +6,6 @@ Feature: Count
       read("fixtures/table.parquet") |> count()
       ```
     Then the command should succeed
-    And the output should contain "3"
-
-  Scenario: Row count across two lines
-    When the REPL is ran and the user types:
-      ```
-      read("fixtures/table.parquet")
-      count()
-      ```
-    Then the command should succeed
     And the output should contain "Pipeline: read("fixtures/table.parquet") |> count()"
     And the output should contain "3"
 

@@ -187,7 +187,7 @@ Here, `*args` means 'collect the rest of the function arguments and provide them
 read("input.parquet") |> select(:id, :name, :email)
 ```
 
-If the column name is specified as a `Symbol` (`:name`), then `select()` treats that name as case-insensitive and will match a column named `"NAME"`, `"name"`, or `"Name"`. Bare identifiers (`name`) are not column names: flt reads them as variables.
+If the column name is specified as a `Symbol` (`:name`), then `select()` treats that name as case-insensitive and will match a column named `"NAME"`, `"name"`, or `"Name"`.
 
 If the column name is specified as a `String` (`"_one"`), then `select()` performs an exact, case-sensitive match.
 

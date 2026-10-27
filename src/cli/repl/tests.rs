@@ -1,6 +1,6 @@
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
-use flt::ast::Identifier;
+use flt::ast::FunctionCall;
 use flt::ast::Literal;
 use flt::parser::parse_expr;
 
@@ -39,6 +39,14 @@ fn parse(input: &str) -> Expr {
 
 fn test_repl() -> DatuRepl {
     DatuRepl::default()
+}
+
+/// A `select(...)` call with the given positional arguments.
+fn select_call(args: Vec<Expr>) -> FunctionCall {
+    match Expr::function_call("select", args) {
+        Expr::FunctionCall(call) => call,
+        other => unreachable!("function_call builds a call, got {other:?}"),
+    }
 }
 
 fn expect_pipeline(statement: Option<CompleteStatement>) -> Vec<ReplPipelineStage> {
@@ -91,8 +99,8 @@ fn test_plan_stage_filter() {
 
 #[test]
 fn test_plan_stage_select() {
-    let expr = Expr::FunctionCall(
-        Identifier("select".into()),
+    let expr = Expr::function_call(
+        "select",
         vec![
             Expr::Literal(Literal::Symbol("one".into())),
             Expr::Literal(Literal::Symbol("two".into())),
@@ -236,7 +244,7 @@ fn test_plan_stage_write() {
 
 #[test]
 fn test_plan_stage_unsupported_function() {
-    let expr = Expr::FunctionCall(Identifier("unknown".into()), vec![]);
+    let expr = Expr::function_call("unknown", vec![]);
     let result = plan_stage(expr);
     assert!(result.is_err());
     assert!(matches!(
@@ -391,7 +399,7 @@ fn test_extract_select_items_symbols() {
         Expr::Literal(Literal::Symbol("one".into())),
         Expr::Literal(Literal::Symbol("two".into())),
     ];
-    let result = extract_select_items(&args).unwrap();
+    let result = extract_select_items(&select_call(args)).unwrap();
     assert_eq!(
         result,
         vec![
@@ -407,7 +415,7 @@ fn test_extract_select_items_strings() {
         Expr::Literal(Literal::String("col_a".into())),
         Expr::Literal(Literal::String("col_b".into())),
     ];
-    let result = extract_select_items(&args).unwrap();
+    let result = extract_select_items(&select_call(args)).unwrap();
     assert_eq!(
         result,
         vec![
@@ -422,7 +430,7 @@ fn test_extract_select_items_rejects_idents() {
     // Bare identifiers are flt variables, not columns; columns are :symbol or "string".
     let args = vec![Expr::Ident("foo".into())];
     assert!(matches!(
-        extract_select_items(&args),
+        extract_select_items(&select_call(args)),
         Err(Error::UnsupportedFunctionCall(_))
     ));
 }
@@ -433,7 +441,7 @@ fn test_extract_select_items_mixed() {
         Expr::Literal(Literal::Symbol("sym".into())),
         Expr::Literal(Literal::String("str".into())),
     ];
-    let result = extract_select_items(&args).unwrap();
+    let result = extract_select_items(&select_call(args)).unwrap();
     assert_eq!(
         result,
         vec![
@@ -455,25 +463,25 @@ fn test_extract_select_items_aggregates() {
         ("count_distinct", SelectItem::count_distinct(qty)),
     ];
     for (fn_name, expected) in cases {
-        let args = vec![Expr::FunctionCall(
-            Identifier(fn_name.into()),
+        let args = vec![Expr::function_call(
+            fn_name,
             vec![Expr::Literal(Literal::Symbol("quantity".into()))],
         )];
-        let result = extract_select_items(&args).unwrap();
+        let result = extract_select_items(&select_call(args)).unwrap();
         assert_eq!(result, vec![expected], "case: {fn_name}");
     }
 }
 
 #[test]
 fn test_extract_select_items_empty() {
-    let result = extract_select_items(&[]).unwrap();
+    let result = extract_select_items(&select_call(Vec::new())).unwrap();
     assert!(result.is_empty());
 }
 
 #[test]
 fn test_extract_select_items_unsupported_expr() {
     let args = vec![Expr::Literal(Literal::Boolean(true))];
-    let result = extract_select_items(&args);
+    let result = extract_select_items(&select_call(args));
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -1085,8 +1093,8 @@ fn test_plan_pipeline_read_count() {
 
 #[test]
 fn test_plan_stage_count_rejects_invalid_args() {
-    let expr = Expr::FunctionCall(
-        Identifier("count".into()),
+    let expr = Expr::function_call(
+        "count",
         vec![
             Expr::Literal(Literal::String("a".into())),
             Expr::Literal(Literal::String("b".into())),
@@ -1102,8 +1110,8 @@ fn test_plan_stage_count_rejects_invalid_args() {
 
 #[test]
 fn test_plan_stage_schema_rejects_args() {
-    let expr = Expr::FunctionCall(
-        Identifier("schema".into()),
+    let expr = Expr::function_call(
+        "schema",
         vec![Expr::Literal(Literal::String("extra".into()))],
     );
     let result = plan_stage(expr);
@@ -1135,7 +1143,7 @@ fn test_is_head_call_false_for_none() {
 
 fn parse_fn_args(input: &str) -> Vec<Expr> {
     match parse(input) {
-        Expr::FunctionCall(_, args) => args,
+        Expr::FunctionCall(call) => call.positional_args,
         other => panic!("expected FunctionCall, got {other:?}"),
     }
 }
@@ -1314,7 +1322,7 @@ fn test_plan_stage_sample_with_arg() {
 
 #[test]
 fn test_plan_stage_sample_no_arg_defaults_to_10() {
-    let expr = Expr::FunctionCall(Identifier("sample".into()), vec![]);
+    let expr = Expr::function_call("sample", vec![]);
     let stage = plan_stage(expr).unwrap();
     assert_eq!(stage, ReplPipelineStage::Sample { n: 10 });
 }
@@ -1362,21 +1370,20 @@ fn test_display_sample_stage() {
 // ── native count routing ───────────────────────────────────────
 
 #[test]
-fn test_is_native_count_statement_read_filter_count() {
-    assert!(is_native_count_statement(&pipe_exprs(
-        r#"read("a.parquet") |> count()"#
-    )));
-    assert!(is_native_count_statement(&pipe_exprs(
-        r#"read("a.parquet") |> filter("x > 1") |> count()"#
-    )));
+fn test_is_native_count_statement_native_stages() {
+    for input in [
+        r#"read("a.parquet") |> count()"#,
+        r#"read("a.parquet") |> filter("x > 1") |> count()"#,
+        r#"read("a.parquet") |> select(:a, total: sum(:b)) |> count()"#,
+        r#"read("a.parquet") |> group_by(:a) |> select(:a, sum(:b)) |> count()"#,
+    ] {
+        assert!(is_native_count_statement(&pipe_exprs(input)), "{input}");
+    }
 }
 
 #[test]
 fn test_is_native_count_statement_keeps_non_native_stages_on_planner() {
     for input in [
-        // Not natives yet, so these must keep working through the Expr planner.
-        r#"read("a.parquet") |> select(:a) |> count()"#,
-        r#"read("a.parquet") |> group_by(:a) |> select(:a, sum(:b)) |> count()"#,
         // Not a count statement.
         r#"read("a.parquet") |> head(2)"#,
         // count(:col) is an aggregate, not the terminal count().
@@ -1415,16 +1422,66 @@ fn test_eval_incremental_routes_count_to_flt() {
 }
 
 #[test]
-fn test_eval_incremental_select_count_stays_on_planner() {
+fn test_eval_incremental_routes_select_count_to_flt() {
+    let mut ctx = test_repl();
+    let statement = ctx
+        .eval_incremental(parse(
+            r#"read("fixtures/table.parquet") |> select(:one) |> count()"#,
+        ))
+        .expect("eval_incremental");
+    let Some(CompleteStatement::Native(expr)) = statement else {
+        panic!("expected a native statement, got {statement:?}");
+    };
+    ctx.execute_native(expr).expect("execute_native");
+}
+
+#[test]
+fn test_eval_incremental_select_head_stays_on_planner() {
+    // Only count statements go to flt; head isn't a native yet.
     let mut ctx = test_repl();
     let stages = expect_pipeline(
         ctx.eval_incremental(parse(
-            r#"read("fixtures/table.parquet") |> select(:one) |> count()"#,
+            r#"read("fixtures/table.parquet") |> select(:one) |> head(1)"#,
         ))
         .expect("eval_incremental"),
     );
-    assert_eq!(stages.last(), Some(&ReplPipelineStage::Count));
-    ctx.execute_pipeline(stages).expect("execute_pipeline");
+    assert_eq!(stages[2], ReplPipelineStage::Head { n: 1 });
+}
+
+#[test]
+fn test_plan_stage_rejects_keywords_on_positional_functions() {
+    for input in [r#"read("a.parquet", x: 1)"#, "head(1, n: 2)", "count(x: 1)"] {
+        assert!(
+            matches!(
+                plan_stage(parse(input)),
+                Err(Error::UnsupportedFunctionCall(_))
+            ),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn test_plan_stage_select_keyword_aliases_in_order() {
+    let stage = plan_stage(parse(r#"select(:a, z: :b, "c d": sum(:c))"#)).unwrap();
+    assert_eq!(
+        stage,
+        ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("a".into())),
+                SelectItem::column(ColumnSpec::CaseInsensitive("b".into())).with_alias("z"),
+                SelectItem::sum(ColumnSpec::CaseInsensitive("c".into())).with_alias("c d"),
+            ]
+        }
+    );
+}
+
+#[test]
+fn test_plan_stage_select_positional_map_is_not_an_alias() {
+    assert!(matches!(
+        plan_stage(parse("select({total: sum(:b)})")),
+        Err(Error::UnsupportedFunctionCall(_))
+    ));
 }
 
 // ── Pipeline::execute_count ────────────────────────────────────

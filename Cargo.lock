@@ -2045,13 +2045,15 @@ dependencies = [
 [[package]]
 name = "flt"
 version = "0.2.0"
-source = "git+https://github.com/aisrael/flt?rev=bc03f95#bc03f95db16489959e3fb528c9521cf1aab4057e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2064fece135779e1025357c752f98d2ad856c254558dcb56c1a606471b2a28d0"
 dependencies = [
  "bigdecimal",
  "clap",
  "dirs-next",
  "env_logger",
  "eyre",
+ "indexmap",
  "log",
  "nom",
  "regex",

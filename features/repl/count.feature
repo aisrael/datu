@@ -26,6 +26,14 @@ Feature: Count
     And the output should contain "Pipeline: read("fixtures/table.parquet") |> select(:one) |> count()"
     And the output should contain "3"
 
+  Scenario: Row count after group_by and select
+    When the REPL is ran and the user types:
+      ```
+      read("fixtures/userdata.parquet") |> group_by(:gender) |> select(:gender, n: count(:id)) |> count()
+      ```
+    Then the command should succeed
+    And the output should contain "3"
+
   Scenario: Row count from ORC
     When the REPL is ran and the user types:
       ```

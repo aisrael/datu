@@ -291,6 +291,6 @@ head("input.parquet", 5)         # equivalent to the previous statement
 
 `count()` (as a pipeline stage after `read`, e.g. `read("file.parquet") |> count()`) prints the total row count. It takes no arguments.
 
-When every stage before `count()` is `read` or `filter`, the flt interpreter evaluates the whole statement and calls back into datu for each function, so `count()` returns its total as an flt number. Other count pipelines (for example with `select` or `group_by`) still run through datu's own planner, with the same output. Because a piped value is passed as the first argument, flt counts it in arity errors: `read("x.parquet") |> count(:a, :b)` reports "expected 1 argument(s), found 3".
+When every stage before `count()` is `read`, `filter`, `group_by` or `select`, the flt interpreter evaluates the whole statement and calls back into datu for each function, so `count()` returns its total as an flt number. Aggregates such as `sum(:b)` evaluate to select items that `select()` accepts, and keyword arguments (`total: sum(:b)`) become aliases. Other count pipelines (for example with `head`) still run through datu's own planner, with the same output. Because a piped value is passed as the first argument, flt counts it in arity errors: `read("x.parquet") |> count(:a, :b)` reports "expected 1 argument(s), found 3".
 
 Do not confuse that with **`count(:column)` inside `select()`**, which is an aggregate: it counts non-null values in that column (globally or per group when used with `group_by`). Use `count_distinct(:column)` for distinct non-null values.

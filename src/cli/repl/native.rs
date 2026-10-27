@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use flt::runtime::Map;
+use flt::runtime::MapKey;
 use flt::runtime::Runtime;
 use flt::runtime::Value;
 use flt::runtime::functions::Argument;
@@ -13,11 +15,14 @@ use flt::runtime::types::Type;
 
 use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::interactive::apply_repl_display_options;
+use super::plan::SELECT_AGG_EXPECTED;
+use super::plan::select_aggregate_item;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
 use super::stage::format_select_item;
 use crate::Error;
 use crate::pipeline::ColumnSpec;
+use crate::pipeline::GroupByKey;
 use crate::pipeline::SelectItem;
 
 /// A lazy pipeline: the stages built so far by `read(..) |> filter(..) |> ...`. Keeping stages
@@ -77,6 +82,30 @@ fn column_spec_from_value(func: &str, v: &Value) -> crate::Result<ColumnSpec> {
     }
 }
 
+/// A `select()` value: a column, or an aggregate such as `sum(:b)` that flt has already
+/// evaluated to a [`DatuSelectItem`].
+fn select_item_from_value(v: &Value) -> crate::Result<SelectItem> {
+    match (v.get_native::<DatuSelectItem>(), v) {
+        (Some(item), _) => Ok(item.0.clone()),
+        (None, Value::Symbol(s)) => Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone()))),
+        (None, Value::String(s)) => Ok(SelectItem::column(ColumnSpec::Exact(s.clone()))),
+        (None, other) => Err(Error::UnsupportedFunctionCall(format!(
+            "{SELECT_AGG_EXPECTED}, got {other}"
+        ))),
+    }
+}
+
+/// An alias from a keyword argument's name. flt gives every keyword a symbol key, quoted or
+/// not (`total:` and `"total amount":`), so a string key means a host built the call.
+fn alias_from_key(func: &str, key: &MapKey) -> crate::Result<String> {
+    match key {
+        MapKey::Symbol(alias) => Ok(alias.clone()),
+        MapKey::String(s) => Err(Error::UnsupportedFunctionCall(format!(
+            "{func} expects symbol keyword names, got the string {s:?}"
+        ))),
+    }
+}
+
 fn read(args: &[Value]) -> crate::Result<Value> {
     let path = string_arg("read", &args[0])?;
     Ok(Value::native(DatuPlan {
@@ -89,6 +118,55 @@ fn filter(args: &[Value]) -> crate::Result<Value> {
     let sql = string_arg("filter", &args[1])?;
     plan.stages.push(ReplPipelineStage::Filter { sql });
     Ok(Value::native(plan))
+}
+
+/// `select(plan, ...columns, alias: column, ...)`: positional items first, then aliased ones in
+/// call order, as the Expr planner orders them.
+fn select(args: &[Value], aliases: &Map) -> crate::Result<Value> {
+    let mut plan = args[0].downcast_native::<DatuPlan>()?.clone();
+    let mut columns = args[1..]
+        .iter()
+        .map(select_item_from_value)
+        .collect::<crate::Result<Vec<_>>>()?;
+    for (key, value) in aliases {
+        columns.push(select_item_from_value(value)?.with_alias(alias_from_key("select", key)?));
+    }
+    // flt's arity check accepts select(plan), so the "at least one" rule lives here.
+    if columns.is_empty() {
+        return Err(Error::UnsupportedFunctionCall(
+            "select expects at least one column name".to_string(),
+        ));
+    }
+    plan.stages.push(ReplPipelineStage::Select { columns });
+    Ok(Value::native(plan))
+}
+
+/// `group_by(plan, ...keys, alias: key, ...)`, with the same ordering as [`select`].
+fn group_by(args: &[Value], aliases: &Map) -> crate::Result<Value> {
+    let mut plan = args[0].downcast_native::<DatuPlan>()?.clone();
+    let mut columns = args[1..]
+        .iter()
+        .map(|v| Ok(GroupByKey::new(column_spec_from_value("group_by", v)?)))
+        .collect::<crate::Result<Vec<_>>>()?;
+    for (key, value) in aliases {
+        let spec = column_spec_from_value("group_by", value)?;
+        columns.push(GroupByKey::new(spec).with_alias(alias_from_key("group_by", key)?));
+    }
+    if columns.is_empty() {
+        return Err(Error::UnsupportedFunctionCall(
+            "group_by expects at least one column".to_string(),
+        ));
+    }
+    plan.stages.push(ReplPipelineStage::GroupBy { columns });
+    Ok(Value::native(plan))
+}
+
+/// `sum(:col)`, `avg(:col)`, ...: an aggregate for use inside `select(...)`.
+fn aggregate(name: &str, args: &[Value]) -> crate::Result<Value> {
+    let spec = column_spec_from_value(name, &args[0])?;
+    Ok(Value::native(DatuSelectItem(select_aggregate_item(
+        name, spec,
+    ))))
 }
 
 /// Builds and runs the plan the same way the REPL runs any other pipeline, but returns the row
@@ -153,6 +231,43 @@ pub(super) fn register_natives(runtime: &mut impl Runtime) -> Result<(), flt::Er
         ),
         |args: &[Value]| to_flt(count(args)),
     ))?;
+    // Columns are variadic and aliases are keywords, so `select(plan)` and
+    // `select(plan, total: sum(:b))` both pass flt's checks and the handler validates the rest.
+    runtime.register_function(NativeFunction::with_keywords(
+        FunctionDefinition::new(
+            "select",
+            Type::native::<DatuPlan>(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::variadic("columns", Type::any()),
+            ],
+        )
+        .rest_keywords(Type::any()),
+        |args: &[Value], aliases: &Map| to_flt(select(args, aliases)),
+    ))?;
+    runtime.register_function(NativeFunction::with_keywords(
+        FunctionDefinition::new(
+            "group_by",
+            Type::native::<DatuPlan>(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::variadic("keys", Type::any()),
+            ],
+        )
+        .rest_keywords(Type::any()),
+        |args: &[Value], aliases: &Map| to_flt(group_by(args, aliases)),
+    ))?;
+    // count(:col) is the count overload above.
+    for name in ["sum", "avg", "min", "max", "count_distinct"] {
+        runtime.register_function(NativeFunction::new(
+            FunctionDefinition::new(
+                name,
+                Type::native::<DatuSelectItem>(),
+                vec![Argument::new("column", Type::any())],
+            ),
+            move |args: &[Value]| to_flt(aggregate(name, args)),
+        ))?;
+    }
     Ok(())
 }
 
@@ -277,5 +392,101 @@ mod tests {
         let err =
             eval_err(r#"read("fixtures/table.parquet") |> filter("no_such_col > 1") |> count()"#);
         assert!(err.contains("no_such_col"), "{err}");
+    }
+
+    #[test]
+    fn test_select_count() {
+        assert_eq!(
+            eval_to_string(r#"read("fixtures/table.parquet") |> select(:one, "two") |> count()"#),
+            "3"
+        );
+    }
+
+    #[test]
+    fn test_group_by_select_count() {
+        // userdata.parquet has three gender groups: Female, Male and empty.
+        assert_eq!(
+            eval_to_string(
+                r#"read("fixtures/userdata.parquet") |> group_by(:gender) |> select(:gender, n: count(:id)) |> count()"#
+            ),
+            "3"
+        );
+    }
+
+    #[test]
+    fn test_select_prints_aliases_in_call_order() {
+        assert_eq!(
+            eval_to_string(r#"read("x.parquet") |> select(:a, z: :b, "c d": sum(:c))"#),
+            r#"read("x.parquet") |> select(:a, z: :b, "c d": sum(:c))"#
+        );
+        assert_eq!(
+            eval_to_string(r#"read("x.parquet") |> group_by(:a, k: :b)"#),
+            r#"read("x.parquet") |> group_by(:a, k: :b)"#
+        );
+    }
+
+    #[test]
+    fn test_select_requires_a_column_or_alias() {
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> select()"#),
+            "Unsupported function call: select expects at least one column name"
+        );
+        assert_eq!(
+            eval_to_string(r#"read("x.parquet") |> select(total: sum(:b))"#),
+            r#"read("x.parquet") |> select(total: sum(:b))"#
+        );
+    }
+
+    #[test]
+    fn test_group_by_requires_a_key() {
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> group_by()"#),
+            "Unsupported function call: group_by expects at least one column"
+        );
+    }
+
+    #[test]
+    fn test_select_rejects_non_columns() {
+        let err = eval_err(r#"read("x.parquet") |> select(1)"#);
+        assert!(err.contains("select expects column names"), "{err}");
+    }
+
+    #[test]
+    fn test_group_by_rejects_aggregates() {
+        let err = eval_err(r#"read("x.parquet") |> group_by(sum(:a))"#);
+        assert!(err.contains("group_by expects a column"), "{err}");
+    }
+
+    #[test]
+    fn test_aggregates_are_select_items() {
+        for name in ["sum", "avg", "min", "max", "count", "count_distinct"] {
+            assert_eq!(
+                eval_to_string(&format!("{name}(:a)")),
+                format!("{name}(:a)")
+            );
+            assert_eq!(
+                eval_to_string(&format!("typeof({name}(:a)) == SelectItem")),
+                "true"
+            );
+        }
+    }
+
+    #[test]
+    fn test_typeof_select_and_group_by() {
+        assert_eq!(
+            eval_to_string("typeof(select)"),
+            "fn(DatuPlan, ...Any, **Any) -> DatuPlan"
+        );
+        assert_eq!(
+            eval_to_string("typeof(group_by)"),
+            "fn(DatuPlan, ...Any, **Any) -> DatuPlan"
+        );
+        assert_eq!(eval_to_string("typeof(sum)"), "fn(Any) -> SelectItem");
+    }
+
+    #[test]
+    fn test_keywords_rejected_where_undeclared() {
+        let err = eval_err(r#"read("x.parquet", n: 1)"#);
+        assert!(err.contains("keyword"), "{err}");
     }
 }

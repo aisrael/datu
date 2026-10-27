@@ -38,7 +38,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rust_xlsxwriter = { version = "0.99.1", features = ["chrono"] }
 rustc-literal-escaper = "0.0.8"
-flt = { git = "https://github.com/aisrael/flt", rev = "bc03f95" }
+flt = "0.2.0"
 dirs = { version = "2.0", package = "dirs-next" }
 rand = "0.10.3"
 reservoir-sampling = "0.5.1"

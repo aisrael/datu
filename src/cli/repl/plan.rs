@@ -2,6 +2,7 @@
 
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
+use flt::ast::FunctionCall;
 use flt::ast::Literal;
 
 use super::stage::ReplPipelineStage;
@@ -32,9 +33,16 @@ pub(super) fn fold_pipe_stages(exprs: Vec<Expr>) -> Option<Expr> {
         .reduce(|l, r| Expr::BinaryExpr(Box::new(l), BinaryOp::Pipe, Box::new(r)))
 }
 
-/// Functions registered as flt natives that may come before `count()`. `select` and `group_by`
-/// aren't natives yet, so count statements that use them stay on the Expr planner.
-const NATIVE_STAGES: &[&str] = &["read", "filter"];
+/// Functions registered as flt natives that may come before `count()`.
+const NATIVE_STAGES: &[&str] = &["read", "filter", "group_by", "select"];
+
+/// The called function's name, if `expr` is a function call.
+fn call_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::FunctionCall(call) => Some(call.name.0.as_str()),
+        _ => None,
+    }
+}
 
 /// True when a complete statement should be evaluated by flt: it ends in `count()` with no
 /// arguments and every earlier stage is a native function call. A bare `count()` stays on the
@@ -45,52 +53,33 @@ pub(super) fn is_native_count_statement(pending_exprs: &[Expr]) -> bool {
     };
     let ends_in_count = matches!(
         last,
-        Expr::FunctionCall(name, args) if name.to_string().as_str() == "count" && args.is_empty()
+        Expr::FunctionCall(call)
+            if call.name == "count" && call.positional_args.is_empty() && call.keyword_args.is_empty()
     );
-    let is_native_stage = |e: &Expr| {
-        matches!(
-            e,
-            Expr::FunctionCall(name, _) if NATIVE_STAGES.contains(&name.to_string().as_str())
-        )
-    };
+    let is_native_stage = |e: &Expr| call_name(e).is_some_and(|name| NATIVE_STAGES.contains(&name));
     ends_in_count && !body.is_empty() && body.iter().all(is_native_stage)
 }
 
 fn expr_is_group_by_call(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::FunctionCall(name, _) if name.to_string().as_str() == "group_by"
-    )
+    call_name(expr) == Some("group_by")
 }
 
 fn expr_is_select_call(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::FunctionCall(name, _) if name.to_string().as_str() == "select"
-    )
+    call_name(expr) == Some("select")
 }
 
 /// True when the accumulated pipe stages form a complete REPL statement (flush and execute).
 pub(super) fn is_statement_complete(pending_exprs: &[Expr]) -> bool {
-    let Some(last) = pending_exprs.last() else {
+    let Some(Expr::FunctionCall(last)) = pending_exprs.last() else {
         return false;
     };
-    match last {
-        Expr::FunctionCall(name, args) => match name.to_string().as_str() {
-            "count" | "head" | "tail" | "sample" | "schema" | "write" => true,
-            "group_by" => pending_exprs[..pending_exprs.len().saturating_sub(1)]
-                .iter()
-                .any(expr_is_select_call),
-            "select" => {
-                if select_args_are_all_aggregates(args) {
-                    return true;
-                }
-                pending_exprs[..pending_exprs.len().saturating_sub(1)]
-                    .iter()
-                    .any(expr_is_group_by_call)
-            }
-            _ => false,
-        },
+    let before_last = &pending_exprs[..pending_exprs.len() - 1];
+    match last.name.0.as_str() {
+        "count" | "head" | "tail" | "sample" | "schema" | "write" => true,
+        "group_by" => before_last.iter().any(expr_is_select_call),
+        "select" => {
+            select_args_are_all_aggregates(last) || before_last.iter().any(expr_is_group_by_call)
+        }
         _ => false,
     }
 }
@@ -98,30 +87,38 @@ pub(super) fn is_statement_complete(pending_exprs: &[Expr]) -> bool {
 fn expr_is_aggregate_call(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::FunctionCall(n, a)
+        Expr::FunctionCall(call)
             if matches!(
-                n.to_string().as_str(),
+                call.name.0.as_str(),
                 "sum" | "avg" | "min" | "max" | "count" | "count_distinct"
-            ) && a.len() == 1
+            ) && call.positional_args.len() == 1
+                && call.keyword_args.is_empty()
     )
 }
 
-/// Flattens `select()` args into their value expressions, unwrapping the trailing
-/// `MapLiteral` (keyword args, i.e. `alias: value`) that `flt` appends for `name: value` pairs.
-fn flatten_select_value_exprs(args: &[Expr]) -> Vec<&Expr> {
-    let mut values = Vec::new();
-    for expr in args {
-        match expr {
-            Expr::MapLiteral(entries) => values.extend(entries.iter().map(|kv| &kv.value)),
-            other => values.push(other),
-        }
-    }
-    values
+/// A call's argument values, positional then keyword (`alias: value`), in source order.
+fn call_value_exprs(call: &FunctionCall) -> impl Iterator<Item = &Expr> {
+    call.positional_args
+        .iter()
+        .chain(call.keyword_args.values())
 }
 
-fn select_args_are_all_aggregates(args: &[Expr]) -> bool {
-    let values = flatten_select_value_exprs(args);
-    !values.is_empty() && values.iter().all(|e| expr_is_aggregate_call(e))
+fn select_args_are_all_aggregates(call: &FunctionCall) -> bool {
+    let mut values = call_value_exprs(call).peekable();
+    values.peek().is_some() && values.all(expr_is_aggregate_call)
+}
+
+/// Rejects keyword arguments on a function that doesn't take any. They'd otherwise be ignored,
+/// because the planner reads only the positional arguments.
+fn positional_args_only(call: &FunctionCall) -> crate::Result<&[Expr]> {
+    if call.keyword_args.is_empty() {
+        Ok(&call.positional_args)
+    } else {
+        Err(Error::UnsupportedFunctionCall(format!(
+            "{} doesn't take keyword arguments, got {call}",
+            call.name
+        )))
+    }
 }
 
 /// Extracts a single path string from a function's argument list.
@@ -152,7 +149,7 @@ fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
     }
 }
 
-fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
+pub(super) fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
     match name {
         "sum" => SelectItem::sum(col),
         "avg" => SelectItem::avg(col),
@@ -166,32 +163,26 @@ fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
     }
 }
 
-const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
+pub(super) const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
 
 /// Converts one `select()` value expression (a plain column ref or an aggregate call)
 /// into an unaliased [`SelectItem`]. Callers attach an alias separately when the value
 /// came from a `name: value` keyword argument.
 fn select_item_from_expr(expr: &Expr) -> crate::Result<SelectItem> {
     match expr {
-        Expr::FunctionCall(name, inner) => {
-            let name_str = name.to_string();
-            match name_str.as_str() {
-                "sum" | "avg" | "min" | "max" | "count" | "count_distinct" => {
-                    match inner.as_slice() {
-                        [one] => Ok(select_aggregate_item(
-                            name_str.as_str(),
-                            extract_one_column_spec(one)?,
-                        )),
-                        _ => Err(Error::UnsupportedFunctionCall(format!(
-                            "{name_str}() expects exactly one column argument"
-                        ))),
-                    }
+        Expr::FunctionCall(call) => match call.name.0.as_str() {
+            name @ ("sum" | "avg" | "min" | "max" | "count" | "count_distinct") => {
+                match positional_args_only(call)? {
+                    [one] => Ok(select_aggregate_item(name, extract_one_column_spec(one)?)),
+                    _ => Err(Error::UnsupportedFunctionCall(format!(
+                        "{name}() expects exactly one column argument"
+                    ))),
                 }
-                _ => Err(Error::UnsupportedFunctionCall(format!(
-                    "{SELECT_AGG_EXPECTED}, got {expr:?}"
-                ))),
             }
-        }
+            _ => Err(Error::UnsupportedFunctionCall(format!(
+                "{SELECT_AGG_EXPECTED}, got {expr:?}"
+            ))),
+        },
         Expr::Literal(Literal::Symbol(s)) => {
             Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone())))
         }
@@ -203,121 +194,105 @@ fn select_item_from_expr(expr: &Expr) -> crate::Result<SelectItem> {
 }
 
 /// Extracts select items: column refs or `sum(column)` / `avg(column)` / `min(column)` / `max(column)` /
-/// `count(column)` / `count_distinct(column)`, plus aliases from `name: value` / `"quoted name": value`
-/// keyword arguments (collected by `flt` into a trailing `MapLiteral`).
-pub(super) fn extract_select_items(args: &[Expr]) -> crate::Result<Vec<SelectItem>> {
-    let mut items = Vec::new();
-    for expr in args {
-        match expr {
-            Expr::MapLiteral(entries) => {
-                for kv in entries {
-                    let item = select_item_from_expr(&kv.value)?.with_alias(kv.key.clone());
-                    items.push(item);
-                }
-            }
-            other => items.push(select_item_from_expr(other)?),
-        }
+/// `count(column)` / `count_distinct(column)` from the positional arguments, then aliased items
+/// from `name: value` / `"quoted name": value` keyword arguments.
+pub(super) fn extract_select_items(call: &FunctionCall) -> crate::Result<Vec<SelectItem>> {
+    let mut items = call
+        .positional_args
+        .iter()
+        .map(select_item_from_expr)
+        .collect::<crate::Result<Vec<_>>>()?;
+    for (alias, value) in &call.keyword_args {
+        items.push(select_item_from_expr(value)?.with_alias(alias.clone()));
     }
     Ok(items)
 }
 
 /// Extracts `group_by(...)` keys, plus aliases from `name: value` / `"quoted name": value`
-/// keyword arguments (collected by `flt` into a trailing `MapLiteral`). A key's alias becomes
-/// the default output name for that column in `select()`, unless `select()` gives its own alias.
-pub(super) fn extract_group_by_keys(args: &[Expr]) -> crate::Result<Vec<GroupByKey>> {
-    let mut keys = Vec::new();
-    for expr in args {
-        match expr {
-            Expr::MapLiteral(entries) => {
-                for kv in entries {
-                    let key = GroupByKey::new(extract_one_column_spec(&kv.value)?)
-                        .with_alias(kv.key.clone());
-                    keys.push(key);
-                }
-            }
-            other => keys.push(GroupByKey::new(extract_one_column_spec(other)?)),
-        }
+/// keyword arguments. A key's alias becomes the default output name for that column in
+/// `select()`, unless `select()` gives its own alias.
+pub(super) fn extract_group_by_keys(call: &FunctionCall) -> crate::Result<Vec<GroupByKey>> {
+    let mut keys = call
+        .positional_args
+        .iter()
+        .map(|e| Ok(GroupByKey::new(extract_one_column_spec(e)?)))
+        .collect::<crate::Result<Vec<_>>>()?;
+    for (alias, value) in &call.keyword_args {
+        keys.push(GroupByKey::new(extract_one_column_spec(value)?).with_alias(alias.clone()));
     }
     Ok(keys)
 }
 
 #[cfg(test)]
 pub(super) fn is_head_call(expr: Option<&Expr>) -> bool {
-    if let Some(Expr::FunctionCall(name, _)) = expr {
-        *name == "head"
-    } else {
-        false
-    }
+    expr.and_then(call_name) == Some("head")
 }
 
 /// Plans a single pipeline stage from an AST expression.
 pub(super) fn plan_stage(expr: Expr) -> crate::Result<ReplPipelineStage> {
-    match expr {
-        Expr::FunctionCall(name, args) => {
-            let name_str = name.to_string();
-            match name_str.as_str() {
-                "read" => {
-                    let path = extract_path_from_args("read", &args)?;
-                    Ok(ReplPipelineStage::Read { path })
-                }
-                "filter" => {
-                    let sql = extract_sql_predicate_from_args("filter", &args)?;
-                    Ok(ReplPipelineStage::Filter { sql })
-                }
-                "group_by" => {
-                    if args.is_empty() {
-                        return Err(Error::UnsupportedFunctionCall(
-                            "group_by expects at least one column".to_string(),
-                        ));
-                    }
-                    let columns = extract_group_by_keys(&args)?;
-                    Ok(ReplPipelineStage::GroupBy { columns })
-                }
-                "select" => {
-                    let columns = extract_select_items(&args)?;
-                    if columns.is_empty() {
-                        return Err(Error::UnsupportedFunctionCall(
-                            "select expects at least one column name".to_string(),
-                        ));
-                    }
-                    Ok(ReplPipelineStage::Select { columns })
-                }
-                "head" => {
-                    let n = extract_head_n(&args)?;
-                    Ok(ReplPipelineStage::Head { n })
-                }
-                "tail" => {
-                    let n = extract_tail_n(&args)?;
-                    Ok(ReplPipelineStage::Tail { n })
-                }
-                "sample" => {
-                    let n = extract_sample_n(&args)?;
-                    Ok(ReplPipelineStage::Sample { n })
-                }
-                "count" => {
-                    if !args.is_empty() {
-                        return Err(Error::UnsupportedFunctionCall(
-                            "count takes no arguments".to_string(),
-                        ));
-                    }
-                    Ok(ReplPipelineStage::Count)
-                }
-                "schema" => {
-                    if !args.is_empty() {
-                        return Err(Error::UnsupportedFunctionCall(
-                            "schema takes no arguments".to_string(),
-                        ));
-                    }
-                    Ok(ReplPipelineStage::Schema)
-                }
-                "write" => {
-                    let path = extract_path_from_args("write", &args)?;
-                    Ok(ReplPipelineStage::Write { path })
-                }
-                _ => Err(Error::UnsupportedFunctionCall(name_str)),
-            }
+    let Expr::FunctionCall(call) = expr else {
+        return Err(Error::UnsupportedExpression(expr.to_string()));
+    };
+    match call.name.0.as_str() {
+        "read" => {
+            let path = extract_path_from_args("read", positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Read { path })
         }
-        _ => Err(Error::UnsupportedExpression(expr.to_string())),
+        "filter" => {
+            let sql = extract_sql_predicate_from_args("filter", positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Filter { sql })
+        }
+        "group_by" => {
+            let columns = extract_group_by_keys(&call)?;
+            if columns.is_empty() {
+                return Err(Error::UnsupportedFunctionCall(
+                    "group_by expects at least one column".to_string(),
+                ));
+            }
+            Ok(ReplPipelineStage::GroupBy { columns })
+        }
+        "select" => {
+            let columns = extract_select_items(&call)?;
+            if columns.is_empty() {
+                return Err(Error::UnsupportedFunctionCall(
+                    "select expects at least one column name".to_string(),
+                ));
+            }
+            Ok(ReplPipelineStage::Select { columns })
+        }
+        "head" => {
+            let n = extract_head_n(positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Head { n })
+        }
+        "tail" => {
+            let n = extract_tail_n(positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Tail { n })
+        }
+        "sample" => {
+            let n = extract_sample_n(positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Sample { n })
+        }
+        "count" => {
+            if !positional_args_only(&call)?.is_empty() {
+                return Err(Error::UnsupportedFunctionCall(
+                    "count takes no arguments".to_string(),
+                ));
+            }
+            Ok(ReplPipelineStage::Count)
+        }
+        "schema" => {
+            if !positional_args_only(&call)?.is_empty() {
+                return Err(Error::UnsupportedFunctionCall(
+                    "schema takes no arguments".to_string(),
+                ));
+            }
+            Ok(ReplPipelineStage::Schema)
+        }
+        "write" => {
+            let path = extract_path_from_args("write", positional_args_only(&call)?)?;
+            Ok(ReplPipelineStage::Write { path })
+        }
+        _ => Err(Error::UnsupportedFunctionCall(call.name.0.clone())),
     }
 }
 

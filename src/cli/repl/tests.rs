@@ -1257,6 +1257,24 @@ fn test_display_group_by_with_bare_alias() {
 }
 
 #[test]
+fn test_display_alias_quotes_keys_flt_cannot_parse_bare() {
+    // flt's bare keys must start with a letter, so these need quotes to parse back.
+    for alias in ["_tmp", "1x"] {
+        let stage = ReplPipelineStage::Select {
+            columns: vec![
+                SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias(alias),
+            ],
+        };
+        let printed = stage.to_string();
+        assert_eq!(printed, format!(r#"select("{alias}": :bar)"#));
+        let ReplPipelineStage::Select { columns } = plan_stage(parse(&printed)).unwrap() else {
+            panic!("expected select");
+        };
+        assert_eq!(columns[0].alias(), Some(alias));
+    }
+}
+
+#[test]
 fn test_display_group_by_with_quoted_alias() {
     let stage = ReplPipelineStage::GroupBy {
         columns: vec![

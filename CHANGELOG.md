@@ -20,6 +20,8 @@
   - `read(...) |> filter(...) |> count()` is evaluated by the flt interpreter, which calls back
     into datu for each function. Output is unchanged. Count pipelines with `select` or
     `group_by` still run through datu's own planner.
+  - The `Pipeline:` line quotes aliases that start with `_` (`select("_tmp": :a)`), so it parses
+    back as flt; it used to print `_tmp:` bare, which flt rejects.
 
 - **CLI**
   - `convert`, `concat`, and `split` gain `--output-avro-compression <CODEC>` (`none`, `null`,

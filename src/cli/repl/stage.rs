@@ -115,13 +115,10 @@ fn format_column_spec(c: &ColumnSpec) -> String {
     }
 }
 
-/// Quotes an alias key when it isn't a valid bare identifier (mirrors
-/// `flt::ast::expr::KeyValue`'s own `Display`, which applies the same rule to map literals).
+/// Quotes an alias key unless flt's parser accepts it bare (a letter, then letters, digits or
+/// `_`), so a printed pipeline parses back.
 fn format_alias_key(key: &str) -> String {
-    let is_bare = key
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_alphabetic() || c == '_')
+    let is_bare = key.chars().next().is_some_and(char::is_alphabetic)
         && key.chars().all(|c| c.is_alphanumeric() || c == '_');
     if is_bare {
         key.to_string()

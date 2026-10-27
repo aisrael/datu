@@ -2,6 +2,7 @@
 
 mod builder_bridge;
 mod interactive;
+mod native;
 mod plan;
 mod stage;
 

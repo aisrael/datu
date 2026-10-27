@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "datu"
-version = "0.3.6"
+version = "0.4.0"
 dependencies = [
  "arrow",
  "arrow-avro",
@@ -2044,9 +2044,8 @@ dependencies = [
 
 [[package]]
 name = "flt"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "695bd2601a62cceb4b656764722417f7092f95787e76ccd923daa6f5140a839c"
+version = "0.2.0"
+source = "git+https://github.com/aisrael/flt?rev=bc03f95#bc03f95db16489959e3fb528c9521cf1aab4057e"
 dependencies = [
  "bigdecimal",
  "clap",
@@ -2057,6 +2056,7 @@ dependencies = [
  "nom",
  "regex",
  "rustyline",
+ "strum",
  "thiserror 2.0.21",
 ]
 
@@ -3959,6 +3959,15 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros",
+]
 
 [[package]]
 name = "strum_macros"

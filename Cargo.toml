@@ -3,7 +3,7 @@ members = [".", "crates/datu-wasm"]
 
 [package]
 name = "datu"
-version = "0.3.6"
+version = "0.4.0"
 edition = "2024"
 description = "datu - a data file utility"
 license = "MIT"
@@ -38,7 +38,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rust_xlsxwriter = { version = "0.99.1", features = ["chrono"] }
 rustc-literal-escaper = "0.0.8"
-flt = "0.1.2"
+flt = { git = "https://github.com/aisrael/flt", rev = "bc03f95" }
 dirs = { version = "2.0", package = "dirs-next" }
 rand = "0.10.3"
 reservoir-sampling = "0.5.1"

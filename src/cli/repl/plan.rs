@@ -23,6 +23,39 @@ pub(super) fn collect_pipe_stages(expr: Expr, out: &mut Vec<Expr>) {
     }
 }
 
+/// The inverse of [`collect_pipe_stages`]: rebuilds `[a, b, c]` as `(a |> b) |> c`. The REPL
+/// pipes across lines implicitly, so the statement has to be rebuilt from parsed exprs; the
+/// typed source lines alone aren't valid flt.
+pub(super) fn fold_pipe_stages(exprs: Vec<Expr>) -> Option<Expr> {
+    exprs
+        .into_iter()
+        .reduce(|l, r| Expr::BinaryExpr(Box::new(l), BinaryOp::Pipe, Box::new(r)))
+}
+
+/// Functions registered as flt natives that may come before `count()`. `select` and `group_by`
+/// aren't natives yet, so count statements that use them stay on the Expr planner.
+const NATIVE_STAGES: &[&str] = &["read", "filter"];
+
+/// True when a complete statement should be evaluated by flt: it ends in `count()` with no
+/// arguments and every earlier stage is a native function call. A bare `count()` stays on the
+/// Expr planner, whose "must start with read" error is clearer than flt's arity error.
+pub(super) fn is_native_count_statement(pending_exprs: &[Expr]) -> bool {
+    let Some((last, body)) = pending_exprs.split_last() else {
+        return false;
+    };
+    let ends_in_count = matches!(
+        last,
+        Expr::FunctionCall(name, args) if name.to_string().as_str() == "count" && args.is_empty()
+    );
+    let is_native_stage = |e: &Expr| {
+        matches!(
+            e,
+            Expr::FunctionCall(name, _) if NATIVE_STAGES.contains(&name.to_string().as_str())
+        )
+    };
+    ends_in_count && !body.is_empty() && body.iter().all(is_native_stage)
+}
+
 fn expr_is_group_by_call(expr: &Expr) -> bool {
     matches!(
         expr,
@@ -113,9 +146,8 @@ fn extract_one_column_spec(expr: &Expr) -> crate::Result<ColumnSpec> {
     match expr {
         Expr::Literal(Literal::Symbol(s)) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
         Expr::Literal(Literal::String(s)) => Ok(ColumnSpec::Exact(s.clone())),
-        Expr::Ident(s) => Ok(ColumnSpec::CaseInsensitive(s.clone())),
         _ => Err(Error::UnsupportedFunctionCall(format!(
-            "expected a column (symbol, string, or identifier), got {expr:?}"
+            "expected a column (symbol or string), got {expr:?}"
         ))),
     }
 }
@@ -164,7 +196,6 @@ fn select_item_from_expr(expr: &Expr) -> crate::Result<SelectItem> {
             Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone())))
         }
         Expr::Literal(Literal::String(s)) => Ok(SelectItem::column(ColumnSpec::Exact(s.clone()))),
-        Expr::Ident(s) => Ok(SelectItem::column(ColumnSpec::CaseInsensitive(s.clone()))),
         _ => Err(Error::UnsupportedFunctionCall(format!(
             "{SELECT_AGG_EXPECTED}, got {expr:?}"
         ))),

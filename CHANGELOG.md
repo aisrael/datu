@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **REPL**: bare identifiers are no longer column names. `select(foo)` is now an error; use
+  `select(:foo)` (case-insensitive) or `select("foo")` (exact), here and in aggregates such as
+  `sum(:foo)`. The flt interpreter reads a bare identifier as a variable.
+
 ### Highlights
 
 - **`datu-wasm` crate**: New workspace member compiling schema-inspection, metadata-inspection,
@@ -9,6 +15,11 @@
   browser via `wasm-bindgen`.
 
 ### Improvements
+
+- **REPL**
+  - `read(...) |> filter(...) |> count()` is evaluated by the flt interpreter, which calls back
+    into datu for each function. Output is unchanged. Count pipelines with `select` or
+    `group_by` still run through datu's own planner.
 
 - **CLI**
   - `convert`, `concat`, and `split` gain `--output-avro-compression <CODEC>` (`none`, `null`,

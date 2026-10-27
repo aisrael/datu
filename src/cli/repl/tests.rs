@@ -9,13 +9,16 @@ use super::DatuRepl;
 use super::GroupByKey;
 use super::SelectItem;
 use super::builder_bridge::repl_stages_to_pipeline_builder;
+use super::interactive::CompleteStatement;
 use super::plan::collect_pipe_stages;
 use super::plan::extract_head_n;
 use super::plan::extract_path_from_args;
 use super::plan::extract_sample_n;
 use super::plan::extract_select_items;
 use super::plan::extract_tail_n;
+use super::plan::fold_pipe_stages;
 use super::plan::is_head_call;
+use super::plan::is_native_count_statement;
 use super::plan::is_statement_complete;
 use super::plan::plan_pipeline_with_state;
 use super::plan::plan_stage;
@@ -36,6 +39,13 @@ fn parse(input: &str) -> Expr {
 
 fn test_repl() -> DatuRepl {
     DatuRepl::default()
+}
+
+fn expect_pipeline(statement: Option<CompleteStatement>) -> Vec<ReplPipelineStage> {
+    match statement {
+        Some(CompleteStatement::Pipeline(stages)) => stages,
+        other => panic!("expected a planned pipeline, got {other:?}"),
+    }
 }
 
 fn pipe_exprs(input: &str) -> Vec<Expr> {
@@ -408,16 +418,13 @@ fn test_extract_select_items_strings() {
 }
 
 #[test]
-fn test_extract_select_items_idents() {
-    let args = vec![Expr::Ident("foo".into()), Expr::Ident("bar".into())];
-    let result = extract_select_items(&args).unwrap();
-    assert_eq!(
-        result,
-        vec![
-            SelectItem::column(ColumnSpec::CaseInsensitive("foo".into())),
-            SelectItem::column(ColumnSpec::CaseInsensitive("bar".into()))
-        ]
-    );
+fn test_extract_select_items_rejects_idents() {
+    // Bare identifiers are flt variables, not columns; columns are :symbol or "string".
+    let args = vec![Expr::Ident("foo".into())];
+    assert!(matches!(
+        extract_select_items(&args),
+        Err(Error::UnsupportedFunctionCall(_))
+    ));
 }
 
 #[test]
@@ -425,7 +432,6 @@ fn test_extract_select_items_mixed() {
     let args = vec![
         Expr::Literal(Literal::Symbol("sym".into())),
         Expr::Literal(Literal::String("str".into())),
-        Expr::Ident("ident".into()),
     ];
     let result = extract_select_items(&args).unwrap();
     assert_eq!(
@@ -433,7 +439,6 @@ fn test_extract_select_items_mixed() {
         vec![
             SelectItem::column(ColumnSpec::CaseInsensitive("sym".into())),
             SelectItem::column(ColumnSpec::Exact("str".into())),
-            SelectItem::column(ColumnSpec::CaseInsensitive("ident".into()))
         ]
     );
 }
@@ -478,45 +483,10 @@ fn test_extract_select_items_unsupported_expr() {
 }
 
 #[test]
-fn test_eval_incremental_non_terminal_accumulates_state() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet")"#);
-    let pipeline = ctx.eval_incremental(expr).expect("eval_incremental");
-    assert!(pipeline.is_none());
-    assert!(ctx.statement_incomplete);
-    assert_eq!(ctx.pending_exprs.len(), 1);
-}
-
-#[test]
-fn test_eval_incremental_terminal_flushes_accumulated_pipeline() {
-    let mut ctx = test_repl();
-    let first = parse(r#"read("fixtures/table.parquet")"#);
-    let second = parse(r#"head(2)"#);
-
-    let first_pipeline = ctx.eval_incremental(first).expect("first eval_incremental");
-    assert!(first_pipeline.is_none());
-    assert!(ctx.statement_incomplete);
-
-    let second_pipeline = ctx
-        .eval_incremental(second)
-        .expect("second eval_incremental")
-        .expect("pipeline should be complete");
-    assert_eq!(second_pipeline.len(), 3);
-    assert!(matches!(second_pipeline[0], ReplPipelineStage::Read { .. }));
-    assert_eq!(second_pipeline[1], ReplPipelineStage::Head { n: 2 });
-    assert_eq!(second_pipeline[2], ReplPipelineStage::Print);
-    assert!(!ctx.statement_incomplete);
-    assert!(ctx.pending_exprs.is_empty());
-}
-
-#[test]
 fn test_eval_incremental_terminal_single_input_executes_immediately() {
     let mut ctx = test_repl();
     let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
-    let pipeline = ctx
-        .eval_incremental(expr)
-        .expect("eval_incremental")
-        .expect("pipeline should be complete");
+    let pipeline = expect_pipeline(ctx.eval_incremental(expr).expect("eval_incremental"));
     assert_eq!(pipeline.len(), 2);
     assert!(matches!(pipeline[0], ReplPipelineStage::Read { .. }));
     assert!(matches!(pipeline[1], ReplPipelineStage::Write { .. }));
@@ -1369,4 +1339,121 @@ fn test_display_sample_stage() {
         ReplPipelineStage::Sample { n: 10 }.to_string(),
         "sample(10)"
     );
+}
+
+// ── native count routing ───────────────────────────────────────
+
+#[test]
+fn test_is_native_count_statement_read_filter_count() {
+    assert!(is_native_count_statement(&pipe_exprs(
+        r#"read("a.parquet") |> count()"#
+    )));
+    assert!(is_native_count_statement(&pipe_exprs(
+        r#"read("a.parquet") |> filter("x > 1") |> count()"#
+    )));
+}
+
+#[test]
+fn test_is_native_count_statement_keeps_non_native_stages_on_planner() {
+    for input in [
+        // Not natives yet, so these must keep working through the Expr planner.
+        r#"read("a.parquet") |> select(:a) |> count()"#,
+        r#"read("a.parquet") |> group_by(:a) |> select(:a, sum(:b)) |> count()"#,
+        // Not a count statement.
+        r#"read("a.parquet") |> head(2)"#,
+        // count(:col) is an aggregate, not the terminal count().
+        r#"read("a.parquet") |> count(:a)"#,
+        // Without a source, the planner's error is clearer than flt's arity error.
+        "count()",
+    ] {
+        assert!(!is_native_count_statement(&pipe_exprs(input)), "{input}");
+    }
+}
+
+#[test]
+fn test_fold_pipe_stages_round_trips_collect() {
+    let input = r#"read("a.parquet") |> filter("x > 1") |> count()"#;
+    let folded = fold_pipe_stages(pipe_exprs(input)).expect("non-empty");
+    assert_eq!(folded.to_string(), input);
+    assert!(fold_pipe_stages(Vec::new()).is_none());
+}
+
+#[test]
+fn test_eval_incremental_routes_count_to_flt() {
+    let mut ctx = test_repl();
+    let statement = ctx
+        .eval_incremental(parse(r#"read("fixtures/table.parquet") |> count()"#))
+        .expect("eval_incremental");
+    let Some(CompleteStatement::Native(expr)) = statement else {
+        panic!("expected a native statement, got {statement:?}");
+    };
+    assert_eq!(
+        expr.to_string(),
+        r#"read("fixtures/table.parquet") |> count()"#
+    );
+    assert!(!ctx.statement_incomplete);
+    assert!(ctx.pending_exprs.is_empty());
+    ctx.execute_native(expr).expect("execute_native");
+}
+
+#[test]
+fn test_eval_incremental_select_count_stays_on_planner() {
+    let mut ctx = test_repl();
+    let stages = expect_pipeline(
+        ctx.eval_incremental(parse(
+            r#"read("fixtures/table.parquet") |> select(:one) |> count()"#,
+        ))
+        .expect("eval_incremental"),
+    );
+    assert_eq!(stages.last(), Some(&ReplPipelineStage::Count));
+    ctx.execute_pipeline(stages).expect("execute_pipeline");
+}
+
+// ── Pipeline::execute_count ────────────────────────────────────
+
+fn execute_count(input: &str) -> usize {
+    let stages = plan_pipeline(input);
+    let mut builder = repl_stages_to_pipeline_builder(&stages).expect("builder");
+    builder
+        .build()
+        .expect("build")
+        .execute_count()
+        .expect("execute_count")
+}
+
+#[test]
+fn test_execute_count_dataframe() {
+    assert_eq!(
+        execute_count(r#"read("fixtures/table.parquet") |> count()"#),
+        3
+    );
+    assert_eq!(
+        execute_count(
+            r#"read("fixtures/userdata.parquet") |> filter("gender = 'Female'") |> count()"#
+        ),
+        482
+    );
+    assert_eq!(
+        execute_count(r#"read("fixtures/table.parquet") |> select(:one) |> count()"#),
+        3
+    );
+}
+
+#[test]
+fn test_execute_count_orc() {
+    assert_eq!(
+        execute_count(r#"read("fixtures/userdata.orc") |> count()"#),
+        1000
+    );
+    assert_eq!(
+        execute_count(r#"read("fixtures/userdata.orc") |> select("_col1") |> count()"#),
+        1000
+    );
+}
+
+#[test]
+fn test_execute_count_rejects_non_count_sink() {
+    let stages = plan_pipeline(r#"read("fixtures/table.parquet") |> head(1)"#);
+    let mut builder = repl_stages_to_pipeline_builder(&stages).expect("builder");
+    assert!(builder.build().expect("build").execute_count().is_err());
 }

@@ -15,14 +15,13 @@ use flt::runtime::types::Type;
 
 use super::builder_bridge::repl_stages_to_pipeline_builder;
 use super::interactive::apply_repl_display_options;
-use super::plan::SELECT_AGG_EXPECTED;
-use super::plan::select_aggregate_item;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
 use super::stage::format_select_item;
 use crate::Error;
 use crate::pipeline::ColumnSpec;
 use crate::pipeline::GroupByKey;
+use crate::pipeline::Pipeline;
 use crate::pipeline::SelectItem;
 
 /// A lazy pipeline: the stages built so far by `read(..) |> filter(..) |> ...`. Keeping stages
@@ -56,6 +55,8 @@ impl fmt::Display for DatuSelectItem {
 impl NativeType for DatuSelectItem {
     const NAME: &'static str = "SelectItem";
 }
+
+const SELECT_AGG_EXPECTED: &str = "select expects column names, sum(column), avg(column), min(column), max(column), count(column), or count_distinct(column)";
 
 /// Handlers do their work as `crate::Result` and convert only here, so datu's own error
 /// messages reach the user unchanged.
@@ -106,6 +107,63 @@ fn alias_from_key(func: &str, key: &MapKey) -> crate::Result<String> {
     }
 }
 
+/// A row count argument such as `head(plan, n)`'s `n`, using flt's conversion so a non-number
+/// or a negative number gets flt's own error.
+fn usize_arg(v: &Value) -> crate::Result<usize> {
+    Ok(usize::try_from(v)?)
+}
+
+fn select_aggregate_item(name: &str, col: ColumnSpec) -> SelectItem {
+    match name {
+        "sum" => SelectItem::sum(col),
+        "avg" => SelectItem::avg(col),
+        "min" => SelectItem::min(col),
+        "max" => SelectItem::max(col),
+        "count" => SelectItem::count(col),
+        "count_distinct" => SelectItem::count_distinct(col),
+        _ => unreachable!(
+            "select_aggregate_item only called for sum, avg, min, max, count, or count_distinct"
+        ),
+    }
+}
+
+/// Validates the stages and builds them the way every REPL pipeline is built.
+fn build_pipeline(stages: &[ReplPipelineStage]) -> crate::Result<Pipeline> {
+    validate_repl_pipeline_stages(stages)?;
+    let mut builder = repl_stages_to_pipeline_builder(stages)?;
+    apply_repl_display_options(&mut builder);
+    builder.build()
+}
+
+/// Runs a plan that a statement evaluated to, showing its rows. `head`, `tail` and `sample`
+/// get the implicit `print()` the REPL has always added after them.
+pub(super) fn display_plan(plan: &DatuPlan) -> crate::Result<()> {
+    let mut stages = plan.stages.clone();
+    if let Some(print) = stages
+        .last()
+        .and_then(ReplPipelineStage::get_implicit_followup_stage)
+    {
+        stages.push(print);
+    }
+    build_pipeline(&stages)?.execute()
+}
+
+/// Runs `plan` with `stage` appended, for the functions that act immediately (`schema`,
+/// `write`) rather than return a plan.
+fn run_with_stage(plan: &DatuPlan, stage: ReplPipelineStage) -> crate::Result<Value> {
+    let mut stages = plan.stages.clone();
+    stages.push(stage);
+    build_pipeline(&stages)?.execute()?;
+    Ok(Value::None)
+}
+
+/// Clones `plan` and appends `stage`, for the functions that extend a plan lazily.
+fn with_stage(plan: &DatuPlan, stage: ReplPipelineStage) -> Value {
+    let mut plan = plan.clone();
+    plan.stages.push(stage);
+    Value::native(plan)
+}
+
 fn read(args: &[Value]) -> crate::Result<Value> {
     let path = string_arg("read", &args[0])?;
     Ok(Value::native(DatuPlan {
@@ -114,14 +172,50 @@ fn read(args: &[Value]) -> crate::Result<Value> {
 }
 
 fn filter(args: &[Value]) -> crate::Result<Value> {
-    let mut plan = args[0].downcast_native::<DatuPlan>()?.clone();
+    let plan = args[0].downcast_native::<DatuPlan>()?;
     let sql = string_arg("filter", &args[1])?;
-    plan.stages.push(ReplPipelineStage::Filter { sql });
-    Ok(Value::native(plan))
+    Ok(with_stage(plan, ReplPipelineStage::Filter { sql }))
+}
+
+fn head(args: &[Value]) -> crate::Result<Value> {
+    let plan = args[0].downcast_native::<DatuPlan>()?;
+    let n = usize_arg(&args[1])?;
+    Ok(with_stage(plan, ReplPipelineStage::Head { n }))
+}
+
+fn tail(args: &[Value]) -> crate::Result<Value> {
+    let plan = args[0].downcast_native::<DatuPlan>()?;
+    let n = usize_arg(&args[1])?;
+    Ok(with_stage(plan, ReplPipelineStage::Tail { n }))
+}
+
+/// Rows `sample(plan)` takes when no count is given.
+const DEFAULT_SAMPLE_SIZE: usize = 10;
+
+/// `sample(plan)` or `sample(plan, n)`: flt accepts either overload, so the argument count
+/// tells them apart.
+fn sample(args: &[Value]) -> crate::Result<Value> {
+    let plan = args[0].downcast_native::<DatuPlan>()?;
+    let n = match args.get(1) {
+        Some(n) => usize_arg(n)?,
+        None => DEFAULT_SAMPLE_SIZE,
+    };
+    Ok(with_stage(plan, ReplPipelineStage::Sample { n }))
+}
+
+fn schema(args: &[Value]) -> crate::Result<Value> {
+    let plan = args[0].downcast_native::<DatuPlan>()?;
+    run_with_stage(plan, ReplPipelineStage::Schema)
+}
+
+fn write(args: &[Value]) -> crate::Result<Value> {
+    let plan = args[0].downcast_native::<DatuPlan>()?;
+    let path = string_arg("write", &args[1])?;
+    run_with_stage(plan, ReplPipelineStage::Write { path })
 }
 
 /// `select(plan, ...columns, alias: column, ...)`: positional items first, then aliased ones in
-/// call order, as the Expr planner orders them.
+/// call order.
 fn select(args: &[Value], aliases: &Map) -> crate::Result<Value> {
     let mut plan = args[0].downcast_native::<DatuPlan>()?.clone();
     let mut columns = args[1..]
@@ -169,15 +263,11 @@ fn aggregate(name: &str, args: &[Value]) -> crate::Result<Value> {
     ))))
 }
 
-/// Builds and runs the plan the same way the REPL runs any other pipeline, but returns the row
-/// count instead of printing it.
+/// Runs the plan with `count()` appended and returns the row count instead of printing it.
 fn count_plan_rows(plan: &DatuPlan) -> crate::Result<usize> {
     let mut stages = plan.stages.clone();
     stages.push(ReplPipelineStage::Count);
-    validate_repl_pipeline_stages(&stages)?;
-    let mut builder = repl_stages_to_pipeline_builder(&stages)?;
-    apply_repl_display_options(&mut builder);
-    builder.build()?.execute_count()
+    build_pipeline(&stages)?.execute_count()
 }
 
 /// flt checks only arity, so both `count(plan)` and `count(:col)` arrive here.
@@ -217,6 +307,54 @@ pub(super) fn register_natives(runtime: &mut impl Runtime) -> Result<(), flt::Er
             ],
         ),
         |args: &[Value]| to_flt(filter(args)),
+    ))?;
+    for (name, handler) in [("head", head as fn(&[Value]) -> _), ("tail", tail)] {
+        runtime.register_function(NativeFunction::new(
+            FunctionDefinition::new(
+                name,
+                Type::native::<DatuPlan>(),
+                vec![
+                    Argument::new("plan", Type::native::<DatuPlan>()),
+                    Argument::number("n"),
+                ],
+            ),
+            move |args: &[Value]| to_flt(handler(args)),
+        ))?;
+    }
+    runtime.register_function(NativeFunction::new(
+        FunctionDefinition::new(
+            "sample",
+            Type::native::<DatuPlan>(),
+            vec![Argument::new("plan", Type::native::<DatuPlan>())],
+        )
+        .add_overload(
+            Type::native::<DatuPlan>(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::number("n"),
+            ],
+        ),
+        |args: &[Value]| to_flt(sample(args)),
+    ))?;
+    // schema and write act immediately, so a write inside a larger expression still writes.
+    runtime.register_function(NativeFunction::new(
+        FunctionDefinition::new(
+            "schema",
+            Type::none(),
+            vec![Argument::new("plan", Type::native::<DatuPlan>())],
+        ),
+        |args: &[Value]| to_flt(schema(args)),
+    ))?;
+    runtime.register_function(NativeFunction::new(
+        FunctionDefinition::new(
+            "write",
+            Type::none(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::string("path"),
+            ],
+        ),
+        |args: &[Value]| to_flt(write(args)),
     ))?;
     // The overload exists only so typeof(count) describes both forms; one handler serves both.
     runtime.register_function(NativeFunction::new(
@@ -488,5 +626,102 @@ mod tests {
     fn test_keywords_rejected_where_undeclared() {
         let err = eval_err(r#"read("x.parquet", n: 1)"#);
         assert!(err.contains("keyword"), "{err}");
+    }
+
+    #[test]
+    fn test_head_tail_sample_extend_the_plan() {
+        for (src, printed) in [
+            (
+                r#"read("x.parquet") |> head(5)"#,
+                r#"read("x.parquet") |> head(5)"#,
+            ),
+            (
+                r#"read("x.parquet") |> tail(2)"#,
+                r#"read("x.parquet") |> tail(2)"#,
+            ),
+            (
+                r#"read("x.parquet") |> sample(3)"#,
+                r#"read("x.parquet") |> sample(3)"#,
+            ),
+            // Without a count, sample takes 10 rows, as it always has.
+            (
+                r#"read("x.parquet") |> sample()"#,
+                r#"read("x.parquet") |> sample(10)"#,
+            ),
+        ] {
+            assert_eq!(eval_to_string(src), printed, "{src}");
+        }
+    }
+
+    #[test]
+    fn test_head_rejects_bad_counts() {
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> head("x")"#),
+            "Runtime Error: Expected Number, found String"
+        );
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> head(-1)"#),
+            "Runtime Error: Cannot convert -1 to usize"
+        );
+        let err = eval_err(r#"read("x.parquet") |> head()"#);
+        assert!(err.contains("expected 2 argument"), "{err}");
+    }
+
+    #[test]
+    fn test_head_rejects_keywords() {
+        let err = eval_err(r#"read("x.parquet") |> head(1, n: 2)"#);
+        assert!(err.contains("keyword"), "{err}");
+    }
+
+    #[test]
+    fn test_select_rejects_a_map_of_aliases() {
+        // Aliases are keyword arguments; a map literal is just a value that isn't a column.
+        let err = eval_err(r#"read("x.parquet") |> select({total: sum(:b)})"#);
+        assert!(err.contains("select expects column names"), "{err}");
+    }
+
+    #[test]
+    fn test_schema_runs_and_returns_none() {
+        assert_eq!(
+            eval_to_string(r#"read("fixtures/table.parquet") |> schema()"#),
+            "None"
+        );
+    }
+
+    #[test]
+    fn test_write_runs_and_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.csv");
+        let src = format!(
+            r#"read("fixtures/table.parquet") |> head(2) |> write("{}")"#,
+            path.display()
+        );
+        assert_eq!(eval_to_string(&src), "None");
+        let written = std::fs::read_to_string(&path).expect("written file");
+        // A header and two rows.
+        assert_eq!(written.lines().count(), 3, "{written}");
+    }
+
+    #[test]
+    fn test_write_rejects_invalid_pipelines() {
+        let err = eval_err(r#"read("fixtures/table.parquet") |> count() |> write("x.csv")"#);
+        assert!(err.contains("Expected DatuPlan"), "{err}");
+    }
+
+    #[test]
+    fn test_typeof_terminal_natives() {
+        assert_eq!(
+            eval_to_string("typeof(head)"),
+            "fn(DatuPlan, Number) -> DatuPlan"
+        );
+        assert_eq!(
+            eval_to_string("typeof(sample)"),
+            "fn(DatuPlan) -> DatuPlan | fn(DatuPlan, Number) -> DatuPlan"
+        );
+        assert_eq!(eval_to_string("typeof(schema)"), "fn(DatuPlan) -> None");
+        assert_eq!(
+            eval_to_string("typeof(write)"),
+            "fn(DatuPlan, String) -> None"
+        );
     }
 }

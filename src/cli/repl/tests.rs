@@ -1,27 +1,21 @@
 use flt::ast::BinaryOp;
 use flt::ast::Expr;
-use flt::ast::FunctionCall;
 use flt::ast::Literal;
+use flt::ast::Statement;
 use flt::parser::parse_expr;
+use flt::runtime::Runtime;
+use flt::runtime::SimpleRuntime;
 
 use super::ColumnSpec;
 use super::DatuRepl;
 use super::GroupByKey;
 use super::SelectItem;
 use super::builder_bridge::repl_stages_to_pipeline_builder;
-use super::interactive::CompleteStatement;
+use super::native::DatuPlan;
+use super::native::register_natives;
 use super::plan::collect_pipe_stages;
-use super::plan::extract_head_n;
-use super::plan::extract_path_from_args;
-use super::plan::extract_sample_n;
-use super::plan::extract_select_items;
-use super::plan::extract_tail_n;
 use super::plan::fold_pipe_stages;
-use super::plan::is_head_call;
-use super::plan::is_native_count_statement;
 use super::plan::is_statement_complete;
-use super::plan::plan_pipeline_with_state;
-use super::plan::plan_stage;
 use super::plan::validate_repl_pipeline_stages;
 use super::stage::ReplPipelineStage;
 use crate::Error;
@@ -41,21 +35,6 @@ fn test_repl() -> DatuRepl {
     DatuRepl::default()
 }
 
-/// A `select(...)` call with the given positional arguments.
-fn select_call(args: Vec<Expr>) -> FunctionCall {
-    match Expr::function_call("select", args) {
-        Expr::FunctionCall(call) => call,
-        other => unreachable!("function_call builds a call, got {other:?}"),
-    }
-}
-
-fn expect_pipeline(statement: Option<CompleteStatement>) -> Vec<ReplPipelineStage> {
-    match statement {
-        Some(CompleteStatement::Pipeline(stages)) => stages,
-        other => panic!("expected a planned pipeline, got {other:?}"),
-    }
-}
-
 fn pipe_exprs(input: &str) -> Vec<Expr> {
     let expr = parse(input);
     let mut exprs = Vec::new();
@@ -63,60 +42,42 @@ fn pipe_exprs(input: &str) -> Vec<Expr> {
     exprs
 }
 
-fn plan_pipeline_result(input: &str) -> (Vec<ReplPipelineStage>, bool) {
-    plan_pipeline_with_state(pipe_exprs(input)).unwrap()
-}
-
-fn plan_pipeline(input: &str) -> Vec<ReplPipelineStage> {
-    plan_pipeline_result(input).0
-}
-
-// ── plan_stage ─────────────────────────────────────────────────
-
-#[test]
-fn test_plan_stage_read() {
-    let expr = parse(r#"read("file.parquet")"#);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Read {
-            path: "file.parquet".to_string()
+/// The stages a pipeline builds, without running it. `count()`, `schema()` and `write(path)`
+/// run as soon as flt calls them, so they're split off and appended as stages instead.
+fn plan_stages(input: &str) -> Vec<ReplPipelineStage> {
+    let mut exprs = pipe_exprs(input);
+    let terminal = match exprs.last() {
+        Some(Expr::FunctionCall(call)) => {
+            match (call.name.0.as_str(), call.positional_args.as_slice()) {
+                ("count", []) => Some(ReplPipelineStage::Count),
+                ("schema", []) => Some(ReplPipelineStage::Schema),
+                ("write", [Expr::Literal(Literal::String(path))]) => {
+                    Some(ReplPipelineStage::Write { path: path.clone() })
+                }
+                _ => None,
+            }
         }
-    );
+        _ => None,
+    };
+    if terminal.is_some() {
+        exprs.pop();
+    }
+    let mut runtime = SimpleRuntime::default();
+    register_natives(&mut runtime).expect("datu's natives should register");
+    let expr = fold_pipe_stages(exprs).expect("a pipeline before the terminal stage");
+    let value = runtime
+        .eval_statement(&Statement::Expr(expr))
+        .expect("eval");
+    let mut stages = value
+        .downcast_native::<DatuPlan>()
+        .expect("a plan")
+        .stages
+        .clone();
+    stages.extend(terminal);
+    stages
 }
 
-#[test]
-fn test_plan_stage_filter() {
-    let expr = parse(r#"filter("a > 1")"#);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Filter {
-            sql: "a > 1".to_string(),
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select() {
-    let expr = Expr::function_call(
-        "select",
-        vec![
-            Expr::Literal(Literal::Symbol("one".into())),
-            Expr::Literal(Literal::Symbol("two".into())),
-        ],
-    );
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![
-                SelectItem::column(ColumnSpec::CaseInsensitive("one".into())),
-                SelectItem::column(ColumnSpec::CaseInsensitive("two".into()))
-            ]
-        }
-    );
-}
+// ── is_statement_complete ───────────────────────────────────────
 
 #[test]
 fn test_is_statement_complete_select_aggregate_only() {
@@ -161,190 +122,9 @@ fn test_is_statement_complete_select_then_group_by() {
 }
 
 #[test]
-fn test_plan_stage_select_aggregates() {
-    let qty = ColumnSpec::CaseInsensitive("quantity".into());
-    let cases = [
-        ("select(sum(:quantity))", SelectItem::sum(qty.clone())),
-        ("select(avg(:quantity))", SelectItem::avg(qty.clone())),
-        ("select(min(:quantity))", SelectItem::min(qty.clone())),
-        ("select(max(:quantity))", SelectItem::max(qty.clone())),
-        ("select(count(:quantity))", SelectItem::count(qty.clone())),
-        (
-            "select(count_distinct(:quantity))",
-            SelectItem::count_distinct(qty),
-        ),
-    ];
-    for (input, expected_col) in cases {
-        let expr = parse(input);
-        let stage = plan_stage(expr).unwrap();
-        assert_eq!(
-            stage,
-            ReplPipelineStage::Select {
-                columns: vec![expected_col],
-            },
-            "case: {input}"
-        );
-    }
-}
-
-#[test]
-fn test_plan_stage_select_with_alias() {
-    let expr = parse("select(:foo, foo_bar: :bar, total: sum(:qty))");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![
-                SelectItem::column(ColumnSpec::CaseInsensitive("foo".into())),
-                SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
-                SelectItem::sum(ColumnSpec::CaseInsensitive("qty".into())).with_alias("total"),
-            ]
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select_with_quoted_alias_key() {
-    let expr = parse(r#"select("foo bar": :bar)"#);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![
-                SelectItem::column(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
-            ]
-        }
-    );
-}
-
-#[test]
 fn test_is_statement_complete_select_aliased_aggregate_only() {
     let exprs = pipe_exprs("select(total: sum(:qty))");
     assert!(is_statement_complete(&exprs));
-}
-
-#[test]
-fn test_plan_stage_head() {
-    let expr = parse("head(5)");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Head { n: 5 });
-}
-
-#[test]
-fn test_plan_stage_write() {
-    let expr = parse(r#"write("output.csv")"#);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Write {
-            path: "output.csv".to_string()
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_unsupported_function() {
-    let expr = Expr::function_call("unknown", vec![]);
-    let result = plan_stage(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-#[test]
-fn test_plan_stage_non_function_expr() {
-    let expr = Expr::Ident("x".into());
-    let result = plan_stage(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedExpression(_)
-    ));
-}
-
-// ── plan_pipeline_with_state ──────────────────────────────────
-
-#[test]
-fn test_plan_pipeline_read_select_write() {
-    let pipeline = plan_pipeline(r#"read("a.parquet") |> select(:x) |> write("b.csv")"#);
-    assert_eq!(pipeline.len(), 3);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(
-        pipeline[1],
-        ReplPipelineStage::Select {
-            columns: vec![SelectItem::column(ColumnSpec::CaseInsensitive("x".into()))]
-        }
-    );
-    assert_eq!(
-        pipeline[2],
-        ReplPipelineStage::Write {
-            path: "b.csv".to_string()
-        }
-    );
-}
-
-#[test]
-fn test_plan_pipeline_auto_appends_print_after_slice() {
-    let read_a = ReplPipelineStage::Read {
-        path: "a.parquet".to_string(),
-    };
-    let cases = [
-        ("head", "head(5)", ReplPipelineStage::Head { n: 5 }),
-        ("tail", "tail(5)", ReplPipelineStage::Tail { n: 5 }),
-        ("sample", "sample(5)", ReplPipelineStage::Sample { n: 5 }),
-    ];
-    for (name, middle, expected_slice) in cases {
-        let input = format!(r#"read("a.parquet") |> {middle}"#);
-        let pipeline = plan_pipeline(&input);
-        assert_eq!(pipeline.len(), 3, "case: {name}");
-        assert_eq!(pipeline[0], read_a, "case: {name}");
-        assert_eq!(pipeline[1], expected_slice, "case: {name}");
-        assert_eq!(pipeline[2], ReplPipelineStage::Print, "case: {name}");
-    }
-}
-
-#[test]
-fn test_plan_pipeline_no_print_when_write_follows_slice() {
-    let cases = [
-        ("head", "head(5)"),
-        ("tail", "tail(5)"),
-        ("sample", "sample(5)"),
-    ];
-    for (name, middle) in cases {
-        let input = format!(r#"read("a.parquet") |> {middle} |> write("b.csv")"#);
-        let pipeline = plan_pipeline(&input);
-        assert_eq!(pipeline.len(), 3, "case: {name}");
-        assert!(
-            matches!(pipeline.last(), Some(ReplPipelineStage::Write { .. })),
-            "case: {name}"
-        );
-    }
-}
-
-// ── extract_head_n ────────────────────────────────────────────
-
-#[test]
-fn test_extract_head_n_valid() {
-    let args = parse_fn_args("head(10)");
-    assert_eq!(extract_head_n(&args).unwrap(), 10);
-}
-
-#[test]
-fn test_extract_head_n_bad_args() {
-    let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-    assert!(extract_head_n(&args).is_err());
-}
-
-#[test]
-fn test_extract_head_n_empty_args() {
-    assert!(extract_head_n(&[]).is_err());
 }
 
 // ── collect_pipe_stages ─────────────────────────────────────────
@@ -391,169 +171,7 @@ fn test_collect_pipe_stages_non_pipe_binary_not_flattened() {
     assert!(matches!(&stages[0], Expr::BinaryExpr(_, BinaryOp::Add, _)));
 }
 
-// ── extract_select_items ────────────────────────────────────────
-
-#[test]
-fn test_extract_select_items_symbols() {
-    let args = vec![
-        Expr::Literal(Literal::Symbol("one".into())),
-        Expr::Literal(Literal::Symbol("two".into())),
-    ];
-    let result = extract_select_items(&select_call(args)).unwrap();
-    assert_eq!(
-        result,
-        vec![
-            SelectItem::column(ColumnSpec::CaseInsensitive("one".into())),
-            SelectItem::column(ColumnSpec::CaseInsensitive("two".into()))
-        ]
-    );
-}
-
-#[test]
-fn test_extract_select_items_strings() {
-    let args = vec![
-        Expr::Literal(Literal::String("col_a".into())),
-        Expr::Literal(Literal::String("col_b".into())),
-    ];
-    let result = extract_select_items(&select_call(args)).unwrap();
-    assert_eq!(
-        result,
-        vec![
-            SelectItem::column(ColumnSpec::Exact("col_a".into())),
-            SelectItem::column(ColumnSpec::Exact("col_b".into()))
-        ]
-    );
-}
-
-#[test]
-fn test_extract_select_items_rejects_idents() {
-    // Bare identifiers are flt variables, not columns; columns are :symbol or "string".
-    let args = vec![Expr::Ident("foo".into())];
-    assert!(matches!(
-        extract_select_items(&select_call(args)),
-        Err(Error::UnsupportedFunctionCall(_))
-    ));
-}
-
-#[test]
-fn test_extract_select_items_mixed() {
-    let args = vec![
-        Expr::Literal(Literal::Symbol("sym".into())),
-        Expr::Literal(Literal::String("str".into())),
-    ];
-    let result = extract_select_items(&select_call(args)).unwrap();
-    assert_eq!(
-        result,
-        vec![
-            SelectItem::column(ColumnSpec::CaseInsensitive("sym".into())),
-            SelectItem::column(ColumnSpec::Exact("str".into())),
-        ]
-    );
-}
-
-#[test]
-fn test_extract_select_items_aggregates() {
-    let qty = ColumnSpec::CaseInsensitive("quantity".into());
-    let cases = [
-        ("sum", SelectItem::sum(qty.clone())),
-        ("avg", SelectItem::avg(qty.clone())),
-        ("min", SelectItem::min(qty.clone())),
-        ("max", SelectItem::max(qty.clone())),
-        ("count", SelectItem::count(qty.clone())),
-        ("count_distinct", SelectItem::count_distinct(qty)),
-    ];
-    for (fn_name, expected) in cases {
-        let args = vec![Expr::function_call(
-            fn_name,
-            vec![Expr::Literal(Literal::Symbol("quantity".into()))],
-        )];
-        let result = extract_select_items(&select_call(args)).unwrap();
-        assert_eq!(result, vec![expected], "case: {fn_name}");
-    }
-}
-
-#[test]
-fn test_extract_select_items_empty() {
-    let result = extract_select_items(&select_call(Vec::new())).unwrap();
-    assert!(result.is_empty());
-}
-
-#[test]
-fn test_extract_select_items_unsupported_expr() {
-    let args = vec![Expr::Literal(Literal::Boolean(true))];
-    let result = extract_select_items(&select_call(args));
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, Error::UnsupportedFunctionCall(_)),
-        "expected UnsupportedFunctionCall, got {err:?}"
-    );
-}
-
-#[test]
-fn test_eval_incremental_terminal_single_input_executes_immediately() {
-    let mut ctx = test_repl();
-    let expr = parse(r#"read("fixtures/table.parquet") |> write("out.csv")"#);
-    let pipeline = expect_pipeline(ctx.eval_incremental(expr).expect("eval_incremental"));
-    assert_eq!(pipeline.len(), 2);
-    assert!(matches!(pipeline[0], ReplPipelineStage::Read { .. }));
-    assert!(matches!(pipeline[1], ReplPipelineStage::Write { .. }));
-    assert!(!ctx.statement_incomplete);
-    assert!(ctx.pending_exprs.is_empty());
-}
-
-// ── extract_path_from_args ──────────────────────────────────────
-
-#[test]
-fn test_extract_path_from_args_read_bad_args() {
-    let args = vec![Expr::Ident("not_a_string".into())];
-    let result = extract_path_from_args("read", &args);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-#[test]
-fn test_extract_path_from_args_read_no_args() {
-    let result = extract_path_from_args("read", &[]);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_extract_path_from_args_read_too_many_args() {
-    let args = vec![
-        Expr::Literal(Literal::String("a.parquet".into())),
-        Expr::Literal(Literal::String("b.parquet".into())),
-    ];
-    let result = extract_path_from_args("read", &args);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_plan_stage_select_empty_columns_rejected() {
-    let expr = parse("select()");
-    let result = plan_stage(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-#[test]
-fn test_extract_path_from_args_write_bad_args() {
-    let args = vec![Expr::Ident("not_a_string".into())];
-    let result = extract_path_from_args("write", &args);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-// ── validate_repl_pipeline_stages / plan not implemented ──────
+// ── validate_repl_pipeline_stages / builder bridge ─────────────
 
 #[test]
 fn test_validate_rejects_three_filters() {
@@ -838,50 +456,6 @@ fn test_validate_accepts_read_aggregate_select_only() {
 }
 
 #[test]
-fn test_plan_stage_group_by() {
-    let expr = parse("group_by(:id, :region)");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::GroupBy {
-            columns: vec![
-                GroupByKey::new(ColumnSpec::CaseInsensitive("id".into())),
-                GroupByKey::new(ColumnSpec::CaseInsensitive("region".into())),
-            ],
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_group_by_with_alias() {
-    let expr = parse("group_by(:foo, foo_bar: :bar)");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::GroupBy {
-            columns: vec![
-                GroupByKey::new(ColumnSpec::CaseInsensitive("foo".into())),
-                GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo_bar"),
-            ],
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_group_by_with_quoted_alias_key() {
-    let expr = parse(r#"group_by("foo bar": :bar)"#);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::GroupBy {
-            columns: vec![
-                GroupByKey::new(ColumnSpec::CaseInsensitive("bar".into())).with_alias("foo bar"),
-            ],
-        }
-    );
-}
-
-#[test]
 fn test_validate_grouped_select_matches_aliased_group_by_key_by_underlying_column() {
     // select() may still reference the group key by its underlying column instead of its
     // group_by() alias.
@@ -1063,99 +637,7 @@ fn test_builder_bridge_merges_group_by_order_agnostic() {
     assert_eq!(sa, sb);
 }
 
-#[test]
-fn test_plan_stage_count() {
-    let expr = parse("count()");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Count);
-}
-
-#[test]
-fn test_plan_stage_schema() {
-    let expr = parse("schema()");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Schema);
-}
-
-#[test]
-fn test_plan_pipeline_read_count() {
-    let (pipeline, incomplete) = plan_pipeline_result(r#"read("a.parquet") |> count()"#);
-    assert!(!incomplete);
-    assert_eq!(pipeline.len(), 2);
-    assert_eq!(
-        pipeline[0],
-        ReplPipelineStage::Read {
-            path: "a.parquet".to_string()
-        }
-    );
-    assert_eq!(pipeline[1], ReplPipelineStage::Count);
-}
-
-#[test]
-fn test_plan_stage_count_rejects_invalid_args() {
-    let expr = Expr::function_call(
-        "count",
-        vec![
-            Expr::Literal(Literal::String("a".into())),
-            Expr::Literal(Literal::String("b".into())),
-        ],
-    );
-    let result = plan_stage(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-#[test]
-fn test_plan_stage_schema_rejects_args() {
-    let expr = Expr::function_call(
-        "schema",
-        vec![Expr::Literal(Literal::String("extra".into()))],
-    );
-    let result = plan_stage(expr);
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        Error::UnsupportedFunctionCall(_)
-    ));
-}
-
-// ── is_head_call ───────────────────────────────────────────────
-
-#[test]
-fn test_is_head_call_true() {
-    let expr = parse("head(5)");
-    assert!(is_head_call(Some(&expr)));
-}
-
-#[test]
-fn test_is_head_call_false_for_other_function() {
-    let expr = parse(r#"read("file.csv")"#);
-    assert!(!is_head_call(Some(&expr)));
-}
-
-#[test]
-fn test_is_head_call_false_for_none() {
-    assert!(!is_head_call(None));
-}
-
-fn parse_fn_args(input: &str) -> Vec<Expr> {
-    match parse(input) {
-        Expr::FunctionCall(call) => call.positional_args,
-        other => panic!("expected FunctionCall, got {other:?}"),
-    }
-}
-
-// ── plan_stage: tail ─────────────────────────────────────────
-
-#[test]
-fn test_plan_stage_tail() {
-    let expr = parse("tail(5)");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Tail { n: 5 });
-}
+// ── stage classification and display ────────────────────────
 
 #[test]
 fn test_terminal_stage_classification() {
@@ -1275,7 +757,8 @@ fn test_display_alias_quotes_keys_flt_cannot_parse_bare() {
         };
         let printed = stage.to_string();
         assert_eq!(printed, format!(r#"select("{alias}": :bar)"#));
-        let ReplPipelineStage::Select { columns } = plan_stage(parse(&printed)).unwrap() else {
+        let stages = plan_stages(&format!(r#"read("x.parquet") |> {printed}"#));
+        let Some(ReplPipelineStage::Select { columns }) = stages.last() else {
             panic!("expected select");
         };
         assert_eq!(columns[0].alias(), Some(alias));
@@ -1292,41 +775,6 @@ fn test_display_group_by_with_quoted_alias() {
     assert_eq!(stage.to_string(), r#"group_by("foo bar": :bar)"#);
 }
 
-// ── extract_tail_n ──────────────────────────────────────────
-
-#[test]
-fn test_extract_tail_n_valid() {
-    let args = parse_fn_args("tail(10)");
-    assert_eq!(extract_tail_n(&args).unwrap(), 10);
-}
-
-#[test]
-fn test_extract_tail_n_bad_args() {
-    let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-    assert!(extract_tail_n(&args).is_err());
-}
-
-#[test]
-fn test_extract_tail_n_empty_args() {
-    assert!(extract_tail_n(&[]).is_err());
-}
-
-// ── plan_stage: sample ──────────────────────────────────────
-
-#[test]
-fn test_plan_stage_sample_with_arg() {
-    let expr = parse("sample(5)");
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Sample { n: 5 });
-}
-
-#[test]
-fn test_plan_stage_sample_no_arg_defaults_to_10() {
-    let expr = Expr::function_call("sample", vec![]);
-    let stage = plan_stage(expr).unwrap();
-    assert_eq!(stage, ReplPipelineStage::Sample { n: 10 });
-}
-
 #[test]
 fn test_sample_is_terminal() {
     assert!(ReplPipelineStage::Sample { n: 5 }.is_terminal());
@@ -1340,25 +788,6 @@ fn test_sample_implicit_followup_is_print() {
     );
 }
 
-// ── extract_sample_n ────────────────────────────────────────
-
-#[test]
-fn test_extract_sample_n_valid() {
-    let args = parse_fn_args("sample(10)");
-    assert_eq!(extract_sample_n(&args).unwrap(), 10);
-}
-
-#[test]
-fn test_extract_sample_n_empty_defaults_to_10() {
-    assert_eq!(extract_sample_n(&[]).unwrap(), 10);
-}
-
-#[test]
-fn test_extract_sample_n_bad_args() {
-    let args = vec![Expr::Literal(Literal::String("not_a_number".into()))];
-    assert!(extract_sample_n(&args).is_err());
-}
-
 #[test]
 fn test_display_sample_stage() {
     assert_eq!(
@@ -1367,33 +796,7 @@ fn test_display_sample_stage() {
     );
 }
 
-// ── native count routing ───────────────────────────────────────
-
-#[test]
-fn test_is_native_count_statement_native_stages() {
-    for input in [
-        r#"read("a.parquet") |> count()"#,
-        r#"read("a.parquet") |> filter("x > 1") |> count()"#,
-        r#"read("a.parquet") |> select(:a, total: sum(:b)) |> count()"#,
-        r#"read("a.parquet") |> group_by(:a) |> select(:a, sum(:b)) |> count()"#,
-    ] {
-        assert!(is_native_count_statement(&pipe_exprs(input)), "{input}");
-    }
-}
-
-#[test]
-fn test_is_native_count_statement_keeps_non_native_stages_on_planner() {
-    for input in [
-        // Not a count statement.
-        r#"read("a.parquet") |> head(2)"#,
-        // count(:col) is an aggregate, not the terminal count().
-        r#"read("a.parquet") |> count(:a)"#,
-        // Without a source, the planner's error is clearer than flt's arity error.
-        "count()",
-    ] {
-        assert!(!is_native_count_statement(&pipe_exprs(input)), "{input}");
-    }
-}
+// ── line accumulation ──────────────────────────────────────────
 
 #[test]
 fn test_fold_pipe_stages_round_trips_collect() {
@@ -1404,90 +807,49 @@ fn test_fold_pipe_stages_round_trips_collect() {
 }
 
 #[test]
-fn test_eval_incremental_routes_count_to_flt() {
+fn test_eval_incremental_returns_complete_statement() {
     let mut ctx = test_repl();
     let statement = ctx
-        .eval_incremental(parse(r#"read("fixtures/table.parquet") |> count()"#))
-        .expect("eval_incremental");
-    let Some(CompleteStatement::Native(expr)) = statement else {
-        panic!("expected a native statement, got {statement:?}");
-    };
+        .eval_incremental(parse(r#"read("fixtures/table.parquet") |> head(1)"#))
+        .expect("a complete statement");
     assert_eq!(
-        expr.to_string(),
-        r#"read("fixtures/table.parquet") |> count()"#
+        statement.to_string(),
+        r#"read("fixtures/table.parquet") |> head(1)"#
     );
     assert!(!ctx.statement_incomplete);
     assert!(ctx.pending_exprs.is_empty());
-    ctx.execute_native(expr).expect("execute_native");
 }
 
 #[test]
-fn test_eval_incremental_routes_select_count_to_flt() {
+fn test_eval_incremental_holds_incomplete_statement() {
     let mut ctx = test_repl();
-    let statement = ctx
-        .eval_incremental(parse(
-            r#"read("fixtures/table.parquet") |> select(:one) |> count()"#,
-        ))
-        .expect("eval_incremental");
-    let Some(CompleteStatement::Native(expr)) = statement else {
-        panic!("expected a native statement, got {statement:?}");
-    };
-    ctx.execute_native(expr).expect("execute_native");
-}
-
-#[test]
-fn test_eval_incremental_select_head_stays_on_planner() {
-    // Only count statements go to flt; head isn't a native yet.
-    let mut ctx = test_repl();
-    let stages = expect_pipeline(
-        ctx.eval_incremental(parse(
-            r#"read("fixtures/table.parquet") |> select(:one) |> head(1)"#,
-        ))
-        .expect("eval_incremental"),
+    assert!(
+        ctx.eval_incremental(parse(r#"read("fixtures/table.parquet")"#))
+            .is_none()
     );
-    assert_eq!(stages[2], ReplPipelineStage::Head { n: 1 });
+    assert!(ctx.statement_incomplete);
+    assert_eq!(ctx.pending_exprs.len(), 1);
 }
 
 #[test]
-fn test_plan_stage_rejects_keywords_on_positional_functions() {
-    for input in [r#"read("a.parquet", x: 1)"#, "head(1, n: 2)", "count(x: 1)"] {
-        assert!(
-            matches!(
-                plan_stage(parse(input)),
-                Err(Error::UnsupportedFunctionCall(_))
-            ),
-            "{input}"
-        );
+fn test_execute_shows_each_kind_of_value() {
+    let mut ctx = test_repl();
+    for input in [
+        // A plan: its rows are displayed.
+        r#"read("fixtures/table.parquet") |> head(1)"#,
+        // A number.
+        r#"read("fixtures/table.parquet") |> count()"#,
+        // None: schema has already printed.
+        r#"read("fixtures/table.parquet") |> schema()"#,
+    ] {
+        ctx.execute(parse(input)).expect(input);
     }
-}
-
-#[test]
-fn test_plan_stage_select_keyword_aliases_in_order() {
-    let stage = plan_stage(parse(r#"select(:a, z: :b, "c d": sum(:c))"#)).unwrap();
-    assert_eq!(
-        stage,
-        ReplPipelineStage::Select {
-            columns: vec![
-                SelectItem::column(ColumnSpec::CaseInsensitive("a".into())),
-                SelectItem::column(ColumnSpec::CaseInsensitive("b".into())).with_alias("z"),
-                SelectItem::sum(ColumnSpec::CaseInsensitive("c".into())).with_alias("c d"),
-            ]
-        }
-    );
-}
-
-#[test]
-fn test_plan_stage_select_positional_map_is_not_an_alias() {
-    assert!(matches!(
-        plan_stage(parse("select({total: sum(:b)})")),
-        Err(Error::UnsupportedFunctionCall(_))
-    ));
 }
 
 // ── Pipeline::execute_count ────────────────────────────────────
 
 fn execute_count(input: &str) -> usize {
-    let stages = plan_pipeline(input);
+    let stages = plan_stages(input);
     let mut builder = repl_stages_to_pipeline_builder(&stages).expect("builder");
     builder
         .build()
@@ -1528,7 +890,7 @@ fn test_execute_count_orc() {
 
 #[test]
 fn test_execute_count_rejects_non_count_sink() {
-    let stages = plan_pipeline(r#"read("fixtures/table.parquet") |> head(1)"#);
+    let stages = plan_stages(r#"read("fixtures/table.parquet") |> head(1)"#);
     let mut builder = repl_stages_to_pipeline_builder(&stages).expect("builder");
     assert!(builder.build().expect("build").execute_count().is_err());
 }

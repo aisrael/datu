@@ -132,3 +132,27 @@ Feature: Head
     And that file should contain "id"
     And that file should contain "first_name"
     And that file should have 2 records
+
+  Scenario: Head from a path
+    When the REPL is ran and the user types:
+      ```
+      head("fixtures/table.parquet", 2) |> write("$TEMPDIR/head_path.csv")
+      ```
+    Then the file "$TEMPDIR/head_path.csv" should exist
+    And that file should have 3 lines
+
+  Scenario: Head from a path with a keyword count
+    When the REPL is ran and the user types:
+      ```
+      head("fixtures/table.parquet", n: 1) |> write("$TEMPDIR/head_path_keyword.csv")
+      ```
+    Then the file "$TEMPDIR/head_path_keyword.csv" should exist
+    And that file should have 2 lines
+
+  Scenario: Head from a path defaults to 10 rows
+    When the REPL is ran and the user types:
+      ```
+      head("fixtures/userdata.parquet") |> write("$TEMPDIR/head_path_default.csv")
+      ```
+    Then the file "$TEMPDIR/head_path_default.csv" should exist
+    And that file should have 11 lines

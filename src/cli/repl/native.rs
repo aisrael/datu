@@ -177,10 +177,25 @@ fn filter(args: &[Value]) -> crate::Result<Value> {
     Ok(with_stage(plan, ReplPipelineStage::Filter { sql }))
 }
 
-fn head(args: &[Value]) -> crate::Result<Value> {
-    let plan = args[0].downcast_native::<DatuPlan>()?;
-    let n = usize_arg(&args[1])?;
-    Ok(with_stage(plan, ReplPipelineStage::Head { n }))
+const DEFAULT_HEAD_SIZE: usize = 10;
+
+/// `head(plan, n)`, or `head(path, n)` as shorthand for `read(path) |> head(n)`.
+fn head(args: &[Value], keywords: &Map) -> crate::Result<Value> {
+    // Only the one-argument overloads declare the `n` keyword, and flt fills in its default.
+    let n = args
+        .get(1)
+        .or_else(|| keywords.get(&MapKey::symbol("n")))
+        .expect("flt fills in head's n keyword");
+    let stage = ReplPipelineStage::Head { n: usize_arg(n)? };
+    match args[0].get_native::<DatuPlan>() {
+        Some(plan) => Ok(with_stage(plan, stage)),
+        None => {
+            let path = string_arg("head", &args[0])?;
+            Ok(Value::native(DatuPlan {
+                stages: vec![ReplPipelineStage::Read { path }, stage],
+            }))
+        }
+    }
 }
 
 fn tail(args: &[Value]) -> crate::Result<Value> {
@@ -309,19 +324,41 @@ pub(super) fn register_natives(runtime: &mut impl Runtime) -> Result<(), flt::Er
         ),
         |args: &[Value]| to_flt(filter(args)),
     ))?;
-    for (name, handler) in [("head", head as fn(&[Value]) -> _), ("tail", tail)] {
-        runtime.register_function(NativeFunction::new(
-            FunctionDefinition::new(
-                name,
-                Type::native::<DatuPlan>(),
-                vec![
-                    Argument::new("plan", Type::native::<DatuPlan>()),
-                    Argument::number("n"),
-                ],
-            ),
-            move |args: &[Value]| to_flt(handler(args)),
-        ))?;
-    }
+    // flt has no positional defaults, so each one-argument overload takes n as a keyword. The
+    // keyword stays off the two-argument overloads so n can't be passed both ways at once.
+    runtime.register_function(NativeFunction::with_keywords(
+        FunctionDefinition::new(
+            "head",
+            Type::native::<DatuPlan>(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::number("n"),
+            ],
+        )
+        .add_overload(
+            Type::native::<DatuPlan>(),
+            vec![Argument::new("plan", Type::native::<DatuPlan>())],
+        )
+        .keyword("n", Type::number(), DEFAULT_HEAD_SIZE)
+        .add_overload(
+            Type::native::<DatuPlan>(),
+            vec![Argument::string("path"), Argument::number("n")],
+        )
+        .add_overload(Type::native::<DatuPlan>(), vec![Argument::string("path")])
+        .keyword("n", Type::number(), DEFAULT_HEAD_SIZE),
+        |args: &[Value], keywords: &Map| to_flt(head(args, keywords)),
+    ))?;
+    runtime.register_function(NativeFunction::new(
+        FunctionDefinition::new(
+            "tail",
+            Type::native::<DatuPlan>(),
+            vec![
+                Argument::new("plan", Type::native::<DatuPlan>()),
+                Argument::number("n"),
+            ],
+        ),
+        |args: &[Value]| to_flt(tail(args)),
+    ))?;
     runtime.register_function(NativeFunction::new(
         FunctionDefinition::new(
             "sample",
@@ -647,6 +684,22 @@ mod tests {
                 r#"read("x.parquet") |> head(5)"#,
                 r#"read("x.parquet") |> head(5)"#,
             ),
+            // Without a count, head takes 10 rows; n can also be passed as a keyword.
+            (
+                r#"read("x.parquet") |> head()"#,
+                r#"read("x.parquet") |> head(10)"#,
+            ),
+            (
+                r#"read("x.parquet") |> head(n: 5)"#,
+                r#"read("x.parquet") |> head(5)"#,
+            ),
+            // head(path, ...) is shorthand for read(path) |> head(...).
+            (r#"head("x.parquet")"#, r#"read("x.parquet") |> head(10)"#),
+            (r#"head("x.parquet", 5)"#, r#"read("x.parquet") |> head(5)"#),
+            (
+                r#"head("x.parquet", n: 50)"#,
+                r#"read("x.parquet") |> head(50)"#,
+            ),
             (
                 r#"read("x.parquet") |> tail(2)"#,
                 r#"read("x.parquet") |> tail(2)"#,
@@ -669,20 +722,34 @@ mod tests {
     fn test_head_rejects_bad_counts() {
         assert_eq!(
             eval_err(r#"read("x.parquet") |> head("x")"#),
-            "Runtime Error: Argument n of head expects Number, found String"
+            "Runtime Error: No overload of head accepts (DatuPlan, String)"
+        );
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> head(n: "x")"#),
+            "Runtime Error: No overload of head accepts (DatuPlan, n: String)"
         );
         assert_eq!(
             eval_err(r#"read("x.parquet") |> head(-1)"#),
             "Runtime Error: Cannot convert -1 to usize"
         );
-        let err = eval_err(r#"read("x.parquet") |> head()"#);
-        assert!(err.contains("expected 2 argument"), "{err}");
     }
 
     #[test]
-    fn test_head_rejects_keywords() {
-        let err = eval_err(r#"read("x.parquet") |> head(1, n: 2)"#);
-        assert!(err.contains("keyword"), "{err}");
+    fn test_head_rejects_n_passed_both_ways() {
+        assert_eq!(
+            eval_err(r#"read("x.parquet") |> head(1, n: 2)"#),
+            "Runtime Error: No overload of head accepts (DatuPlan, Number, n: Number)"
+        );
+        assert_eq!(
+            eval_err(r#"head("x.parquet", 1, n: 2)"#),
+            "Runtime Error: No overload of head accepts (String, Number, n: Number)"
+        );
+    }
+
+    #[test]
+    fn test_head_rejects_unknown_keywords() {
+        let err = eval_err(r#"head("x.parquet", m: 2)"#);
+        assert!(err.contains("m"), "{err}");
     }
 
     #[test]
@@ -727,7 +794,8 @@ mod tests {
     fn test_typeof_terminal_natives() {
         assert_eq!(
             eval_to_string("typeof(head)"),
-            "fn(DatuPlan, Number) -> DatuPlan"
+            "fn(DatuPlan, Number) -> DatuPlan | fn(DatuPlan, n: Number) -> DatuPlan | fn(String, \
+             Number) -> DatuPlan | fn(String, n: Number) -> DatuPlan"
         );
         assert_eq!(
             eval_to_string("typeof(sample)"),

@@ -64,10 +64,10 @@ read("input.parquet") |> head(50)
 
 #### Variadic Functions
 
-A variadic function takes any number of values for its last argument. `typeof` marks it with `...`, and keyword arguments with `**`:
+A variadic function takes any number of values for its last argument. `typeof` marks it with `*`, and keyword arguments with `**`:
 
 ```flt
-typeof(select)  # fn(DatuPlan, ...Any, **Any) -> DatuPlan
+typeof(select)  # fn(DatuPlan, *Any, **Any) -> DatuPlan
 ```
 
 #### Function Overloading
@@ -78,7 +78,7 @@ Every `datu` function is an flt native function: flt evaluates the whole stateme
 typeof(read)    # fn(String) -> DatuPlan
 typeof(head)    # fn(DatuPlan, Number) -> DatuPlan
 typeof(sample)  # fn(DatuPlan) -> DatuPlan | fn(DatuPlan, Number) -> DatuPlan
-typeof(count)   # fn(DatuPlan) -> Number | fn(Any) -> SelectItem
+typeof(count)   # fn(DatuPlan) -> Number | fn(Symbol | String) -> SelectItem
 ```
 
 A `DatuPlan` is the pipeline built so far. `read()` returns one, and `filter`, `group_by`, `select`, `head`, `tail` and `sample` each return a new plan with their stage added, which is what allows them to be chained. Nothing is read until the statement finishes: the REPL then shows the plan's rows. `count()`, `schema()` and `write()` run the plan as soon as they're called.

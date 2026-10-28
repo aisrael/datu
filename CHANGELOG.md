@@ -20,9 +20,9 @@
   - Every REPL statement is evaluated by the flt interpreter, which calls back into datu for each
     function (`read`, `filter`, `group_by`, `select`, the aggregates, `head`, `tail`, `sample`,
     `count`, `schema` and `write`). datu's own Expr planner is gone. Output is unchanged, except
-    that invalid arguments now get flt's errors (`head("x")` reports "Expected Number, found
-    String") and the `Pipeline:` line no longer shows the implicit `|> print()` after `head`,
-    `tail` or `sample`. `typeof(head)` and friends show each function's signatures.
+    that invalid arguments now get flt's errors (`head("x")` reports "Argument n of head expects
+    Number, found String") and the `Pipeline:` line no longer shows the implicit `|> print()`
+    after `head`, `tail` or `sample`. `typeof(head)` and friends show each function's signatures.
   - The `Pipeline:` line quotes aliases that start with `_` (`select("_tmp": :a)`), so it parses
     back as flt; it used to print `_tmp:` bare, which flt rejects.
 

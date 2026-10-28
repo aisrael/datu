@@ -2044,9 +2044,8 @@ dependencies = [
 
 [[package]]
 name = "flt"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2064fece135779e1025357c752f98d2ad856c254558dcb56c1a606471b2a28d0"
+version = "0.3.0"
+source = "git+https://github.com/aisrael/flt?branch=release%2Fv0.3.0#24c3986e23f6a69084440db17fa1b1c55629040d"
 dependencies = [
  "bigdecimal",
  "clap",

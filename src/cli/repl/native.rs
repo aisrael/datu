@@ -270,7 +270,8 @@ fn count_plan_rows(plan: &DatuPlan) -> crate::Result<usize> {
     build_pipeline(&stages)?.execute_count()
 }
 
-/// flt checks only arity, so both `count(plan)` and `count(:col)` arrive here.
+/// One handler serves both overloads; flt has already checked the argument against the one it
+/// picked, so a non-plan here is a symbol or string.
 fn count(args: &[Value]) -> crate::Result<Value> {
     match args[0].get_native::<DatuPlan>() {
         // Terminal stage: read(..) |> ... |> count()
@@ -356,7 +357,7 @@ pub(super) fn register_natives(runtime: &mut impl Runtime) -> Result<(), flt::Er
         ),
         |args: &[Value]| to_flt(write(args)),
     ))?;
-    // The overload exists only so typeof(count) describes both forms; one handler serves both.
+    // flt picks the overload by the argument's type: a plan counts rows, a column is an aggregate.
     runtime.register_function(NativeFunction::new(
         FunctionDefinition::new(
             "count",
@@ -365,7 +366,10 @@ pub(super) fn register_natives(runtime: &mut impl Runtime) -> Result<(), flt::Er
         )
         .add_overload(
             Type::native::<DatuSelectItem>(),
-            vec![Argument::new("column", Type::any())],
+            vec![Argument::new(
+                "column",
+                Type::union(Type::symbol(), Type::string()),
+            )],
         ),
         |args: &[Value]| to_flt(count(args)),
     ))?;
@@ -499,7 +503,15 @@ mod tests {
         );
         assert_eq!(
             eval_to_string("typeof(count)"),
-            "fn(DatuPlan) -> Number | fn(Any) -> SelectItem"
+            "fn(DatuPlan) -> Number | fn(Symbol | String) -> SelectItem"
+        );
+    }
+
+    #[test]
+    fn test_count_rejects_non_columns() {
+        assert_eq!(
+            eval_err("count(1)"),
+            "Runtime Error: No overload of count accepts (Number)"
         );
     }
 
@@ -507,7 +519,7 @@ mod tests {
     fn test_filter_rejects_non_plan() {
         assert_eq!(
             eval_err(r#"filter(1, "a > 1")"#),
-            "Runtime Error: Expected DatuPlan, found Number"
+            "Runtime Error: Argument plan of filter expects DatuPlan, found Number"
         );
     }
 
@@ -515,7 +527,7 @@ mod tests {
     fn test_read_rejects_non_string() {
         assert_eq!(
             eval_err("read(1)"),
-            "Unsupported function call: read expects a string, got 1"
+            "Runtime Error: Argument path of read expects String, found Number"
         );
     }
 
@@ -613,11 +625,11 @@ mod tests {
     fn test_typeof_select_and_group_by() {
         assert_eq!(
             eval_to_string("typeof(select)"),
-            "fn(DatuPlan, ...Any, **Any) -> DatuPlan"
+            "fn(DatuPlan, *Any, **Any) -> DatuPlan"
         );
         assert_eq!(
             eval_to_string("typeof(group_by)"),
-            "fn(DatuPlan, ...Any, **Any) -> DatuPlan"
+            "fn(DatuPlan, *Any, **Any) -> DatuPlan"
         );
         assert_eq!(eval_to_string("typeof(sum)"), "fn(Any) -> SelectItem");
     }
@@ -657,7 +669,7 @@ mod tests {
     fn test_head_rejects_bad_counts() {
         assert_eq!(
             eval_err(r#"read("x.parquet") |> head("x")"#),
-            "Runtime Error: Expected Number, found String"
+            "Runtime Error: Argument n of head expects Number, found String"
         );
         assert_eq!(
             eval_err(r#"read("x.parquet") |> head(-1)"#),
@@ -705,7 +717,10 @@ mod tests {
     #[test]
     fn test_write_rejects_invalid_pipelines() {
         let err = eval_err(r#"read("fixtures/table.parquet") |> count() |> write("x.csv")"#);
-        assert!(err.contains("Expected DatuPlan"), "{err}");
+        assert_eq!(
+            err,
+            "Runtime Error: Argument plan of write expects DatuPlan, found Number"
+        );
     }
 
     #[test]

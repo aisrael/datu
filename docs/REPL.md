@@ -31,7 +31,7 @@ flt has typical operators:
 A function call is expressed as the name of the function and its arguments:
 
 ```flt
-read("input.parquet")
+head("input.parquet")
 ```
 
 #### Function Arguments
@@ -50,7 +50,13 @@ We can call `read()` multiple ways:
 read("input.parquet") # `type` is set to `None`
 ```
 
-Function calls can also accept keyword arguments at the end. `select` uses them for aliases:
+Function calls can also accept optional keyword arguments at the end:
+
+```flt
+head("input.parquet", n: 50)
+```
+
+`select` uses them for aliases:
 
 ```flt
 select(read("input.parquet"), :id, name: :full_name)
@@ -72,18 +78,29 @@ typeof(select)  # fn(DatuPlan, *Any, **Any) -> DatuPlan
 
 #### Function Overloading
 
-Every `datu` function is an flt native function: flt evaluates the whole statement and calls back into `datu` for each function. flt supports function overloading, declaring the same function with different signatures, and `typeof` shows a function's signatures:
+You might've noticed that the `head()` function can be called many ways. That's because flt supports function overloading—that is, declaring the same function with different signatures. flt picks the overload by the number and types of the arguments.
+
+`head()` can be thought of as having the following definitions, where `n: Number = 10` is a keyword argument with a default:
+
+```flt
+fn head(path: String, n: Number) -> DatuPlan
+fn head(path: String, n: Number = 10) -> DatuPlan
+fn head(plan: DatuPlan, n: Number) -> DatuPlan
+fn head(plan: DatuPlan, n: Number = 10) -> DatuPlan
+```
+
+Every `datu` function is an flt native function: flt evaluates the whole statement and calls back into `datu` for each function. `typeof` shows a function's signatures:
 
 ```flt
 typeof(read)    # fn(String) -> DatuPlan
-typeof(head)    # fn(DatuPlan, Number) -> DatuPlan
+typeof(head)    # fn(DatuPlan, Number) -> DatuPlan | fn(DatuPlan, n: Number) -> DatuPlan | fn(String, Number) -> DatuPlan | fn(String, n: Number) -> DatuPlan
 typeof(sample)  # fn(DatuPlan) -> DatuPlan | fn(DatuPlan, Number) -> DatuPlan
 typeof(count)   # fn(DatuPlan) -> Number | fn(Symbol | String) -> SelectItem
 ```
 
-A `DatuPlan` is the pipeline built so far. `read()` returns one, and `filter`, `group_by`, `select`, `head`, `tail` and `sample` each return a new plan with their stage added, which is what allows them to be chained. Nothing is read until the statement finishes: the REPL then shows the plan's rows. `count()`, `schema()` and `write()` run the plan as soon as they're called.
+A `DatuPlan` is the pipeline built so far. `read()` returns one, as does `head(path)`, and `filter`, `group_by`, `select`, `head`, `tail` and `sample` each return a new plan with their stage added, which is what allows them to be chained. Nothing is read until the statement finishes: the REPL then shows the plan's rows. `count()`, `schema()` and `write()` run the plan as soon as they're called.
 
-Because the piped value is passed as the first argument, it counts in flt's argument errors: `read("x.parquet") |> head()` reports "expected 2 argument(s), found 1".
+Because the piped value is passed as the first argument, it counts in flt's argument errors: `read("x.parquet") |> tail()` reports "expected 2 argument(s), found 1".
 
 We can think of
 
@@ -258,9 +275,9 @@ read("input.avro") |> group_by(from_group_by: :foo) |> select(from_select: :foo,
 
 ### Data preview (`head`, `tail`, and `sample`)
 
-`head`, `tail`, and `sample` can either be used after a `read() |> ` expression, or, by themselves by providing the path as the first argument.
+`head`, `tail`, and `sample` are used after a `read() |> ` expression. `head` can also be used by itself, by providing the path as the first argument.
 
-These take a row count and, when used without a following `write()`, print a slice of the pipeline result to stdout (an implicit print step is appended).
+These take a row count and, when used without a following `write()`, the REPL shows that slice of the pipeline result.
 
 Only one of `head`, `tail`, or `sample` may appear in a pipeline.
 
@@ -271,7 +288,11 @@ Only one of `head`, `tail`, or `sample` may appear in a pipeline.
 | `sample()` | Takes a random sample of _n_ rows      |
 
 ```flt
+read("input.parquet") |> head()    # default 10
+
 read("input.parquet") |> head(5)   # first 5 rows
+
+head("input.parquet", 5)           # equivalent to the previous statement
 
 read("input.parquet") |> sample()  # 10 random rows when no count is given
 ```

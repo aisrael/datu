@@ -331,9 +331,10 @@ When `OUTPUT` is omitted, rows are printed to stdout and `--output` selects the 
 
 ```flt
 read("file") |> head(n)
+head("file", n)
 ```
 
-Prints the first _n_ rows to stdout. Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> head(10) |> write("first10.csv")`.
+Prints the first _n_ rows to stdout; _n_ defaults to 10 (`head("file")`). Chain `|> write("out.csv")` to write to a file, e.g. `read("data.parquet") |> head(10) |> write("first10.csv")`.
 
 **Options:**
 
@@ -701,10 +702,11 @@ With optional `group_by(...)`, you can use aggregates in `select`: `sum`, `avg`,
 
 #### `head(n)`
 
-Take the first _n_ rows.
+Take the first _n_ rows. Default: 10. `head("data.parquet", 10)` is shorthand for `read("data.parquet") |> head(10)`, and _n_ can also be passed as a keyword, `head(n: 10)`.
 
 ```text
 > read("data.parquet") |> head(10) |> write("first10.csv")
+> head("data.parquet")
 ```
 
 #### `sample(n)`

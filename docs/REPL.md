@@ -31,7 +31,7 @@ flt has typical operators:
 A function call is expressed as the name of the function and its arguments:
 
 ```flt
-head("input.parquet")
+read("input.parquet")
 ```
 
 #### Function Arguments
@@ -50,10 +50,10 @@ We can call `read()` multiple ways:
 read("input.parquet") # `type` is set to `None`
 ```
 
-Function calls can also accept optional keyword arguments at the end:
+Function calls can also accept keyword arguments at the end. `select` uses them for aliases:
 
 ```flt
-head("input.parquet", n: 50)
+select(read("input.parquet"), :id, name: :full_name)
 ```
 
 The output of a function can be passed as the input to the next function using the pipe (`|>`) operator:
@@ -64,33 +64,26 @@ read("input.parquet") |> head(50)
 
 #### Variadic Functions
 
-Variadic functions are defined using a special syntax inspired by Ruby's 'splat' operator:
+A variadic function takes any number of values for its last argument. `typeof` marks it with `*`, and keyword arguments with `**`:
 
 ```flt
-select(data: Data, *args)
+typeof(select)  # fn(DatuPlan, *Any, **Any) -> DatuPlan
 ```
 
 #### Function Overloading
 
-You might've noticed that the `head()` function can be called many ways. That's because flt supports function overloading—that is, declaring the same function with different signatures.
-
-The `head()` function, though internally implemented in `datu`, can be thought of as having the following definitions:
+Every `datu` function is an flt native function: flt evaluates the whole statement and calls back into `datu` for each function. flt supports function overloading, declaring the same function with different signatures, and `typeof` shows a function's signatures:
 
 ```flt
-fn head(path: String, n: int = 10) -> Data
-
-fn head(previous: Data, n: int) -> Data
-
-fn head(previous: Data, rest: KeywordList)
+typeof(read)    # fn(String) -> DatuPlan
+typeof(head)    # fn(DatuPlan, Number) -> DatuPlan
+typeof(sample)  # fn(DatuPlan) -> DatuPlan | fn(DatuPlan, Number) -> DatuPlan
+typeof(count)   # fn(DatuPlan) -> Number | fn(Symbol | String) -> SelectItem
 ```
 
-Here, a `Data` is a placeholder for the result of a previous step in the pipeline. The `read()` function can be thought of as having the following definition:
+A `DatuPlan` is the pipeline built so far. `read()` returns one, and `filter`, `group_by`, `select`, `head`, `tail` and `sample` each return a new plan with their stage added, which is what allows them to be chained. Nothing is read until the statement finishes: the REPL then shows the plan's rows. `count()`, `schema()` and `write()` run the plan as soon as they're called.
 
-```flt
-read(path: String) -> Data
-```
-
-The output of `read()` is a `Data`, which is the first argument to the second definition of `head()`, which is what allows them to be chained.
+Because the piped value is passed as the first argument, it counts in flt's argument errors: `read("x.parquet") |> head()` reports "expected 2 argument(s), found 1".
 
 We can think of
 
@@ -107,7 +100,7 @@ head(data, 10)
 
 ## datu Functions
 
-For the following functions, note that the function signatures and types provided are for illustration purposes only. All functions in `datu` are internally implemented in Rust, and the actual types aren't very helpful for the purpose of documenting the REPL.
+For the following functions, the signatures are written for readability. Use `typeof(name)` in the REPL for the exact flt types.
 
 ### Pipeline shape
 
@@ -278,11 +271,9 @@ Only one of `head`, `tail`, or `sample` may appear in a pipeline.
 | `sample()` | Takes a random sample of _n_ rows      |
 
 ```flt
-read("input.parquet") |> head()  # default 10
+read("input.parquet") |> head(5)   # first 5 rows
 
-read("input.parquet") |> head(5) # first 5 rows
-
-head("input.parquet", 5)         # equivalent to the previous statement
+read("input.parquet") |> sample()  # 10 random rows when no count is given
 ```
 
 ### Metadata functions: `schema` and `count()`
@@ -291,6 +282,6 @@ head("input.parquet", 5)         # equivalent to the previous statement
 
 `count()` (as a pipeline stage after `read`, e.g. `read("file.parquet") |> count()`) prints the total row count. It takes no arguments.
 
-When every stage before `count()` is `read`, `filter`, `group_by` or `select`, the flt interpreter evaluates the whole statement and calls back into datu for each function, so `count()` returns its total as an flt number. Aggregates such as `sum(:b)` evaluate to select items that `select()` accepts, and keyword arguments (`total: sum(:b)`) become aliases. Other count pipelines (for example with `head`) still run through datu's own planner, with the same output. Because a piped value is passed as the first argument, flt counts it in arity errors: `read("x.parquet") |> count(:a, :b)` reports "expected 1 argument(s), found 3".
+`count()` returns its total as an flt number.
 
 Do not confuse that with **`count(:column)` inside `select()`**, which is an aggregate: it counts non-null values in that column (globally or per group when used with `group_by`). Use `count_distinct(:column)` for distinct non-null values.

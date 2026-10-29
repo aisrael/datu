@@ -2045,8 +2045,7 @@ dependencies = [
 [[package]]
 name = "flt"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3c95f8cec641f724cf138884abd3ba8909b29bc93b3cd24242094cd1b4fd21d"
+source = "git+https://github.com/aisrael/flt?rev=007d54fce57335938cc3e87f5118c0baff7408dc#007d54fce57335938cc3e87f5118c0baff7408dc"
 dependencies = [
  "bigdecimal",
  "clap",
@@ -2056,6 +2055,7 @@ dependencies = [
  "indexmap",
  "log",
  "nom",
+ "num-integer",
  "regex",
  "rustyline",
  "strum",

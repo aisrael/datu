@@ -711,7 +711,7 @@ Take the first _n_ rows. Default: 10. `head("data.parquet", 10)` is shorthand fo
 
 #### `sample(n)`
 
-Take _n_ random rows from the data. Default: 10.
+Take _n_ random rows from the data. Default: 10. Like `head`, _n_ can also be passed as a keyword, `sample(n: 5)`.
 
 ```text
 > read("data.parquet") |> sample(5) |> write("sampled.csv")

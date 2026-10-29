@@ -7,7 +7,8 @@ When run without any CLI commands, `datu` starts up in REPL mode. `datu`'s REPL 
 
 flt has basic types:
 - Boolean: `true`, `false`
-- Numbers: `0`, `-1`, `3.14`
+- Integers: `0`, `-1`
+- Numbers: `3.14`, `2.0`
 - Strings: `""` (empty string), `"foo"`, `"escaped: \"bar\""`
 - Symbols, which can be
   - plain symbols, `:foo`, `:bar`
@@ -73,29 +74,29 @@ read("input.parquet") |> head(50)
 A variadic function takes any number of values for its last argument. `typeof` marks it with `*`, and keyword arguments with `**`:
 
 ```flt
-typeof(select)  # fn(DatuPlan, *Any, **Any) -> DatuPlan
+typeof(select)  # fn(DatuPlan, *(Symbol | String | SelectItem), **(Symbol | String | SelectItem)) -> DatuPlan
 ```
 
 #### Function Overloading
 
 You might've noticed that the `head()` function can be called many ways. That's because flt supports function overloading—that is, declaring the same function with different signatures. flt picks the overload by the number and types of the arguments.
 
-`head()` can be thought of as having the following definitions, where `n: Number = 10` is a keyword argument with a default:
+`head()` can be thought of as having the following definitions, where `n: Integer = 10` is a keyword argument with a default:
 
 ```flt
-fn head(path: String, n: Number) -> DatuPlan
-fn head(path: String, n: Number = 10) -> DatuPlan
-fn head(plan: DatuPlan, n: Number) -> DatuPlan
-fn head(plan: DatuPlan, n: Number = 10) -> DatuPlan
+fn head(path: String, n: Integer) -> DatuPlan
+fn head(path: String, n: Integer = 10) -> DatuPlan
+fn head(plan: DatuPlan, n: Integer) -> DatuPlan
+fn head(plan: DatuPlan, n: Integer = 10) -> DatuPlan
 ```
 
 Every `datu` function is an flt native function: flt evaluates the whole statement and calls back into `datu` for each function. `typeof` shows a function's signatures:
 
 ```flt
 typeof(read)    # fn(String) -> DatuPlan
-typeof(head)    # fn(DatuPlan, Number) -> DatuPlan | fn(DatuPlan, n: Number) -> DatuPlan | fn(String, Number) -> DatuPlan | fn(String, n: Number) -> DatuPlan
-typeof(sample)  # fn(DatuPlan) -> DatuPlan | fn(DatuPlan, Number) -> DatuPlan
-typeof(count)   # fn(DatuPlan) -> Number | fn(Symbol | String) -> SelectItem
+typeof(head)    # fn(DatuPlan, Integer) -> DatuPlan | fn(DatuPlan, n: Integer) -> DatuPlan | fn(String, Integer) -> DatuPlan | fn(String, n: Integer) -> DatuPlan
+typeof(sample)  # fn(DatuPlan, Integer) -> DatuPlan | fn(DatuPlan, n: Integer) -> DatuPlan
+typeof(count)   # fn(DatuPlan) -> Integer | fn(Symbol | String) -> SelectItem
 ```
 
 A `DatuPlan` is the pipeline built so far. `read()` returns one, as does `head(path)`, and `filter`, `group_by`, `select`, `head`, `tail` and `sample` each return a new plan with their stage added, which is what allows them to be chained. Nothing is read until the statement finishes: the REPL then shows the plan's rows. `count()`, `schema()` and `write()` run the plan as soon as they're called.
@@ -294,7 +295,9 @@ read("input.parquet") |> head(5)   # first 5 rows
 
 head("input.parquet", 5)           # equivalent to the previous statement
 
-read("input.parquet") |> sample()  # 10 random rows when no count is given
+read("input.parquet") |> sample()      # 10 random rows when no count is given
+
+read("input.parquet") |> sample(n: 5)  # like head, the count can be passed as a keyword
 ```
 
 ### Metadata functions: `schema` and `count()`

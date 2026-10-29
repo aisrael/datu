@@ -23,9 +23,16 @@
     that invalid arguments now get flt's errors (`tail("x")` reports "Argument n of tail expects
     Number, found String") and the `Pipeline:` line no longer shows the implicit `|> print()`
     after `head`, `tail` or `sample`. `typeof(head)` and friends show each function's signatures.
+  - `select`, `group_by` and the aggregates declare their column types, so a non-column such as
+    `select(1)` or `group_by(sum(:a))` gets flt's type error, and `typeof(select)` shows what
+    each one accepts.
   - `head` takes a path as well as a plan: `head("x.parquet", 5)` is shorthand for
     `read("x.parquet") |> head(5)`. Its count defaults to 10 and can be passed as a keyword, so
     `head("x.parquet")`, `read("x.parquet") |> head()` and `head("x.parquet", n: 50)` work too.
+  - `sample`'s count can be passed as a keyword too, `sample(n: 5)`, and `typeof(sample)` shows
+    its default.
+  - Row counts are flt `Integer`s: `head`, `tail` and `sample` reject a non-integer count such as
+    `head(2.5)` or `head(2.0)`, and `count()` returns an `Integer`.
   - The `Pipeline:` line quotes aliases that start with `_` (`select("_tmp": :a)`), so it parses
     back as flt; it used to print `_tmp:` bare, which flt rejects.
 
